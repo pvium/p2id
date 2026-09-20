@@ -293,59 +293,55 @@ describe('PviumIdentity developer API', function () {
     publicInputs = loadPublicInputs();
   });
 
-  it('verifyIdentity(email, wallet) returns issuedAt', async () => {
-    const issuedAt = await gate.verifyIdentity(proof, publicInputs, IDENTITY_TYPE_EMAIL, ethers.toUtf8Bytes(EMAIL), SAMPLE_WALLET);
-    expect(issuedAt).to.equal(1789240094n);
-    console.log(`      verifyIdentity gas: ${(await gate.verifyIdentity.estimateGas(proof, publicInputs, IDENTITY_TYPE_EMAIL, ethers.toUtf8Bytes(EMAIL), SAMPLE_WALLET)).toString()}`);
+  const idHash = (type: number, value: string) => sha256(Buffer.from(HASH_PREFIX), Buffer.from([type]), Buffer.from(value));
+  const EMAIL_HASH = idHash(IDENTITY_TYPE_EMAIL, EMAIL);
+  const WALLET_HASH = idHash(IDENTITY_TYPE_WALLET, SAMPLE_WALLET.toLowerCase());
+
+  it('verifyIdentity(identityHash, walletHash) returns issuedAt', async () => {
+    expect(await gate.verifyIdentity(proof, publicInputs, IDENTITY_TYPE_EMAIL, EMAIL_HASH, WALLET_HASH)).to.equal(1789240094n);
+    console.log(`      verifyIdentity gas: ${(await gate.verifyIdentity.estimateGas(proof, publicInputs, IDENTITY_TYPE_EMAIL, EMAIL_HASH, WALLET_HASH)).toString()}`);
   });
 
-  it('identity value and EVM wallet are case-insensitive', async () => {
-    const issuedAt = await gate.verifyIdentity(proof, publicInputs, IDENTITY_TYPE_EMAIL, ethers.toUtf8Bytes('TEST-9988@Privy.IO'), SAMPLE_WALLET.toLowerCase());
-    expect(issuedAt).to.equal(1789240094n);
-  });
-
-  it('verifyIdentityNonEvm accepts the wallet as a string', async () => {
-    const issuedAt = await gate.verifyIdentityNonEvm(proof, publicInputs, IDENTITY_TYPE_EMAIL, ethers.toUtf8Bytes(EMAIL), SAMPLE_WALLET);
-    expect(issuedAt).to.equal(1789240094n);
-    await expect(gate.verifyIdentityNonEvm(proof, publicInputs, IDENTITY_TYPE_EMAIL, ethers.toUtf8Bytes(EMAIL), 'EXnVUEeELHiYynvjoQ9YhgxfMSDJC6tJm7VkFQY2b8Wj'))
-      .to.be.revertedWithCustomError(gate, 'WalletMismatch');
-  });
-
-  it('verifyIdentityHashes matches the same hashing as the SDK', async () => {
-    const identityHash = sha256(Buffer.from(HASH_PREFIX), Buffer.from([IDENTITY_TYPE_EMAIL]), Buffer.from(EMAIL));
-    const walletHash = sha256(Buffer.from(HASH_PREFIX), Buffer.from([IDENTITY_TYPE_WALLET]), Buffer.from(SAMPLE_WALLET.toLowerCase()));
-    expect(await gate.verifyIdentityHashes(proof, publicInputs, IDENTITY_TYPE_EMAIL, identityHash, walletHash)).to.equal(1789240094n);
+  it('P2IDHash computes the same hashes on chain: case-insensitive, EVM and non-EVM wallets', async () => {
+    const lib = await ethers.deployContract('MockP2IDHash');
+    expect(await lib.identityHash(IDENTITY_TYPE_EMAIL, ethers.toUtf8Bytes(EMAIL))).to.equal(EMAIL_HASH);
+    expect(await lib.identityHash(IDENTITY_TYPE_EMAIL, ethers.toUtf8Bytes('TEST-9988@Privy.IO'))).to.equal(EMAIL_HASH);
+    expect(await lib.walletHash(SAMPLE_WALLET)).to.equal(WALLET_HASH);
+    expect(await lib.walletHashString(SAMPLE_WALLET)).to.equal(WALLET_HASH);
+    const solana = 'EXnVUEeELHiYynvjoQ9YhgxfMSDJC6tJm7VkFQY2b8Wj'; // base58 is case-sensitive: hashed as is
+    expect(await lib.walletHashString(solana)).to.equal(idHash(IDENTITY_TYPE_WALLET, solana));
   });
 
   it('rejects a wallet the proof does not bind', async () => {
-    await expect(gate.verifyIdentity(proof, publicInputs, IDENTITY_TYPE_EMAIL, ethers.toUtf8Bytes(EMAIL), '0x899BA183F2c55BF9C627D9Af2984fbdED2E64311'))
+    const other = idHash(IDENTITY_TYPE_WALLET, '0x899BA183F2c55BF9C627D9Af2984fbdED2E64311'.toLowerCase());
+    await expect(gate.verifyIdentity(proof, publicInputs, IDENTITY_TYPE_EMAIL, EMAIL_HASH, other))
       .to.be.revertedWithCustomError(gate, 'WalletMismatch');
   });
 
   it('rejects the wrong identity value or type', async () => {
-    await expect(gate.verifyIdentity(proof, publicInputs, IDENTITY_TYPE_EMAIL, ethers.toUtf8Bytes('other@gmail.com'), SAMPLE_WALLET))
+    await expect(gate.verifyIdentity(proof, publicInputs, IDENTITY_TYPE_EMAIL, idHash(IDENTITY_TYPE_EMAIL, 'other@gmail.com'), WALLET_HASH))
       .to.be.revertedWithCustomError(gate, 'IdentityMismatch');
-    await expect(gate.verifyIdentity(proof, publicInputs, 5, ethers.toUtf8Bytes(EMAIL), SAMPLE_WALLET))
+    await expect(gate.verifyIdentity(proof, publicInputs, 5, EMAIL_HASH, WALLET_HASH))
       .to.be.revertedWithCustomError(gate, 'IdentityTypeMismatch');
   });
 
   it('rejects a tampered proof after the cheap checks pass', async () => {
     const bytes = ethers.getBytes(proof);
     bytes[300] ^= 0x01;
-    await expect(gate.verifyIdentity(ethers.hexlify(bytes), publicInputs, IDENTITY_TYPE_EMAIL, ethers.toUtf8Bytes(EMAIL), SAMPLE_WALLET)).to.be.reverted;
+    await expect(gate.verifyIdentity(ethers.hexlify(bytes), publicInputs, IDENTITY_TYPE_EMAIL, EMAIL_HASH, WALLET_HASH)).to.be.reverted;
   });
 });
 
 /**
  * What a client (e.g. the Flutter app) does with the attestation JSON the backend returns:
  * base64 -> bytes, split public inputs into bytes32 words, hash identity + wallet locally, and
- * make a raw eth_call to verifyIdentityHashes. No raw identity ever reaches the RPC node.
+ * make a raw eth_call to verifyIdentity. No raw identity ever reaches the RPC node.
  */
 describe('eth_call from the backend attestation JSON', function () {
   this.timeout(120_000);
 
   const iface = new ethers.Interface([
-    'function verifyIdentityHashes(bytes proof, bytes32[] publicInputs, uint8 identityType, bytes32 identityHash, bytes32 walletHash) view returns (uint64)',
+    'function verifyIdentity(bytes proof, bytes32[] publicInputs, uint8 identityType, bytes32 identityHash, bytes32 walletHash) view returns (uint64)',
     'error WalletMismatch()',
     'error IdentityMismatch()',
     'error InvalidProof()',
@@ -374,17 +370,17 @@ describe('eth_call from the backend attestation JSON', function () {
     for (let i = 0; i < piBytes.length; i += 32) words.push('0x' + piBytes.subarray(i, i + 32).toString('hex'));
     const identityHash = sha256(Buffer.from(HASH_PREFIX), Buffer.from([IDENTITY_TYPE_EMAIL]), Buffer.from(identityValue.toLowerCase()));
     const walletHash = sha256(Buffer.from(HASH_PREFIX), Buffer.from([IDENTITY_TYPE_WALLET]), Buffer.from(wallet.toLowerCase()));
-    return iface.encodeFunctionData('verifyIdentityHashes', [proofBytes, words, IDENTITY_TYPE_EMAIL, identityHash, walletHash]);
+    return iface.encodeFunctionData('verifyIdentity', [proofBytes, words, IDENTITY_TYPE_EMAIL, identityHash, walletHash]);
   }
 
   it('selector is stable (hardcoded in the Dart example)', () => {
-    expect(iface.getFunction('verifyIdentityHashes')!.selector).to.equal('0x' + ethers.id('verifyIdentityHashes(bytes,bytes32[],uint8,bytes32,bytes32)').slice(2, 10));
-    console.log(`      selector: ${iface.getFunction('verifyIdentityHashes')!.selector}`);
+    expect(iface.getFunction('verifyIdentity')!.selector).to.equal('0x' + ethers.id('verifyIdentity(bytes,bytes32[],uint8,bytes32,bytes32)').slice(2, 10));
+    console.log(`      selector: ${iface.getFunction('verifyIdentity')!.selector}`);
   });
 
   it('raw eth_call verifies and returns issuedAt', async () => {
     const ret = await ethers.provider.call({ to: gateAddress, data: calldata('test-9988@privy.io', attestation.wallet) });
-    const [issuedAt] = iface.decodeFunctionResult('verifyIdentityHashes', ret);
+    const [issuedAt] = iface.decodeFunctionResult('verifyIdentity', ret);
     expect(issuedAt).to.equal(1789240094n);
   });
 

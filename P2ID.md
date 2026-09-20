@@ -11,7 +11,7 @@ coin or ERC-20 tokens to it.
 
 This specification defines address derivation, identity encoding, versioning and claim semantics.
 The circuit (`circuit/`), Solidity library (`contracts/src/lib/P2IDHash.sol`), prover
-(`http-prover/`) and SDK (`sdks/node/`) all implement the same rules.
+(`http-prover/`) and SDKs (`sdks/node/`) all implement the same rules.
 
 ## Address derivation
 
@@ -52,7 +52,7 @@ Each address scheme specifies its identity domain. A vault update can introduce
 `p2id.vault.v2` without changing the circuit or existing proofs. The scheme domain also
 determines the factory's namespace and deployment salt: `keccak256("p2id.vault.v1")`.
 
-The constants of every scheme are in [`sdks/node/src/p2id.json`](sdks/node/src/p2id.json), keyed
+The constants of every scheme are in [`sdks/node/p2id-core/src/p2id.json`](sdks/node/p2id-core/src/p2id.json), keyed
 by domain. Once a factory is recorded, the scheme entry is immutable; the build rejects vault
 bytecode that does not match its recorded hash. Changes require a new scheme entry and an
 update to `current`. Older entries must remain available for address derivation and claims
@@ -91,7 +91,7 @@ sha256(abi.encodePacked("p2id.identity.v1", uint8(typeId), v))
 With the SDK:
 
 ```ts
-import { p2idAddress } from '@pvium/zkid';
+import { p2idAddress } from '@pvium/p2id-core';
 const to = await p2idAddress({
   identityType: 'email',
   identityValue: 'you@example.com',
@@ -138,7 +138,7 @@ The type table is **append-only**. New types receive the next identifier; existi
 must never be reassigned or reused, including those of discontinued platforms. The table is defined in
 [`circuit/src/identity.nr`](circuit/src/identity.nr) and mirrored in
 [`contracts/src/lib/P2IDHash.sol`](contracts/src/lib/P2IDHash.sol),
-[`sdks/node/src/identity.ts`](sdks/node/src/identity.ts) and
+[`sdks/node/p2id-core/src/identity.ts`](sdks/node/p2id-core/src/identity.ts) and
 [`http-prover/src/identity.ts`](http-prover/src/identity.ts).
 
 ## Chains and environments
@@ -182,4 +182,4 @@ Policy restrictions may block claims but cannot redirect payouts away from the w
 by the verifier.
 
 See [`contracts/README.md`](contracts/README.md) for the contracts and
-[`sdks/node/README.md`](sdks/node/README.md) for verification and address derivation in code.
+[`sdks/node/p2id-core`](sdks/node/p2id-core/README.md) for address derivation and [`sdks/node/p2id-verifier`](sdks/node/p2id-verifier/README.md) for verification in code.

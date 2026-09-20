@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Attestation, AttestationRequest, AttestationService } from './attestation.js';
 import { InputError } from './errors.js';
+import type { InFlightJobs } from './inflight.js';
 import type { Outbox } from './outbox.js';
 
 export interface JobResult {
@@ -59,16 +60,26 @@ export async function runWebhookJob(
   req: AttestationRequest,
   callback: URL,
   jobId = randomUUID(),
+  inflight?: { registry: InFlightJobs; key: string },
 ): Promise<void> {
   const base = { jobId, identityType: req.identityType, identityValue: req.identityValue, wallet: req.wallet ?? null };
+  // Registered synchronously, before the first await, so an identical request arriving while this
+  // one is queued or proving finds it. Removed only once the outcome is in the outbox, so the job
+  // is always visible in one place or the other.
+  inflight?.registry.add(inflight.key, jobId);
+  let body: string;
   let result: JobResult;
   try {
-    result = { ...base, status: 'ok', attestation: await service.generate(req) };
-  } catch (e) {
-    result = { ...base, status: 'error', error: (e as Error).message };
+    try {
+      result = { ...base, status: 'ok', attestation: await service.generate(req) };
+    } catch (e) {
+      result = { ...base, status: 'error', error: (e as Error).message };
+    }
+    body = JSON.stringify(result);
+    outbox.insert({ jobId, callbackUrl: callback.toString(), body, identityType: base.identityType, identityValue: base.identityValue, wallet: base.wallet });
+  } finally {
+    inflight?.registry.remove(jobId);
   }
-  const body = JSON.stringify(result);
-  outbox.insert({ jobId, callbackUrl: callback.toString(), body, identityType: base.identityType, identityValue: base.identityValue, wallet: base.wallet });
   const failure = await deliver(callback.toString(), jobId, body);
   if (failure) outbox.markAttemptFailed(jobId, failure.error, failure.final);
   else outbox.markDelivered(jobId);

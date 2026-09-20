@@ -23,11 +23,11 @@ yarn fixtures   # after re-proving in ../circuit: refresh test fixtures + regene
   factory registers alongside the old one; no key can ever be added to an existing deployment,
   so no admin key can forge proofs. `circuitVersion()` lets a caller confirm they hold the
   right deployment for an attestation's stated version. Developers call it through `IPviumIdentity`:
-  - `verifyIdentity(proof, publicInputs, identityType, identityValue, address wallet) → issuedAt`
-  - `verifyIdentityNonEvm(…, string wallet)` for base58 / other-chain wallets
-  - `verifyIdentityHashes(…, bytes32 identityHash, bytes32 walletHash)` when the raw identity must
-    not appear in calldata
-  Each reverts (`IdentityMismatch`, `WalletMismatch`, `IdentityTypeMismatch`, `NoWallet`,
+  - `verifyIdentity(proof, publicInputs, identityType, bytes32 identityHash, bytes32 walletHash) → issuedAt`.
+    Both values are passed as hashes (`P2IDHash`, or the SDK's `identityHash`), so the raw
+    identity never appears in calldata. `P2IDHash.walletHash` takes an `address`, or a string
+    for a wallet on another chain.
+  It reverts (`IdentityMismatch`, `WalletMismatch`, `IdentityTypeMismatch`, `NoWallet`,
   `UnknownSigner`, `InvalidProof`) unless the attestation binds exactly those values, and returns
   when Privy issued the underlying token. Freshness is the caller's policy.
   `verifyAttestation(proof, publicInputs)` is the lower-level form returning every field,
@@ -70,31 +70,33 @@ yarn fixtures   # after re-proving in ../circuit: refresh test fixtures + regene
   `fund()` / `fundWith()` deploy on first use and fund on the caller's behalf: approve the factory
   once to pay any identity.
 - `src/interfaces/` — `IPviumIdentity`, `IP2IDVault`, `IP2IdVaultFactory`, `IP2IDVerifier`, `IP2IDPolicy`: what developers import.
+- `test/fixtures/` — a proof, its public inputs and the vk hash for the sample email identity,
+  copied from `../circuit/target/proof_email`, plus the real sample Privy token and Privy's public key.
 
 ## Verifying from a mobile app
 
 `examples/dart/` shows the whole client-side path in Dart: attestation JSON → `eth_call` to
-`verifyIdentityHashes` → decoded result or custom error, sending only hashes to the RPC node.
+`verifyIdentity` → decoded result or custom error, sending only hashes to the RPC node.
 `scripts/deploy-local.ts` deploys to a local `npx hardhat node` for trying it.
 
 ## Importing from your own contracts
 
-The sources ship inside the npm package `@pvium/zk-verifier` (copied from this folder at build time):
+The sources ship inside the npm package `@pvium/p2id-core` (copied from this folder at build time):
 
 ```sh
-yarn add @pvium/zk-verifier
+yarn add @pvium/p2id-core
 ```
 
 ```solidity
-import {IPviumIdentity} from "@pvium/zk-verifier/contracts/interfaces/IPviumIdentity.sol";
+import {IPviumIdentity} from "@pvium/p2id-core/contracts/interfaces/IPviumIdentity.sol";
+import {P2IDHash} from "@pvium/p2id-core/contracts/lib/P2IDHash.sol";
 
+// identityHash is computed off chain (the SDK's identityHash), so the email never reaches calldata
 uint64 issuedAt = IPviumIdentity(PVIUM_IDENTITY).verifyIdentity(
-    proof, publicInputs, 0 /* email */, bytes("you@example.com"), wallet
+    proof, publicInputs, 0 /* IdentityType.Email */, identityHash, P2IDHash.walletHash(wallet)
 );
 require(block.timestamp - issuedAt < 30 days, "attestation too old");
 ```
-- `test/fixtures/` — a proof, its public inputs and the vk hash for the sample email identity,
-  copied from `../circuit/target/proof_email`, plus the real sample Privy token and Privy's public key.
 
 ## Deployment: one address on every chain
 
@@ -117,7 +119,7 @@ The full runbook, including configuration, prediction, verification and what to 
 in [DEPLOYMENT.md](../DEPLOYMENT.md). Run it once per chain **with identical values**. It deploys the two Honk libraries,
 `PviumZKVerifier`, `PviumIdentity`, `PviumVerifier` and `PviumP2IdVaultFactory`, skips anything
 already deployed, and prints the addresses. Record `factory` under the scheme (`p2id.vault.v1`) in
-`sdks/node/src/p2id.json`, which freezes that scheme; the SDK then derives every identity's address
+`sdks/node/p2id-core/src/p2id.json`, which freezes that scheme; the SDK then derives every identity's address
 from constants alone, with no chain id. The scheme domain is the factory's namespace and the
 deployment salt, so a future `p2id.vault.v2` is a separate stack at separate addresses.
 
@@ -175,7 +177,7 @@ Reassemble a hash as `bytes32((hi << 128) | lo)`.
 | `RelationsLib` / `ZKTranscriptLib` | 8 127 / 6 269 bytes |
 | Proof size | 10 304 bytes |
 | `PviumZKVerifier.verify` gas | ~4.31M |
-| `PviumIdentity.verifyIdentity` gas | ~4.47M |
+| `PviumIdentity.verifyIdentity` gas | ~4.45M |
 
 The gas figure is for the ZK flavour of Honk, which is required here because the proof must not
 leak the token or the identity value. Budget for it on L2.

@@ -6,7 +6,8 @@ other artifact.
 
 | Folder | Package | Status |
 | --- | --- | --- |
-| `node/` | `@pvium/zk-verifier` (npm) | verify + decode |
+| `node/p2id-core/` | `@pvium/p2id-core` (npm) | identity hashing, P2ID address derivation, Solidity sources; browser-safe |
+| `node/p2id-verifier/` | `@pvium/p2id-verifier` (npm) | verify attestations + decode claims; depends on core |
 | `python/` | | planned |
 | `go/` | | planned |
 

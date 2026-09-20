@@ -56,6 +56,55 @@ test('async job delivers a real attestation to the callback', { skip: !canProve 
   }
 });
 
+test('a repeated callback request while proving gets the same job, not a second proving run', { skip: !canProve && 'bb / circuit artifacts not available' }, async () => {
+  const { createServer } = await import('node:http');
+  const { createApp } = await import('../src/app.js');
+  const calls: string[] = [];
+  let resolveFirst: () => void;
+  const firstCall = new Promise<void>((r) => (resolveFirst = r));
+  const hook = createServer((req, res) => { let b = ''; req.on('data', (c) => (b += c)); req.on('end', () => { calls.push(b); res.end('ok'); resolveFirst(); }); });
+  await new Promise<void>((ok) => hook.listen(0, ok));
+  const app = createApp({ ...cfg, maxQueue: 0 }, 'tok');
+  const server = await new Promise<import('node:http').Server>((ok) => { const s = app.listen(0, () => ok(s)); });
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  const callbackUrl = `http://127.0.0.1:${(hook.address() as { port: number }).port}/hook?secret=abc`;
+  const post = (body: object) => fetch(`${base}/attestations`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer tok' }, body: JSON.stringify(body) });
+  const request = { identityType: 'email', identityValue: 'test-9988@privy.io', jwt, wallet: WALLET, callbackUrl };
+  try {
+    const first = await post(request);
+    assert.equal(first.status, 202);
+    const a = (await first.json()) as { jobId: string; status: string };
+    assert.equal(a.status, 'queued');
+
+    // Same proof, same receiver, while the first is proving (case differences do not matter).
+    const again = await post({ ...request, identityValue: 'TEST-9988@privy.io', wallet: WALLET.toLowerCase() });
+    assert.equal(again.status, 202); // not 503, although the prover is at capacity
+    const b = (await again.json()) as { jobId: string; status: string; deduplicated: boolean };
+    assert.equal(b.jobId, a.jobId);
+    assert.equal(b.status, 'proving');
+    assert.equal(b.deduplicated, true);
+
+    // A different proof is a different job, and the prover really is busy for it.
+    assert.equal((await post({ ...request, identityType: 'github_oauth', identityValue: 'dephizee' })).status, 503);
+
+    // The job can be looked up before it has a result.
+    const lookup = (await (await fetch(`${base}/jobs/${a.jobId}`, { headers: { authorization: 'Bearer tok' } })).json()) as { status: string };
+    assert.equal(lookup.status, 'proving');
+
+    await firstCall;
+    await new Promise((r) => setTimeout(r, 300)); // a second delivery would have arrived by now
+    assert.equal(calls.length, 1);
+    assert.equal((JSON.parse(calls[0]) as { jobId: string; status: string }).jobId, a.jobId);
+    assert.equal((JSON.parse(calls[0]) as { status: string }).status, 'ok');
+    const done = (await (await fetch(`${base}/jobs/${a.jobId}`, { headers: { authorization: 'Bearer tok' } })).json()) as { status: string };
+    assert.equal(done.status, 'delivered');
+  } finally {
+    server.close();
+    hook.close();
+    await app.locals.close();
+  }
+});
+
 test('generates an attestation the SDK verifies', { skip: !canProve && 'bb / circuit artifacts not available' }, async (t) => {
   const service = new AttestationService(cfg);
   const started = Date.now();
@@ -67,7 +116,7 @@ test('generates an attestation the SDK verifies', { skip: !canProve && 'bb / cir
   assert.match(a.vkHash, /^0x[0-9a-f]{64}$/);
   assert.equal(Buffer.from(a.publicInputs, 'base64').length, 11 * 32);
 
-  const { verifyIdentity, shutdown } = await import('@pvium/zk-verifier');
+  const { verifyIdentity, shutdown } = await import('@pvium/p2id-verifier');
   try {
     const ok = await verifyIdentity({
       attestation: { proof: a.proof, publicInputs: a.publicInputs, wallet: a.wallet! },

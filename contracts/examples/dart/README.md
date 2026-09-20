@@ -1,7 +1,7 @@
 # Verifying an attestation from Dart / Flutter
 
 `verify_attestation.dart` turns the attestation JSON the Pvium API returns into a read-only
-`eth_call` to `PviumIdentity.verifyIdentityHashes` and interprets the result. It depends only on
+`eth_call` to `PviumIdentity.verifyIdentity` and interprets the result. It depends only on
 `package:crypto`; JSON-RPC goes over `dart:io`, so it drops into a Flutter app unchanged (swap
 `HttpClient` for your HTTP layer if you prefer).
 
@@ -21,7 +21,7 @@ dart run verify_attestation.dart <rpcUrl> <PviumIdentity address> attestation.js
 | `circuitVersion` | selects which `PviumIdentity` deployment to call (one per version; immutable) |
 
 Only hashes are sent to the RPC node; the raw email never leaves the device. The function
-selector is `0x53825cfc`. A successful call returns `issuedAt` (uint64, when Privy issued the
+selector is `0x7fcece4b`. A successful call returns `issuedAt` (uint64, when Privy issued the
 token). A revert carries a custom error whose 4-byte selector the example maps to a name:
 `WalletMismatch`, `IdentityMismatch`, `IdentityTypeMismatch`, `NoWallet`, `UnknownSigner`,
 `InvalidProof`, `WrongPublicInputCount`.

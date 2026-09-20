@@ -18,7 +18,7 @@ export interface StackParams {
    */
   owner: string;
   /**
-   * Address-scheme domain, e.g. "p2id.vault.v1" (the key in sdks/node/src/p2id.json). Its hash is
+   * Address-scheme domain, e.g. "p2id.vault.v1" (the key in sdks/node/p2id-core/src/p2id.json). Its hash is
    * both the factory's namespace and the deployment salt, so the scheme name is an input to every
    * address rather than only a label.
    */
@@ -154,7 +154,7 @@ async function initCodeOf(
 
 /**
  * The addresses the stack will have, computed offline: no transactions, no network needed. Use it
- * to fill in `factory` in sdks/node/src/p2id.json, or to check a chain before deploying to it.
+ * to fill in `factory` in sdks/node/p2id-core/src/p2id.json, or to check a chain before deploying to it.
  */
 export function predictStack(p: StackParams): Promise<StackAddresses> {
   return deployStack(p, null);
@@ -280,6 +280,6 @@ export async function checkStack(p: StackParams, a: StackAddresses, expectedVaul
   if ((await factory.nsHash()) !== ethers.id(p.scheme)) fail('factory.nsHash', await factory.nsHash(), ethers.id(p.scheme));
   if (Number(await factory.policyChangeDelay()) !== p.policyChangeDelay) fail('policyChangeDelay', await factory.policyChangeDelay(), p.policyChangeDelay);
   if (expectedVaultInitCodeHash && (await factory.initCodeHash()) !== expectedVaultInitCodeHash) {
-    fail('factory.initCodeHash', await factory.initCodeHash(), `${expectedVaultInitCodeHash} (sdks/node/src/p2id.json)`);
+    fail('factory.initCodeHash', await factory.initCodeHash(), `${expectedVaultInitCodeHash} (sdks/node/p2id-core/src/p2id.json)`);
   }
 }

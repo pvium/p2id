@@ -94,10 +94,10 @@ jobs:
       - uses: actions/setup-node@v4
         if: steps.changed.outputs.relevant == 'true'
         with: { node-version: 22 }
-      - name: Build the SDK (the prover's tests verify through it)
+      - name: Build the SDKs (the prover's tests verify through @pvium/p2id-verifier)
         if: steps.changed.outputs.relevant == 'true'
         working-directory: sdks/node
-        run: yarn install --frozen-lockfile && yarn sync && yarn build
+        run: yarn install --frozen-lockfile && yarn workspace @pvium/p2id-verifier sync && yarn build
       - name: Prover tests, including a real proof
         if: steps.changed.outputs.relevant == 'true'
         working-directory: http-prover

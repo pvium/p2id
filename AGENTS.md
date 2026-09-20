@@ -25,7 +25,7 @@ Install with `yarn install`, run scripts with `yarn <script>`, run binaries with
 | --- | --- |
 | `circuit/` | Noir circuit (`src/`), witness generator (`scripts/`), e2e test + sample token/keys (`test/`) |
 | `contracts/` | Hardhat 2 + ethers v6 project: generated Honk verifier, `PviumIdentity` (dev API), `P2IDVault` + `PviumVerifier`; `src/interfaces/`, `src/lib/P2IDHash.sol` |
-| `sdks/node/` | npm package `@pvium/zk-verifier` (bb.js verifier + claim decoding). `sdks/python`, `sdks/go` later |
+| `sdks/node/` | yarn workspace of two npm packages: `p2id-core` (`@pvium/p2id-core`: identity hashing, P2ID address derivation, ships the Solidity sources; browser-safe, no bb.js) and `p2id-verifier` (`@pvium/p2id-verifier`: bb.js proof verification, vk, claim decoding, Privy environments; depends on core). `sdks/python`, `sdks/go` later |
 | `http-prover/` | Attestation service (Express 5, `--env-file=.env`, noir_js solve, native `bb` prove). `yarn sync` copies circuit artifacts |
 
 ## Workflow rules
@@ -33,21 +33,21 @@ Install with `yarn install`, run scripts with `yarn <script>`, run binaries with
 - `contracts/src/PviumZKVerifier.sol` (contract `PviumZKVerifier`, renamed from bb's `HonkVerifier` by the refresh script) is **generated** by `bb write_solidity_verifier`.
   Never hand-edit it. After any circuit change: `nargo compile`, `nargo execute`, `bb prove`,
   then `yarn fixtures` in `contracts/` to refresh test fixtures and the verifier, and `yarn sync`
-  in `sdks/node/` to refresh its bundled vk and fixtures.
+  in `sdks/node/` (`yarn workspace @pvium/p2id-verifier sync`) to refresh its bundled vk and fixtures.
 - **Circuit versioning**: `circuit/version.json` names the current build (`circuitVersion`, vk sha256).
   Bump `circuitVersion` whenever the compiled circuit changes, then sync all consumers (`yarn fixtures`
   in contracts, `yarn sync` in sdks/node and http-prover). Each consumer is pinned to one version:
   the SDK release embeds one vk and rejects other versions by name; the prover serves one version and
   echoes it in every attestation; `PviumIdentity` is deployed once per version. Old attestations stay
   valid against their own version's SDK release and contract; they are not regenerated in bulk.
-- The Solidity sources in `contracts/src` are the source of truth; `sdks/node/scripts/sync-contracts.sh`
-  copies them into the npm package at build time (gitignored there). Never edit `sdks/node/contracts/`.
+- The Solidity sources in `contracts/src` are the source of truth; `sdks/node/p2id-core/scripts/sync-contracts.sh`
+  copies them into the npm package at build time (gitignored there). Never edit `sdks/node/p2id-core/contracts/`.
 - `http-prover/src/witness.ts` is a port of `circuit/scripts/gen_prover.py`; `http-prover/test/witness.test.ts`
   diffs their output byte for byte. Change both together. `@noir-lang/noir_js` in `http-prover/` is pinned
   to the nargo version (`1.0.0-beta.22`).
 - Hash/normalisation rules must stay identical in four places: `circuit/src/main.nr` + `identity.nr`,
-  `circuit/scripts/gen_prover.py`, `contracts/src/lib/P2IDHash.sol`, `sdks/node/src/identity.ts`.
-- `@aztec/bb.js` in `sdks/node` must be pinned to the same version as the installed `bb`
+  `circuit/scripts/gen_prover.py`, `contracts/src/lib/P2IDHash.sol`, `sdks/node/p2id-core/src/identity.ts`.
+- `@aztec/bb.js` in `sdks/node/p2id-verifier` must be pinned to the same version as the installed `bb`
   (`5.0.0-nightly.20260522`): proofs and vks are not portable across versions.
 - `P2ID.md` at the repo root is the protocol spec (address formula, identity type ids). The type
   table is append-only: never reassign or reuse an id; keep identity.nr, P2IDHash.sol, the SDK

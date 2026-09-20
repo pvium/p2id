@@ -1,6 +1,1 @@
 node_modules/
-dist/
-src/vk.ts
-src/p2idConstants.ts
-*.tgz
-contracts/

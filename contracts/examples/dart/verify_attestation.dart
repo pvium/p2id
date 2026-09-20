@@ -16,8 +16,8 @@ const identityTypeIds = {
   'github_oauth': 5, 'linkedin_oauth': 6, 'apple_oauth': 7, 'telegram': 8, 'tiktok_oauth': 9,
   'instagram_oauth': 10, 'farcaster': 11, 'wallet': 12,
 };
-// keccak256("verifyIdentityHashes(bytes,bytes32[],uint8,bytes32,bytes32)")[0..4]
-const selector = '53825cfc'; // verifyIdentityHashes(bytes,bytes32[],uint8,bytes32,bytes32)
+// keccak256("verifyIdentity(bytes,bytes32[],uint8,bytes32,bytes32)")[0..4]
+const selector = '7fcece4b'; // verifyIdentity(bytes,bytes32[],uint8,bytes32,bytes32)
 // Custom error selectors (keccak256 of the signature), for readable failures.
 const errorNames = {
   '09bde339': 'InvalidProof()',
@@ -43,7 +43,7 @@ String hex(List<int> b) => b.map((x) => x.toRadixString(16).padLeft(2, '0')).joi
 Uint8List word(BigInt v) { final s = v.toRadixString(16).padLeft(64, '0'); return Uint8List.fromList(List.generate(32, (i) => int.parse(s.substring(i * 2, i * 2 + 2), radix: 16))); }
 Uint8List pad32(List<int> b) => Uint8List.fromList([...b, ...List.filled((32 - b.length % 32) % 32, 0)]);
 
-/// ABI-encode verifyIdentityHashes(bytes, bytes32[], uint8, bytes32, bytes32).
+/// ABI-encode verifyIdentity(bytes, bytes32[], uint8, bytes32, bytes32).
 Uint8List encodeCall(Uint8List proof, List<Uint8List> publicInputs, int identityType, Uint8List idHash, Uint8List walletHash) {
   // head: 5 slots; dynamic args (proof, publicInputs) hold offsets into the tail.
   final head = <Uint8List>[];

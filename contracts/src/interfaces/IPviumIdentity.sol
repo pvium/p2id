@@ -12,29 +12,13 @@ interface IPviumIdentity {
     /// @notice Whether tokens signed by this P-256 key are accepted (the set is fixed at deployment).
     function isSignerKey(uint256 x, uint256 y) external view returns (bool);
 
-    /// @param identityType  Privy account type id: 0 email, 3 twitter_oauth, 5 github_oauth, … (see identity.nr)
-    /// @param identityValue The identity as the user linked it, e.g. "you@example.com". Case does not matter.
-    /// @param wallet        The EVM wallet the attestation binds.
+    /// @notice Verify that the proof binds exactly this identity and this wallet.
+    /// @dev Both are passed as hashes (P2IDHash on chain, or the SDK's identityHash), so the raw
+    ///      identity never appears in calldata.
+    /// @param identityType Identity type id: 0 email, 3 twitter, 5 github, … (see P2IDHash)
+    /// @param identityHash P2IDHash.identityHash(identityType, value)
+    /// @param walletHash   P2IDHash.walletHash(wallet): an address, or a string for a non-EVM wallet
     function verifyIdentity(
-        bytes calldata proof,
-        bytes32[] calldata publicInputs,
-        uint8 identityType,
-        bytes calldata identityValue,
-        address wallet
-    ) external view returns (uint64 issuedAt);
-
-    /// @notice Same, for a wallet on another chain, given as Privy stores it (e.g. a base58 Solana address).
-    function verifyIdentityNonEvm(
-        bytes calldata proof,
-        bytes32[] calldata publicInputs,
-        uint8 identityType,
-        bytes calldata identityValue,
-        string calldata wallet
-    ) external view returns (uint64 issuedAt);
-
-    /// @notice Same, with the identity and wallet already hashed (P2IDHash), for callers who must
-    ///         not put the raw identity in calldata.
-    function verifyIdentityHashes(
         bytes calldata proof,
         bytes32[] calldata publicInputs,
         uint8 identityType,

@@ -1,11 +1,11 @@
 # http-prover
 
-The Pvium attestation service. Given a user's Privy identity token, an identity on it, and a
-linked wallet, it builds the witness, solves the circuit and produces the proof that
-`@pvium/zk-verifier` and `PviumIdentity.sol` verify.
+Generate identity attestations from Privy-signed tokens. The service proves a linked identity
+and, when supplied, a linked wallet. Verify the output with `@pvium/p2id-verifier` or
+`PviumIdentity.sol`.
 
-Runs as a small Express service behind a shared secret. Solving happens in-process with
-`noir_js`; proving spawns the native `bb` binary. Nothing else is needed in the image.
+The Express API uses a shared bearer secret. Circuit solving runs in a worker thread with
+`noir_js`; proof generation uses the native `bb` binary.
 
 ## API
 
@@ -22,10 +22,12 @@ Response, about 15 KB:
   "circuitVersion": 1, "vkHash": "0x…", "kid": "…" }
 ```
 
-`version` is optional: omit it for the latest. A prover serves exactly one circuit version and
-answers 400 for any other. The response always states the version used; store `circuitVersion`
-with the attestation, because verifiers (the SDK release, the deployed contract) are each pinned
-to one version and reject others. `issuedAt` is when Privy issued the token, the attestation time.
+`version` defaults to the service's circuit version. Each instance serves one version and
+returns 400 for a different requested version. Store `circuitVersion` with the attestation and
+use the matching verifier release or contract. `issuedAt` is the token's issue time, not the
+time the proof was generated.
+
+Synchronous responses:
 
 | Status | Meaning |
 | --- | --- |
@@ -33,44 +35,62 @@ to one version and reject others. `issuedAt` is when Privy issued the token, the
 | 400 | malformed body, identity or wallet not linked in the token, token too large |
 | 401 | bad secret, or the token is not signed by a trusted Privy key |
 | 413 | body over 64 KB |
-| 500 | solving or proving failed (logged without the token) |
+| 500 | proof generation failed |
+| 503 | concurrency and queue limits reached; retry after 10 seconds |
 
-Bad tokens are rejected in milliseconds by a native signature check before any proving starts.
+The service checks the token's signature before circuit solving or proof generation.
 
 ### Asynchronous mode
 
-Add `"callbackUrl": "https://your-backend/hooks/attestation?secret=…"` to the request and the
-prover answers `202 { jobId, status: "queued" }` at once, then POSTs the outcome to that URL when
-the proof is ready, about 8 s later:
+Add `"callbackUrl": "https://your-backend/hooks/attestation?secret=…"` to receive
+`202 { jobId, status: "queued" }`. The service then POSTs the result to that URL:
 
 ```json
 { "jobId": "…", "status": "ok", "attestation": { … }, "identityType": "email", "identityValue": "…", "wallet": "0x…" }
 { "jobId": "…", "status": "error", "error": "no linked account with …", "identityType": "email", "identityValue": "…", "wallet": "0x…" }
 ```
 
-The outcome is written to a SQLite outbox (`DB_PATH`, Node's built-in `node:sqlite`) *before* the
-first delivery attempt, so a proof that has been paid for is never lost to a restart or a flaky
-receiver. Delivery is retried with backoff (1 min, 5 min, 30 min, 2 h, then every 6 h) for up to
-48 hours until your endpoint answers 2xx; a 4xx is treated as final. `GET /jobs/:id` (auth) returns
-a job's delivery state and its result. Synchronous requests are not stored. The delivery is not signed: put a secret in the callback URL if you need to
-authenticate it, and remember the attestation is independently verifiable anyway. Callback URLs
-must be https unless `ALLOW_HTTP_CALLBACKS=true`. This is the mode to use from a login flow, where
-nothing is waiting on the HTTP response and client timeouts do not apply.
+Results are stored in a SQLite outbox (`DB_PATH`, using `node:sqlite`) before delivery. Pending
+deliveries resume after a restart when the database is retained. Queued and proving jobs remain
+in memory until a result is stored. Synchronous results are not stored.
+
+Failed deliveries retry after 1 min, 5 min, 30 min, 2 h, then every 6 h. A 2xx response completes
+delivery. A 4xx response ends retries, except for 408 and 429. Failed attempts after 48 hours also
+end retries. `GET /jobs/:id` returns the delivery state and result.
+
+Callbacks are unsigned. To authenticate delivery, include a secret in the callback URL and
+check it at the receiver. Verify the attestation separately. URLs must use HTTPS unless
+`ALLOW_HTTP_CALLBACKS=true`. Use callbacks when the caller should not wait for proof generation.
 
 ### Back-pressure
 
-Proves run at most `MAX_CONCURRENCY` at a time (about 3 GB each) and up to `MAX_QUEUE` requests wait
-for a slot; beyond that, both modes get `503` with `Retry-After: 10` immediately rather than a
-timeout later. `/healthz` reports `inFlight` and `queued`. Circuit solving runs in a worker thread,
-so the HTTP loop stays responsive while proving; run a single PM2 instance (the memory gate is per
-process).
+`MAX_CONCURRENCY` limits active proofs; `MAX_QUEUE` limits requests waiting for a slot. When both
+limits are reached, new work receives 503 with a JSON error and `Retry-After: 10`.
+`/healthz` reports `inFlight` and `queued`. Limits apply per process; the PM2 configuration runs
+one instance.
 
-`GET /healthz` — liveness, no auth; reports `circuitVersion`, `vkHash`, `inFlight`, `queued`, and
-outbox job counts by status.
+For a 502 or 503 without the service's JSON error, check proxy logs, process restarts and memory
+usage. The response alone does not establish whether the process ran out of memory.
 
-`GET /jobs/:id` — auth; a callback job's status (`pending` / `delivered` / `failed`), attempts, last
-error, and its result (the attestation or the error that was delivered). Startup fails if the vk
-on disk does not hash to what `circuit/version.json` says, so a half-synced deploy cannot serve.
+### Repeated requests
+
+A callback request matching an active job's identity type, normalized identity value, wallet and
+callback URL returns `202 { jobId, status: "proving", deduplicated: true }`, including at
+capacity. It does not start another proof. The JWT is excluded from this key: submitting a fresher
+token can return the existing job's proof. A different callback URL starts a separate job.
+Once the result is stored, a repeated request starts a new job.
+
+### Status endpoints
+
+`GET /healthz` — unauthenticated liveness check; reports `circuitVersion`, `vkHash`, concurrency
+and queue counts and limits, and outbox counts by status.
+
+`GET /jobs/:id` — bearer authentication required. Returns `proving` for an active job; stored
+results include `pending`, `delivered` or `failed` delivery status, attempts and the last error.
+Unknown job IDs return 404.
+
+Startup requires the pinned `bb` version and checks the verification key's SHA-256 hash against
+`circuit/version.json`.
 
 ## Running
 
@@ -81,19 +101,22 @@ cp .env.example .env && $EDITOR .env
 yarn build && yarn start        # node --env-file=.env dist/server.js
 ```
 
-Requires a 64-bit Linux with glibc 2.34 or newer (Ubuntu 22.04+, Debian 12+; the `bb` binary
-will not run on Ubuntu 20.04), Node 22.13+ (for `node:sqlite`) and the `bb` binary (`~/.bb/bb` by default, or `BB_BIN`) at the pinned version
-`5.0.0-nightly.20260522`. Configuration is entirely through `.env`; see `.env.example`. `PRIVY_JWKS_URL` may list several
-JWKS URLs, comma-separated, to trust more than one Privy app (production and sandbox, say) from one
-process: the token's `kid` and signature pick the key, and the response's `kid` says which app it
-was. Sandbox attestations still cannot verify against a production SDK or contract, because those
-pin the production key.
+The Linux `bb` binary requires a 64-bit system with glibc 2.34 or newer, such as Ubuntu 22.04+
+or Debian 12+. Use Node 22.13+ for `node:sqlite` and the pinned `bb` version
+`5.0.0-nightly.20260522`. The service uses `~/.bb/bb` when present, otherwise `bb` on `PATH`;
+`BB_BIN` overrides this location.
+
+Configuration uses environment variables; see `.env.example`. `PRIVY_JWKS_URL` accepts
+comma-separated JWKS URLs for multiple Privy apps. The signature determines the signing key;
+the response's `kid` identifies that key when available. Verification must use the corresponding
+environment's trusted keys.
 
 ### Sizing
 
-One attestation takes about 8 s on a 14-core machine: ~3 s solving (single-threaded WASM) and ~5 s
-proving (all cores, ~3 GB peak). Set `MAX_CONCURRENCY` to `floor(RAM / 3 GB)`; up to `MAX_QUEUE` extra requests wait, the rest get 503.
-Solving runs in a worker thread, so one instance (see `ecosystem.config.cjs`) stays responsive.
+Measurements on a 14-core machine are approximately 8 s per attestation: 3 s solving in
+single-threaded WASM and 5 s proving, with about 3 GB peak memory. Allow at least 4 GB for an
+instance running one proof at a time. Measure memory and latency before increasing
+`MAX_CONCURRENCY`, leaving headroom for Node and the host.
 
 ### VPS with PM2
 
@@ -104,15 +127,15 @@ pm2 start ecosystem.config.cjs && pm2 save && pm2 startup
 
 ### Railway
 
-Set the service's **Root Directory** to `/http-prover` (and Watch Paths to `/http-prover/**`);
-`railway.json` selects the Dockerfile builder and the `/healthz` check. Add a volume mounted at
-`/app/data` for the outbox, set the variables from `.env.example` (`WORK_DIR`, `DB_PATH`,
-`CIRCUIT_JSON`, `VK_PATH` are preset by the image), and give the service at least 4 GB of memory.
-The circuit artifacts in `circuit/` are committed for exactly this reason: the build context is this
-folder alone, and the image must contain the circuit it serves. `pvium_identity.json.gz` is the
-compiled circuit stripped of source maps (4.6 MB); the service inflates it on first start. After a
-circuit change, `yarn sync` and commit the updated `.gz`, `vk` and `version.json` with the version
-bump.
+Set **Root Directory** to `/http-prover` and **Watch Paths** to `/http-prover/**`.
+`railway.json` selects the Dockerfile and `/healthz` check. Mount a persistent volume at
+`/app/data` for the outbox and set the variables from `.env.example`. The image supplies
+`WORK_DIR`, `DB_PATH`, `CIRCUIT_JSON` and `VK_PATH`; allow at least 4 GB for one concurrent proof.
+
+The image includes the committed artifacts in `circuit/`. `pvium_identity.json.gz` contains the
+compiled circuit without source maps, approximately 4.6 MB compressed. Startup extracts it when
+the uncompressed file is absent. After a circuit change, run `yarn sync` and commit the updated
+`.gz`, `vk` and `version.json` with the version bump.
 
 ### Docker
 
@@ -121,28 +144,27 @@ yarn sync && docker build -t pvium-prover .
 docker run --env-file .env -p 8787:8787 --shm-size=1g -v prover-data:/app/data pvium-prover
 ```
 
-`WORK_DIR` defaults to `/dev/shm` in the image so witness files (which contain the token) never
-touch disk.
+The image defaults `WORK_DIR` to `/dev/shm`, a tmpfs filesystem. Witness files contain token
+data; their storage and swap behavior depend on the host configuration.
 
 ## Deploying from CI
 
-`.github/workflows/deploy-prover.yml` deploys over SSH on a `prover-v*` tag or a manual run, into
-the GitHub environment `production`. Set that environment up with required reviewers and a tag rule
-so a deploy always needs an approval, and add these environment secrets:
+`.github/workflows/deploy-prover.yml` deploys over SSH on a `prover-v*` tag or a manual run,
+using the GitHub `production` environment. Configure required reviewers and deployment rules
+in that environment, and add these secrets:
 
 | Secret | Value |
 | --- | --- |
-| `VPS_HOST`, `VPS_USER` | host and a deploy-only user (needs `node` >= 22.13, `yarn`, `pm2`; `bb` is installed by the deploy into `~/.bb` if missing) |
-| `VPS_PASSWORD` | that user's password (used via `sshpass`; a key would be better, see below) |
-| `VPS_APP_DIR` | directory the service lives in; its `.env` is created by hand from `.env.example` and never touched by CI |
+| `VPS_HOST`, `VPS_USER` | host and deployment user with Node 22.13+, Yarn and PM2; deployment installs or updates `bb` in `~/.bb` |
+| `VPS_PASSWORD` | deployment user's password, supplied through `sshpass` |
+| `VPS_APP_DIR` | service directory; create its `.env` from `.env.example` on the host; CI excludes it from file synchronization |
 
-The workflow compiles the circuit (cached by source hash), checks the vk hash against
-`circuit/version.json`, builds, rsyncs only runtime files, reloads PM2, and hits `/healthz`.
-To move from a password to a key later: generate one (`ssh-keygen -t ed25519`), append the public
-half to `~/.ssh/authorized_keys` on the VPS, store the private half as a secret, and swap the
-`sshpass -e ssh` prefix in the workflow for `ssh -i`. Because the repo is public, keep the secrets in
-the protected environment only, review every change
-under `.github/` (see `CODEOWNERS`), and pin third-party actions to commit SHAs before relying on this.
+The workflow compiles the circuit using a source-based cache, checks the vk hash against
+`circuit/version.json`, builds the service, syncs runtime files, reloads PM2 and checks `/healthz`.
+To use SSH keys, generate a key with `ssh-keygen -t ed25519`, add the public key to the host's
+`~/.ssh/authorized_keys`, store the private key as an environment secret, and replace
+`sshpass -e ssh` with `ssh -i` using that key. Keep deployment secrets in the protected environment,
+review `.github/` changes (see `CODEOWNERS`), and pin third-party actions to commit SHAs.
 
 ## Logging
 
@@ -153,16 +175,17 @@ One line per request on stdout, plus one per callback delivery attempt:
 2026-09-14T10:00:09.100Z job 3f2c… ok type=email wallet=0x… callback=api.example.com delivery=delivered
 ```
 
-The token and the identity value are never logged. PM2 and Railway both collect stdout; on a VPS
-install `pm2-logrotate` to cap file sizes.
+Request logs omit the token and identity-value fields. PM2 and Railway collect stdout;
+on a VPS, use `pm2-logrotate` to limit log growth.
 
 ## Security notes
 
-- The token is a bearer credential for the user's Privy session. It is never logged, and the
-  temp directory holding the witness is deleted after every job.
-- The secret is compared in constant time.
-- Whoever holds a valid token can request an attestation for any linked wallet of that user, so
-  the service should only be reachable from your backend.
+- Keep the service and its bearer secret accessible only to your backend. A caller with a valid
+  token can request a proof for any wallet linked in that token.
+- Authentication uses `timingSafeEqual` for equal-length bearer credentials.
+- Proof generation removes its temporary directory in a cleanup block. Abrupt process
+  termination can leave files behind.
+- Callback records contain identity values, wallets and results; protect the outbox database.
 
 ## Development
 
@@ -170,6 +193,6 @@ install `pm2-logrotate` to cap file sizes.
 yarn test
 ```
 
-Tests check the TypeScript witness builder against `circuit/scripts/gen_prover.py` byte for byte on
-the real sample token, exercise the HTTP layer, and (when `bb` and the circuit artifacts are
-present) generate a real attestation and verify it with `@pvium/zk-verifier`.
+Tests compare the TypeScript witness builder with `circuit/scripts/gen_prover.py` byte for byte,
+exercise the HTTP layer, queue and callback delivery, and verify generated attestations with
+`@pvium/p2id-verifier` when `bb` and the circuit artifacts are available.

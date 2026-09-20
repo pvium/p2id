@@ -10,7 +10,7 @@
 //   OWNER_SANDBOX / _PROD            factory registry owner (a Safe at the same address everywhere)
 //   ATTESTER_SANDBOX / _PROD         constraint attester, or "none"
 // Shared, optional: DEPLOYER_KEY (or DEPLOYER_KEY_<SUFFIX>), POLICY_CHANGE_DELAY, MIN_REFUND_WINDOW,
-// MAX_REFUND_WINDOW, SCHEME (default: `current` in sdks/node/src/p2id.json), CIRCUIT_VERSION.
+// MAX_REFUND_WINDOW, SCHEME (default: `current` in sdks/node/p2id-core/src/p2id.json), CIRCUIT_VERSION.
 //
 // PREDICT=1 prints the addresses without sending anything (with no --network, set P2ID_ENV).
 //
@@ -124,7 +124,7 @@ async function main() {
   //    first (the only remote input), then the rest of the configuration. A failure here means
   //    nothing was sent.
   const environment = environmentOf(network.name);
-  const p2id = JSON.parse(readFileSync(join(ROOT, 'sdks', 'node', 'src', 'p2id.json'), 'utf8'));
+  const p2id = JSON.parse(readFileSync(join(ROOT, 'sdks', 'node', 'p2id-core', 'src', 'p2id.json'), 'utf8'));
   const scheme: string = process.env.SCHEME ?? p2id.current;
   const circuitVersion = Number(process.env.CIRCUIT_VERSION ?? JSON.parse(readFileSync(join(ROOT, 'circuit', 'version.json'), 'utf8')).circuitVersion);
   const { params, keys, jwks } = await configFor(environment, scheme, circuitVersion);
@@ -154,7 +154,7 @@ async function main() {
   const recorded: string | null = p2id.schemes[scheme]?.factories?.[environment] ?? null;
   if (recorded && recorded.toLowerCase() !== predicted.factory.toLowerCase()) {
     throw new Error(
-      `this ${environment} configuration gives factory ${predicted.factory}, but sdks/node/src/p2id.json records ${recorded} for ${scheme}. ` +
+      `this ${environment} configuration gives factory ${predicted.factory}, but sdks/node/p2id-core/src/p2id.json records ${recorded} for ${scheme}. ` +
         'Something differs from the configuration that was recorded (owner, attester, delays, or the Privy JWKS keys).',
     );
   }

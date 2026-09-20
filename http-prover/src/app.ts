@@ -5,6 +5,7 @@ import type { ProverConfig } from './config.js';
 import { InputError } from './errors.js';
 import { QueueFullError } from './prove.js';
 import { Dispatcher, parseCallbackUrl, runWebhookJob } from './webhook.js';
+import { InFlightJobs } from './inflight.js';
 import { Outbox } from './outbox.js';
 import { randomUUID } from 'node:crypto';
 
@@ -31,6 +32,7 @@ export function createApp(cfg: ProverConfig, secret: string) {
   if (!secret) throw new Error('AUTH_TOKEN is required');
   const service = new AttestationService(cfg);
   const outbox = new Outbox(cfg.dbPath);
+  const inflight = new InFlightJobs();
   const dispatcher = new Dispatcher(outbox, cfg.dispatchIntervalMs);
   dispatcher.start();
   const app = express();
@@ -62,29 +64,42 @@ export function createApp(cfg: ProverConfig, secret: string) {
   app.post('/attestations', auth, async (req, res) => {
     // Never log req.body: the jwt is a bearer credential for the user's Privy session.
     const body = req.body ?? {};
-    if (service.stats.queued >= cfg.maxQueue && service.stats.inFlight >= cfg.maxConcurrency) {
-      res.set('retry-after', '10').status(503).json({ error: 'prover busy; retry later', ...service.stats });
-      return;
-    }
+    const busy = () => service.stats.queued >= cfg.maxQueue && service.stats.inFlight >= cfg.maxConcurrency;
+    const refuseBusy = () => res.set('retry-after', '10').status(503).json({ error: 'prover busy; retry later', ...service.stats });
     if (body.callbackUrl !== undefined) {
       const callback = parseCallbackUrl(body.callbackUrl, cfg.allowHttpCallbacks);
-      const jobId = randomUUID();
       // Validate cheaply before accepting, so a malformed request still gets a 400 not a webhook error.
       service.validateRequest(body);
+      // The same proof for the same receiver is already queued or proving: hand back that job
+      // (even when busy: it costs nothing) instead of starting another proving run.
+      const key = InFlightJobs.key(body, callback);
+      const existing = inflight.find(key);
+      if (existing) {
+        res.locals.log = { mode: 'async', type: body.identityType, wallet: body.wallet, job: existing, deduplicated: true };
+        res.status(202).json({ jobId: existing, status: 'proving', deduplicated: true, ...service.stats });
+        return;
+      }
+      if (busy()) return void refuseBusy();
+      const jobId = randomUUID();
       res.locals.log = { mode: 'async', type: body.identityType, wallet: body.wallet, job: jobId };
-      void runWebhookJob(service, outbox, body, callback, jobId);
+      void runWebhookJob(service, outbox, body, callback, jobId, { registry: inflight, key });
       res.status(202).json({ jobId, status: 'queued', ...service.stats });
       return;
     }
+    if (busy()) return void refuseBusy();
     res.locals.log = { mode: 'sync', type: body.identityType, wallet: body.wallet };
     res.json(await service.generate(body));
   });
 
   /** Look up a callback job: its delivery state and, once proven, the attestation body. */
   app.get('/jobs/:id', auth, (req, res) => {
-    const job = outbox.get(String(req.params.id));
+    const id = String(req.params.id);
+    const job = outbox.get(id);
     if (!job) {
-      res.status(404).json({ error: 'unknown job' });
+      // Accepted but not proven yet: it reaches the outbox together with its result.
+      const proving = inflight.get(id);
+      if (proving) res.json({ jobId: id, status: 'proving', startedAt: proving.startedAt });
+      else res.status(404).json({ error: 'unknown job' });
       return;
     }
     const { body, ...meta } = job;

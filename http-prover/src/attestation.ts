@@ -21,7 +21,7 @@ export interface AttestationRequest {
   callbackUrl?: string;
 }
 
-/** What the resolution API stores and later returns; verifiable with @pvium/zk-verifier. */
+/** What the resolution API stores and later returns; verifiable with @pvium/p2id-verifier. */
 export interface Attestation {
   proof: string; // base64
   publicInputs: string; // base64, 11 × 32 bytes

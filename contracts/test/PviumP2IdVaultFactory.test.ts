@@ -67,11 +67,11 @@ describe('PviumP2IdVaultFactory', function () {
     expect(await vault.maxRefundWindow()).to.equal(30 * DAY);
   });
 
-  it('the init code hash the Node SDK ships (sdks/node/src/p2id.json) matches this build', async () => {
-    const sdk = JSON.parse(readFileSync(join(__dirname, '..', '..', 'sdks', 'node', 'src', 'p2id.json'), 'utf8'));
+  it('the init code hash the Node SDK ships (sdks/node/p2id-core/src/p2id.json) matches this build', async () => {
+    const sdk = JSON.parse(readFileSync(join(__dirname, '..', '..', 'sdks', 'node', 'p2id-core', 'src', 'p2id.json'), 'utf8'));
     expect(await factory.initCodeHash()).to.equal(
       sdk.schemes[sdk.current].vaultInitCodeHash,
-      'vault bytecode changed: run node sdks/node/scripts/embed-p2id.mjs --update, or add the next p2id.vault.vN if this scheme is released',
+      'vault bytecode changed: run node sdks/node/p2id-core/scripts/embed-p2id.mjs --update, or add the next p2id.vault.vN if this scheme is released',
     );
   });
 

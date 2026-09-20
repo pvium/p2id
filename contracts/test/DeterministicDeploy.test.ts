@@ -50,7 +50,7 @@ describe('Deterministic deployment: chain-agnostic P2ID addresses', function () 
     expect(await factory2.vaultFor(EMAIL_COMMITMENT)).to.equal(vault1);
 
     // and it is the address the SDK formula gives, from constants only
-    const sdk = JSON.parse(readFileSync(join(__dirname, '..', '..', 'sdks', 'node', 'src', 'p2id.json'), 'utf8'));
+    const sdk = JSON.parse(readFileSync(join(__dirname, '..', '..', 'sdks', 'node', 'p2id-core', 'src', 'p2id.json'), 'utf8'));
     expect(ethers.getCreate2Address(second.factory, EMAIL_COMMITMENT, sdk.schemes[sdk.current].vaultInitCodeHash)).to.equal(vault1);
 
     // deploying again is a no-op that returns the same addresses

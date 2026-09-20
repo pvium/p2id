@@ -17,7 +17,7 @@
     "express": "^5.1.0"
   },
   "devDependencies": {
-    "@pvium/zk-verifier": "link:../sdks/node",
+    "@pvium/p2id-verifier": "link:../sdks/node/p2id-verifier",
     "@types/express": "^5.0.0",
     "@types/node": "^22.0.0",
     "tsx": "^4.19.0",
@@ -25,5 +25,8 @@
   },
   "engines": {
     "node": ">=22.13"
+  },
+  "resolutions": {
+    "@pvium/p2id-core": "link:../sdks/node/p2id-core"
   }
 }

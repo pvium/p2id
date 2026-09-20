@@ -9,6 +9,7 @@ wallet) maps to a chain-agnostic address, the identity type ids, and how a claim
 | Folder | Purpose |
 | --- | --- |
 | `circuit/` | Noir circuit: proves a Privy identity token contains a linked account and wallet |
-| `sdks/node/` | npm package `@pvium/zkid`: verify attestations off-chain, derive P2ID addresses; ships the Solidity sources too |
+| `sdks/node/p2id-core/` | npm package `@pvium/p2id-core`: identity hashing, P2ID address derivation, the Solidity sources. Browser-safe |
+| `sdks/node/p2id-verifier/` | npm package `@pvium/p2id-verifier`: verify attestations off-chain (depends on core) |
 | `http-prover/` | Attestation service: token in, proof out (Express + noir_js + native bb) |
 | `contracts/` | On-chain verification, per-identity vaults and the vault factory |

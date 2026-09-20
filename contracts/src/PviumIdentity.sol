@@ -3,7 +3,6 @@ pragma solidity ^0.8.27;
 
 import {IVerifier} from "./PviumZKVerifier.sol";
 import {IPviumIdentity} from "./interfaces/IPviumIdentity.sol";
-import {P2IDHash} from "./lib/P2IDHash.sol";
 
 /// @title PviumIdentity
 /// @notice On-chain verifier for Pvium attestations. Fully immutable: one deployment per
@@ -89,32 +88,6 @@ contract PviumIdentity is IPviumIdentity {
 
     /// @inheritdoc IPviumIdentity
     function verifyIdentity(
-        bytes calldata proof,
-        bytes32[] calldata publicInputs,
-        uint8 identityType,
-        bytes calldata identityValue,
-        address wallet
-    ) external view returns (uint64 issuedAt) {
-        return _verifyIdentity(
-            proof, publicInputs, identityType, P2IDHash.identityHash(identityType, identityValue), P2IDHash.walletHash(wallet)
-        );
-    }
-
-    /// @inheritdoc IPviumIdentity
-    function verifyIdentityNonEvm(
-        bytes calldata proof,
-        bytes32[] calldata publicInputs,
-        uint8 identityType,
-        bytes calldata identityValue,
-        string calldata wallet
-    ) external view returns (uint64 issuedAt) {
-        return _verifyIdentity(
-            proof, publicInputs, identityType, P2IDHash.identityHash(identityType, identityValue), P2IDHash.walletHash(wallet)
-        );
-    }
-
-    /// @inheritdoc IPviumIdentity
-    function verifyIdentityHashes(
         bytes calldata proof,
         bytes32[] calldata publicInputs,
         uint8 identityType,
