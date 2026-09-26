@@ -184,6 +184,23 @@ describe('P2IDVault', function () {
       .to.be.revertedWithCustomError(vault, 'ConstraintRequired');
   });
 
+  it('a funder can use a constraint once; other funders are unaffected', async () => {
+    const c = ethers.id('screened');
+    await fundAs(alice, token, 10n, c);
+    expect(await vault.constraintDeposit(c, alice.address)).to.deep.equal([true, 0n]);
+    expect(await vault.constraintDeposit(c, spammer.address)).to.deep.equal([false, 0n]);
+    await expect(fundAs(alice, token, 10n, c)).to.be.revertedWithCustomError(vault, 'ConstraintUsed').withArgs(0);
+    await expect(fundAs(alice, token, 10n, ethers.id('screened-2'))).to.not.be.reverted; // a fresh one is fine
+    await fundAs(spammer, token, 1n, c); // someone else copying it only adds their own money to the bucket
+    // the constraint stays used after the deposit is refunded or claimed
+    await time.increase(DAY + 1);
+    await vault.connect(alice).refund(0);
+    await expect(fundAs(alice, token, 10n, c)).to.be.revertedWithCustomError(vault, 'ConstraintUsed').withArgs(0);
+    await vault.sweepBucket(V, constraintOf(c), await token.getAddress(), proofFor(ownerWallet.address, 1000), 0);
+    expect(await token.balanceOf(ownerWallet.address)).to.equal(1n); // spammer's copy; alice's was refunded
+    await expect(fundAs(alice, token, 10n, c)).to.be.revertedWithCustomError(vault, 'ConstraintUsed').withArgs(0);
+  });
+
   it('re-proving the owner retires older proofs for constrained sweeps too', async () => {
     const c = ethers.id('screened');
     await fundAs(alice, token, 10n, c);

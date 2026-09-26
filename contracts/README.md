@@ -36,10 +36,12 @@ yarn fixtures   # after re-proving in ../circuit: refresh test fixtures + regene
   and normalisation rules, byte-for-byte what the circuit and the Node SDK compute.
 - `src/PviumVerifier.sol` — `IP2IDVerifier` backed by `PviumIdentity`: resolves a proof to the
   wallet the circuit read from the token (cross-checked against `walletHash`) and, when a
-  constraint is given, checks the registered attester signed its commitment. Constraint
+  constraint is given, checks a registered attester signed its commitment. Constraint
   signatures are EIP-712 typed data, `Constraint(bytes32 commitment)` in the domain
   `{name: "PviumVerifier", version: "1", chainId, verifyingContract}`, so one signature is valid
-  on one chain and one verifier only. The attester is immutable too: a new one is a new deployment.
+  on one chain and one verifier only. The attester set is managed by the verifier's owner (two-step
+  transfer): attesters only gate constrained deposits and never choose the wallet, so rotating
+  one needs no redeployment. The identity side (key set, circuit) stays immutable.
 - `src/P2IDVault.sol` — per-identity vault holding ERC-20 deposits until the identity's owner
   proves it. No constructor arguments: the deployer is recorded as `factory` and must call
   `initialize` once, so the creation code is a constant. Every deposit names the `IP2IDVerifier`

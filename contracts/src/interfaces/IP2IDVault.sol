@@ -49,7 +49,7 @@ interface IP2IDVault {
     function initialize(bytes32 nsHash, bytes32 saltCommitment, uint64 minRefundWindow, uint64 maxRefundWindow) external;
 
     // funding
-    /// @notice Fund under the factory's default verifier.
+    /// @notice Fund under the factory's default verifier. A non-zero `constraint` can be used once per funder.
     function fund(address token, uint256 amount, bytes32 constraint, uint64 refundWindow) external payable returns (uint256 depositId);
     /// @notice Fund under any verifier the factory's policy allows.
     function fundWith(address verifier, address token, uint256 amount, bytes32 constraint, uint64 refundWindow) external payable returns (uint256 depositId);
@@ -79,6 +79,8 @@ interface IP2IDVault {
     function MAX_FEE_BPS() external view returns (uint16);
     /// @notice address(0): the token address standing for the native coin.
     function NATIVE() external view returns (address);
+    /// @notice keccak256 of the address scheme this vault was issued under, e.g. keccak256("p2id.vault.v1").
+    function nsHash() external view returns (bytes32);
     function factory() external view returns (address);
     function policy() external view returns (address);
     function defaultVerifier() external view returns (address);
@@ -90,6 +92,10 @@ interface IP2IDVault {
     function depositCount() external view returns (uint256);
     function bucketDepositIds(address verifier, bytes32 constraint, address token) external view returns (uint256[] memory);
     function bucketDepositCount(address verifier, bytes32 constraint, address token) external view returns (uint256);
+    /// @notice Whether `funder` has funded under `constraint`, and which deposit. A funder can use a
+    ///         constraint once (refunded or claimed, it stays used), so a signature over it releases
+    ///         at most one of their deposits. Funders must make constraints unique, e.g. by salting.
+    function constraintDeposit(bytes32 constraint, address funder) external view returns (bool used, uint256 depositId);
     function bucketTotal(address verifier, bytes32 constraint, address token) external view returns (uint256);
     function trackedTotal(address token) external view returns (uint256);
     function feesOwed(address verifier, address token) external view returns (uint256);

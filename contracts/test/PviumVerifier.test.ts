@@ -42,8 +42,8 @@ describe('PviumVerifier: real ZK proof + signed constraint commitment', function
     const x = BigInt('0x' + Buffer.from(jwk.x!, 'base64url').toString('hex'));
     const y = BigInt('0x' + Buffer.from(jwk.y!, 'base64url').toString('hex'));
     pviumIdentity = await deployIdentityProof(honk, x, y);
-    verifier = await ethers.deployContract('PviumVerifier', [await pviumIdentity.getAddress(), attester.address]);
-    verifierNoSigner = await ethers.deployContract('PviumVerifier', [await pviumIdentity.getAddress(), ethers.ZeroAddress]);
+    verifier = await ethers.deployContract('PviumVerifier', [await pviumIdentity.getAddress(), admin.address, [attester.address]]);
+    verifierNoSigner = await ethers.deployContract('PviumVerifier', [await pviumIdentity.getAddress(), ethers.ZeroAddress, []]);
   });
 
   beforeEach(async () => {
@@ -85,7 +85,7 @@ describe('PviumVerifier: real ZK proof + signed constraint commitment', function
   });
 
   it('a constrained deposit needs the proof and the registered signer over the commitment', async () => {
-    const commitment = await verifier.screeningCommitment(POLICY, EMAIL_COMMITMENT);
+    const commitment = await verifier.screeningCommitment(POLICY, EMAIL_COMMITMENT, ethers.id('salt'));
     await token.mint(payer.address, 100n);
     await token.connect(payer).approve(await vault.getAddress(), 100n);
     await vault.connect(payer).fund(await token.getAddress(), 100n, commitment, DAY);
@@ -108,11 +108,11 @@ describe('PviumVerifier: real ZK proof + signed constraint commitment', function
   });
 
   it('a constraint signature is bound to the chain and the verifier', async () => {
-    const commitment = await verifier.screeningCommitment(POLICY, EMAIL_COMMITMENT);
+    const commitment = await verifier.screeningCommitment(POLICY, EMAIL_COMMITMENT, ethers.id('salt'));
     const otherChain = await signConstraint(attester, verifier, commitment, 8453n);
     await expect(verifier.getIdentityWallet(EMAIL_COMMITMENT, proofBytes('email'), constraintOf(commitment, otherChain)))
       .to.be.revertedWithCustomError(verifier, 'InvalidConstraintSigner');
-    const otherVerifier = await ethers.deployContract('PviumVerifier', [await pviumIdentity.getAddress(), attester.address]);
+    const otherVerifier = await ethers.deployContract('PviumVerifier', [await pviumIdentity.getAddress(), admin.address, [attester.address]]);
     const forOther = await signConstraint(attester, otherVerifier, commitment);
     await expect(verifier.getIdentityWallet(EMAIL_COMMITMENT, proofBytes('email'), constraintOf(commitment, forOther)))
       .to.be.revertedWithCustomError(verifier, 'InvalidConstraintSigner');
@@ -121,9 +121,45 @@ describe('PviumVerifier: real ZK proof + signed constraint commitment', function
       .to.be.revertedWithCustomError(verifier, 'InvalidConstraintSigner');
   });
 
-  it('the constraint signer is immutable: a new attester is a new verifier deployment', async () => {
-    expect((verifier as any).setConstraintSigner).to.equal(undefined);
-    expect(await verifier.constraintSigner()).to.equal(attester.address);
+  it('the owner manages the signer set; a signer can only release funds to the proven wallet', async () => {
+    expect(await verifier.owner()).to.equal(admin.address);
+    expect(await verifier.isConstraintSigner(attester.address)).to.equal(true);
+    expect(await verifier.constraintSignerCount()).to.equal(1n);
+    const commitment = await verifier.screeningCommitment(POLICY, EMAIL_COMMITMENT, ethers.id('salt'));
+    // a second signer, then the first is revoked
+    await expect(verifier.connect(stranger).setConstraintSigner(stranger.address, true)).to.be.revertedWithCustomError(verifier, 'NotOwner');
+    await expect(verifier.connect(admin).setConstraintSigner(stranger.address, true)).to.emit(verifier, 'ConstraintSignerSet').withArgs(stranger.address, true);
+    await verifier.connect(admin).setConstraintSigner(attester.address, false);
+    expect(await verifier.constraintSignerCount()).to.equal(1n);
+    const byOld = await signConstraint(attester, verifier, commitment);
+    await expect(verifier.getIdentityWallet(EMAIL_COMMITMENT, proofBytes('email'), constraintOf(commitment, byOld)))
+      .to.be.revertedWithCustomError(verifier, 'InvalidConstraintSigner');
+    const byNew = await signConstraint(stranger, verifier, commitment);
+    const [wallet] = await verifier.getIdentityWallet(EMAIL_COMMITMENT, proofBytes('email'), constraintOf(commitment, byNew));
+    expect(wallet).to.equal(LINKED_WALLET); // whoever signs, the wallet comes from the proof
+    // revoking the last signer turns constraints off; re-adding turns them back on
+    await verifier.connect(admin).setConstraintSigner(stranger.address, false);
+    expect(await verifier.supportsConstraints()).to.equal(false);
+    await expect(verifier.getIdentityWallet(EMAIL_COMMITMENT, proofBytes('email'), constraintOf(commitment, byNew)))
+      .to.be.revertedWithCustomError(verifier, 'ConstraintsUnsupported');
+    await expect(verifier.connect(admin).setConstraintSigner(ethers.ZeroAddress, true)).to.be.revertedWithCustomError(verifier, 'InvalidSigner');
+    await verifier.connect(admin).setConstraintSigner(attester.address, true);
+    expect(await verifier.supportsConstraints()).to.equal(true);
+  });
+
+  it('ownership moves in two steps, and address(0) as owner freezes the signer set', async () => {
+    await verifier.connect(admin).transferOwnership(stranger.address);
+    expect(await verifier.owner()).to.equal(admin.address); // not yet
+    await expect(verifier.connect(admin).acceptOwnership()).to.be.revertedWithCustomError(verifier, 'NotPendingOwner');
+    await expect(verifier.connect(stranger).acceptOwnership()).to.emit(verifier, 'OwnershipTransferred').withArgs(admin.address, stranger.address);
+    await expect(verifier.connect(admin).setConstraintSigner(admin.address, true)).to.be.revertedWithCustomError(verifier, 'NotOwner');
+    await verifier.connect(stranger).transferOwnership(admin.address);
+    await verifier.connect(admin).acceptOwnership();
+
+    const frozen = await ethers.deployContract('PviumVerifier', [await pviumIdentity.getAddress(), ethers.ZeroAddress, [attester.address]]);
+    expect(await frozen.supportsConstraints()).to.equal(true);
+    await expect(frozen.connect(admin).setConstraintSigner(stranger.address, true)).to.be.revertedWithCustomError(frozen, 'NotOwner');
+    await expect(frozen.connect(stranger).acceptOwnership()).to.be.revertedWithCustomError(frozen, 'NotPendingOwner');
   });
 
   it('supportsConstraints reflects whether an attester is set, and a vault refuses constrained deposits otherwise', async () => {
@@ -131,7 +167,7 @@ describe('PviumVerifier: real ZK proof + signed constraint commitment', function
     expect(await verifierNoSigner.supportsConstraints()).to.equal(false);
     await token.mint(payer.address, 10n);
     await token.connect(payer).approve(await vault.getAddress(), 10n);
-    const commitment = await verifier.screeningCommitment(POLICY, EMAIL_COMMITMENT);
+    const commitment = await verifier.screeningCommitment(POLICY, EMAIL_COMMITMENT, ethers.id('salt'));
     await expect(vault.connect(payer).fundWith(await verifierNoSigner.getAddress(), await token.getAddress(), 10n, commitment, DAY))
       .to.be.revertedWithCustomError(vault, 'ConstraintsUnsupported');
     await vault.connect(payer).fundWith(await verifierNoSigner.getAddress(), await token.getAddress(), 10n, ethers.ZeroHash, DAY); // unconstrained is fine

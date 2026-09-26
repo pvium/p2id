@@ -99,6 +99,10 @@ contract P2IDVault is IP2IDVault {
     mapping(address verifier => mapping(bytes32 constraint => mapping(address token => uint256[]))) private _bucketDeposits;
     /// @notice Index into the bucket's deposit list below which every deposit is consumed.
     mapping(address verifier => mapping(bytes32 constraint => mapping(address token => uint256))) public bucketCursor;
+    /// @dev keccak256(constraint, funder) => depositId + 1. A funder can use a constraint once, so a
+    ///      signature over it releases at most one of their deposits; another funder reusing the
+    ///      same value only puts their own money in the bucket.
+    mapping(bytes32 => uint256) private _constraintDeposit;
     /// @notice Fees accrued and not yet distributed, per verifier they were earned through and token.
     mapping(address verifier => mapping(address token => uint256)) public feesOwed;
     /// @notice Sum of feesOwed per token: held for distribution, never part of a payout.
@@ -118,6 +122,7 @@ contract P2IDVault is IP2IDVault {
     error DepositConsumed();
     error DepositNotInBucket(uint256 depositId);
     error ConstraintRequired();
+    error ConstraintUsed(uint256 depositId);
     error NotFactory();
     error AlreadyInitialized();
     error RefundNotReady();
@@ -210,7 +215,12 @@ contract P2IDVault is IP2IDVault {
         bytes32 constraint,
         uint64 refundWindow
     ) private onlyAllowed(verifier) returns (uint256 depositId) {
-        if (constraint != bytes32(0) && !_supportsConstraints(verifier)) revert ConstraintsUnsupported(verifier);
+        bytes32 constraintKey;
+        if (constraint != bytes32(0)) {
+            if (!_supportsConstraints(verifier)) revert ConstraintsUnsupported(verifier);
+            constraintKey = keccak256(abi.encode(constraint, funder));
+            if (_constraintDeposit[constraintKey] != 0) revert ConstraintUsed(_constraintDeposit[constraintKey] - 1);
+        }
         if (refundWindow < minRefundWindow || refundWindow > maxRefundWindow) revert InvalidRefundWindow();
         if (amount == 0 || amount > type(uint128).max) revert InvalidRefundAmount();
 
@@ -244,6 +254,7 @@ contract P2IDVault is IP2IDVault {
                 constraint: constraint
             })
         );
+        if (constraint != bytes32(0)) _constraintDeposit[constraintKey] = depositId + 1;
         _bucketDeposits[verifier][constraint][token].push(depositId);
         bucketTotal[verifier][constraint][token] += credited;
         trackedTotal[token] += credited;
@@ -411,6 +422,12 @@ contract P2IDVault is IP2IDVault {
 
     function bucketDepositCount(address verifier, bytes32 constraint, address token) external view returns (uint256) {
         return _bucketDeposits[verifier][constraint][token].length;
+    }
+
+    /// @notice The deposit `funder` made under `constraint`, if any. Each funder can use a constraint once.
+    function constraintDeposit(bytes32 constraint, address funder) external view returns (bool used, uint256 depositId) {
+        uint256 stored = _constraintDeposit[keccak256(abi.encode(constraint, funder))];
+        return stored == 0 ? (false, 0) : (true, stored - 1);
     }
 
     /// @notice Gross amount `sweep(verifier, token, 0)` would release now, before fees: every

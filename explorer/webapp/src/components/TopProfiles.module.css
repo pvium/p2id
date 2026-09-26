@@ -1,0 +1,50 @@
+.section { min-width: 0; }
+.heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 32px; margin-bottom: 13px; }
+.heading h2 { font-size: 23px; font-weight: 500; letter-spacing: -.65px; }
+.pagination { display: flex; align-items: center; gap: 7px; flex-shrink: 0; }
+.pagination button { display: grid; place-items: center; width: 28px; height: 30px; border: 1px solid transparent; border-radius: 7px; color: #b8bdc6; }
+.pagination button:hover:not(:disabled) { background: var(--surface-raised); border-color: var(--line); color: var(--accent); }
+.pagination button:disabled { opacity: .3; }
+.pagination > span { font-family: var(--font-geist-mono), monospace; font-size: 11px; color: #969ba4; white-space: nowrap; }
+.pageIcon, .previousIcon { width: 15px; height: 15px; }
+.previousIcon { transform: rotate(180deg); }
+.filters { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 18px; min-height: 33px; }
+.filters button { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 30px; background: var(--surface); font-size: 10px; color: #999fab; white-space: nowrap; }
+.filters button[aria-pressed='true'] { border-color: #565d50; background: #272d23; color: #d0e1bb; }
+.filters button:hover { color: white; }
+.filterIcon { width: 11px; height: 11px; flex-shrink: 0; }
+.cards { display: flex; flex-direction: column; gap: 18px; }
+.card { display: block; min-width: 0; border: 1px solid var(--line); border-radius: 17px; background: var(--surface); overflow: hidden; transition: border-color .2s, background .2s; }
+.card:hover { border-color: #626959; background: #1b1e1c; }
+.cover { height: 108px; position: relative; overflow: hidden; background: linear-gradient(115deg, #243529, #3d5b40); color: #c5f17c; }
+.cover[data-art='cast'] { background: linear-gradient(120deg, #28223c, #7560ae); color: #e4d5ff; }
+.cover[data-art='night'] { background: #1b2544; color: #e4d29c; }
+.cover[data-art='cat'] { background: linear-gradient(115deg, #594922, #b18a40); color: #ffec9d; }
+.cover[data-art='coffee'] { background: linear-gradient(115deg, #402f26, #88634b); color: #e9c8a2; }
+.cover[data-art='goose'] { background: linear-gradient(115deg, #213e4e, #4b90a4); color: #c1edf2; }
+.cover > svg { display: block; width: 100%; height: 100%; }
+.coverLabel { position: absolute; left: 19px; top: 17px; font-family: var(--font-geist-mono), monospace; font-size: 8px; font-weight: 500; letter-spacing: 1.6px; opacity: .75; }
+.body { padding: 0 19px 16px; }
+.identityTop { display: flex; align-items: center; gap: 12px; position: relative; height: 36px; }
+.avatar { flex-shrink: 0; width: 68px; height: 68px; overflow: hidden; border: 5px solid var(--surface); border-radius: 50%; margin-top: -32px; background: var(--surface); }
+.avatar > svg { width: 100%; height: 100%; transform: scale(1.5); transform-origin: 50% 64%; }
+.profileType { display: flex; align-items: center; gap: 6px; color: #acb59f; font-size: 9px; white-space: nowrap; }
+.profileType > span { width: 4px; height: 4px; border-radius: 50%; background: #aabb92; }
+.profileArrow { width: 16px; height: 16px; margin-left: auto; color: #777e75; flex-shrink: 0; }
+.card:hover .profileArrow { color: var(--accent); }
+.body h3 { display: flex; align-items: center; gap: 9px; margin-top: 5px; font-size: 21px; font-weight: 550; letter-spacing: -.5px; line-height: 1.2; overflow-wrap: anywhere; }
+.nameIcon { width: 15px; height: 15px; flex-shrink: 0; color: #a2a7b0; }
+.handle { margin-top: 4px; font-size: 12px; color: #8d949e; overflow-wrap: anywhere; }
+.stats { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.tokenCount, .deposits { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.tokenCount strong, .deposits strong { font-size: 20px; line-height: 1.25; font-weight: 600; letter-spacing: -.5px; }
+.tokenCount > span, .deposits > span { font-size: 10px; color: #8d949e; }
+.deposits { text-align: right; }
+.deposits strong { display: block; color: #d5e4bf; overflow-wrap: anywhere; }
+.deposits small { font-size: 10px; font-weight: 450; letter-spacing: 0; color: #a8b797; }
+.empty { display: grid; place-items: center; min-height: 200px; padding: 24px; border: 1px dashed var(--line); border-radius: 17px; color: var(--muted); font-size: 12px; text-align: center; }
+@media (max-width: 600px) {
+  .heading h2 { font-size: 21px; }
+  .cover { height: 143px; }
+  .pagination button { width: 32px; height: 34px; }
+}

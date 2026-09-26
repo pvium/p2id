@@ -19,10 +19,10 @@ describe('P2IDVault fees and policy limits', function () {
     ethers.AbiCoder.defaultAbiCoder().encode(['address', 'bytes32', 'uint64'], [wallet, ID, iat]);
   const OK = ethers.hexlify(ethers.toUtf8Bytes('ok'));
 
-  async function fund(amount: bigint, constraint = Z, verifier = V) {
-    await token.mint(payer.address, amount);
-    await token.connect(payer).approve(await vault.getAddress(), amount);
-    const rc = await (await vault.connect(payer).fundWith(verifier, await token.getAddress(), amount, constraint, DAY)).wait();
+  async function fund(amount: bigint, constraint = Z, verifier = V, from = payer) {
+    await token.mint(from.address, amount);
+    await token.connect(from).approve(await vault.getAddress(), amount);
+    const rc = await (await vault.connect(from).fundWith(verifier, await token.getAddress(), amount, constraint, DAY)).wait();
     const ev = rc!.logs.map((l: any) => { try { return vault.interface.parseLog(l); } catch { return null; } }).find((e: any) => e?.name === 'Funded');
     return Number(ev.args.depositId);
   }
@@ -163,7 +163,7 @@ describe('P2IDVault fees and policy limits', function () {
     await policy.setFee(20, treasury.address);
     const a = await fund(5_000n, c);
     await policy.setFee(80, treasury.address);
-    const b = await fund(5_000n, c);
+    const b = await fund(5_000n, c, V, operator); // a second funder: the same commitment, its own deposit
     await expect(vault.sweepBucket(V, { commitment: c, signature: OK }, await token.getAddress(), proofFor(ownerWallet.address, 1000), 0))
       .to.emit(vault, 'Claimed').withArgs(a, ownerWallet.address, 5_000n, 10n)
       .and.to.emit(vault, 'Claimed').withArgs(b, ownerWallet.address, 5_000n, 40n);

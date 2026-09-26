@@ -29,7 +29,7 @@ export interface StackParams {
    * sorts them, so the same set always gives the same addresses.
    */
   signerKeys: { x: bigint; y: bigint }[];
-  /** Constraint attester; ZeroAddress disables constraints. */
+  /** Initial constraint attester; ZeroAddress deploys with none (the owner can add signers later). */
   attester: string;
   policyChangeDelay: number;
   minRefundWindow: number;
@@ -204,7 +204,7 @@ export async function deployStack(
     { name: 'pviumIdentity', log },
   );
   const pviumVerifier = await deployDeterministic(
-    await initCodeOf('PviumVerifier', [pviumIdentity, p.attester]),
+    await initCodeOf('PviumVerifier', [pviumIdentity, p.owner, p.attester === ethers.ZeroAddress ? [] : [p.attester]]),
     salt,
     signer,
     { name: 'pviumVerifier', log },
@@ -269,7 +269,10 @@ export async function checkStack(p: StackParams, a: StackAddresses, expectedVaul
   for (const k of p.signerKeys) if (!(await identity.isSignerKey(k.x, k.y))) fail(`signer key ${k.x.toString(16).slice(0, 12)}…`, 'missing', 'accepted');
   const verifier = await ethers.getContractAt('PviumVerifier', a.pviumVerifier);
   if (!same(await verifier.pviumIdentity(), a.pviumIdentity)) fail('PviumVerifier.pviumIdentity', await verifier.pviumIdentity(), a.pviumIdentity);
-  if (!same(await verifier.constraintSigner(), p.attester)) fail('constraintSigner', await verifier.constraintSigner(), p.attester);
+  if (!same(await verifier.owner(), p.owner)) fail('PviumVerifier.owner', await verifier.owner(), p.owner);
+  const expectSigner = p.attester !== ethers.ZeroAddress;
+  if ((await verifier.supportsConstraints()) !== expectSigner) fail('PviumVerifier.supportsConstraints', await verifier.supportsConstraints(), expectSigner);
+  if (expectSigner && !(await verifier.isConstraintSigner(p.attester))) fail('constraintSigner', 'not registered', p.attester);
   const factory = await ethers.getContractAt('PviumP2IdVaultFactory', a.factory);
   if (!same(await factory.owner(), p.owner)) fail('factory.owner', await factory.owner(), p.owner);
   if (!same(await factory.defaultVerifier(), a.pviumVerifier)) fail('factory.defaultVerifier', await factory.defaultVerifier(), a.pviumVerifier);

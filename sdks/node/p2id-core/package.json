@@ -1,0 +1,38 @@
+{
+  "name": "@pvium/p2id-core",
+  "version": "0.1.0",
+  "description": "P2ID protocol core: identity types and hashing, chain-agnostic P2ID address derivation, and the Solidity sources",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./contracts/*": "./contracts/*"
+  },
+  "files": [
+    "dist",
+    "contracts",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "sh scripts/sync-contracts.sh && node scripts/embed-p2id.mjs && tsc -p tsconfig.json",
+    "test": "yarn build && node --test --import tsx test/*.test.ts",
+    "prepublishOnly": "node scripts/embed-p2id.mjs --require-production && yarn test"
+  },
+  "dependencies": {
+    "@noble/hashes": "^1.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

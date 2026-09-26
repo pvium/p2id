@@ -1,0 +1,20 @@
+{
+  "current": "p2id.vault.v1",
+  "schemes": {
+    "p2id.vault.v1": {
+      "identityDomain": "p2id.identity.v1",
+      "vaultInitCodeHash": "0xe6b8d636ef647cfda0770fa7f2a8c93b886399c3d9405ffcb35ef946083a0802",
+      "factories": {
+        "production": null,
+        "sandbox": "0x21859137b4979B101079742942c741224529eE6D"
+      },
+      "compiler": {
+        "solc": "0.8.28",
+        "optimizerRuns": 200,
+        "evmVersion": "paris",
+        "bytecodeHash": "none"
+      }
+    }
+  },
+  "notes": "One entry per P2ID address scheme, keyed by its domain (p2id.vault.vN). A scheme fixes every address: p2id = CREATE2(factory, identityHash, vaultInitCodeHash), with identityHash computed under identityDomain. Each Pvium environment is a separate stack with its own factory: `production` (mainnets) and `sandbox` (testnets); within an environment the factory has one address on every chain. The scheme domain is also the factory's namespace (nsHash = keccak256(domain)) and the deterministic-deployment salt. Entries are history: once any factory is recorded the entry is frozen, and a vault change means adding p2id.vault.v(N+1) and moving `current`; older schemes stay derivable forever. While no factory is recorded, `node scripts/embed-p2id.mjs --update` refreshes vaultInitCodeHash from the Hardhat artifact."
+}
