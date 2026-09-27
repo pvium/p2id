@@ -1,0 +1,60 @@
+name: Publish P2ID Core
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'sdks/node/p2id-core/**'
+      - 'sdks/node/yarn.lock'
+      - 'contracts/src/**'
+      - '.github/workflows/publish-p2id-core.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-p2id-core
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdks/node
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: yarn
+          cache-dependency-path: sdks/node/yarn.lock
+      - run: yarn install --frozen-lockfile
+      - run: yarn workspace @pvium/p2id-core test
+
+  publish:
+    runs-on: ubuntu-latest
+    needs: test
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          cache: yarn
+          cache-dependency-path: sdks/node/yarn.lock
+      - run: yarn install --frozen-lockfile
+        working-directory: sdks/node
+      - name: Build @pvium/p2id-core
+        run: yarn workspace @pvium/p2id-core build
+        working-directory: sdks/node
+      - name: Check package contents
+        run: npm pack --dry-run
+        working-directory: sdks/node/p2id-core
+      - name: Publish @pvium/p2id-core
+        working-directory: sdks/node/p2id-core
+        run: npm publish --access public

@@ -1,0 +1,59 @@
+name: Publish P2ID Verifier
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'sdks/node/p2id-verifier/**'
+      - 'sdks/node/yarn.lock'
+      - '.github/workflows/publish-p2id-verifier.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-p2id-verifier
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdks/node
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: yarn
+          cache-dependency-path: sdks/node/yarn.lock
+      - run: yarn install --frozen-lockfile
+      - run: yarn workspace @pvium/p2id-core build && yarn workspace @pvium/p2id-verifier test
+
+  publish:
+    runs-on: ubuntu-latest
+    needs: test
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          cache: yarn
+          cache-dependency-path: sdks/node/yarn.lock
+      - run: yarn install --frozen-lockfile
+        working-directory: sdks/node
+      - name: Build packages
+        run: yarn workspace @pvium/p2id-core build && yarn workspace @pvium/p2id-verifier build
+        working-directory: sdks/node
+      - name: Check package contents
+        run: npm pack --dry-run
+        working-directory: sdks/node/p2id-verifier
+      - name: Publish @pvium/p2id-verifier
+        working-directory: sdks/node/p2id-verifier
+        run: npm publish --access public
