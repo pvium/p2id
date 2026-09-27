@@ -100,7 +100,13 @@ export async function verifyIdentity(input: VerifyIdentityInput): Promise<Verify
   if (w.toLowerCase().startsWith('0x') && claim.wallet !== w.toLowerCase()) {
     return { valid: false, reason: 'wallet mismatch' };
   }
-  if (!(await verifyProof({ proof, publicInputs }))) return { valid: false, reason: 'invalid proof' };
+  let proofOk: boolean;
+  try {
+    proofOk = await verifyProof({ proof, publicInputs });
+  } catch (e) {
+    return { valid: false, reason: (e as Error).message }; // the backend failed; says so, not "invalid proof"
+  }
+  if (!proofOk) return { valid: false, reason: 'invalid proof' };
 
   return { valid: true, wallet: input.attestation.wallet, issuedAt: claim.iat };
 }

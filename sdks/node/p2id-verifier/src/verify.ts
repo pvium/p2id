@@ -36,13 +36,29 @@ export async function shutdown(): Promise<void> {
  */
 export async function verifyProof(bundle: ProofBundle): Promise<boolean> {
   const publicInputs = toPublicInputFields(bundle.publicInputs);
-  const v = await backend();
+  let v: UltraHonkVerifierBackend;
+  try {
+    v = await backend();
+  } catch (e) {
+    throw new VerifierUnavailableError(e);
+  }
   try {
     return await v.verifyProof(
       { proof: bundle.proof, publicInputs, verificationKey: verificationKey() },
       { verifierTarget: 'evm' },
     );
   } catch {
+    // bb.js throws on a malformed or tampered proof (e.g. a point that is not on the curve)
+    // as well as returning false: either way the proof did not verify. Environment failures
+    // (WASM cannot load, no threads or shared memory) surface when the backend is created above.
     return false;
+  }
+}
+
+/** The proof could not be checked at all: the Barretenberg WASM backend failed in this environment. */
+export class VerifierUnavailableError extends Error {
+  constructor(cause: unknown) {
+    super(`proof verifier unavailable in this environment: ${(cause as Error)?.message ?? String(cause)}`);
+    this.name = 'VerifierUnavailableError';
   }
 }

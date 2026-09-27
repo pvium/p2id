@@ -6,7 +6,7 @@ export { decodeClaim, toPublicInputFields, PUBLIC_INPUT_COUNT } from './publicIn
 export type { IdentityClaim, P256PublicKey, PublicInputs } from './publicInputs.js';
 export { PVIUM_ENVIRONMENTS, AttestationSigner } from './environments.js';
 export type { PviumEnvironment, PviumEnvironmentName } from './environments.js';
-export { shutdown } from './verify.js';
+export { shutdown, VerifierUnavailableError } from './verify.js';
 export { VK_SHA256, CIRCUIT_VERSION } from './vk.js';
 export { IdentityType } from '@pvium/p2id-core';
 export type { IdentityTypeName } from '@pvium/p2id-core';

@@ -1,8 +1,10 @@
 # @pvium/p2id-verifier
 
-Verify that a Privy-signed token links an identity and a wallet to the same account. The package
-checks the attestation's zero-knowledge proof locally using a bundled circuit verification key
-and the configured trusted signing keys.
+Pvium's implementation for verifying identity attestations. It imports
+[`@pvium/p2id-core`](https://www.npmjs.com/package/@pvium/p2id-core) for the protocol identity
+types and hashing rules, then checks the attestation's zero-knowledge proof locally using a
+bundled circuit verification key and configured trusted signing keys. `p2id-core` is installed
+automatically as this package's runtime dependency.
 
 ## Install
 
@@ -15,7 +17,8 @@ Requires Node.js 20+.
 ## Quick start
 
 ```ts
-import { verifyIdentity, AttestationSigner, IdentityType, shutdown } from '@pvium/p2id-verifier';
+import { IdentityType } from '@pvium/p2id-core';
+import { verifyIdentity, AttestationSigner, shutdown } from '@pvium/p2id-verifier';
 
 const result = await verifyIdentity({
   attestation,                          // proof, public inputs and wallet
