@@ -72,23 +72,24 @@ import { identityHash, p2idScheme, IdentityType } from '@pvium/p2id-core';
 const signer = new ethers.Wallet(process.env.PRIVATE_KEY!, new ethers.JsonRpcProvider(process.env.RPC_URL));
 const factory = new ethers.Contract(
   p2idScheme().factories.production!, // or .sandbox on testnets
-  ['function fund(bytes32 identityHash, address token, uint256 amount, bytes32 constraint, uint64 refundWindow) payable returns (address vault, uint256 depositId)'],
+  ['function fund(bytes32 identityHash, address token, uint256 amount, bytes32 constraint, uint64 refundWindow, bytes32 ref) payable returns (address vault, uint256 depositId)'],
   signer,
 );
 
 const id = identityHash(IdentityType.Email, 'you@example.com');
 const NO_CONSTRAINT = ethers.ZeroHash; // no additional claim requirement
 const WEEK = 7 * 24 * 3600;            // refund window in seconds
+const ref = ethers.id('invoice-42');  // application-defined bytes32; ethers.ZeroHash for none
 
 // Native coin: use the zero address for `token` and send `amount` as transaction value.
 const amount = ethers.parseEther('0.1');
-await factory.fund(id, ethers.ZeroAddress, amount, NO_CONSTRAINT, WEEK, { value: amount });
+await factory.fund(id, ethers.ZeroAddress, amount, NO_CONSTRAINT, WEEK, ref, { value: amount });
 
 // an ERC-20: approve the factory, then fund
 const USDC = '0x…'; // the token's contract address
 const usdc = new ethers.Contract(USDC, ['function approve(address spender, uint256 amount) returns (bool)'], signer);
 await usdc.approve(await factory.getAddress(), 25_000_000n);
-await factory.fund(id, USDC, 25_000_000n, NO_CONSTRAINT, WEEK);
+await factory.fund(id, USDC, 25_000_000n, NO_CONSTRAINT, WEEK, ref);
 ```
 
 `fund` accepts the same arguments for native coin and ERC-20 deposits:
@@ -100,9 +101,20 @@ await factory.fund(id, USDC, 25_000_000n, NO_CONSTRAINT, WEEK);
 | `amount` | Amount in the asset's smallest unit |
 | `constraint` | A 32-byte commitment to an additional claim requirement; zero for none |
 | `refundWindow` | Seconds before an unclaimed deposit becomes refundable |
+| `ref` | Application-defined 32-byte reference, emitted in `Funded`; zero for none |
 
 The window must fall within the factory's configured limits. After it elapses, the funder calls
 `refund(depositId)` on the vault. Contract interfaces are included; see [Solidity](#solidity).
+
+`ref` is event-only metadata, not a claim constraint or an idempotency key. Repeated references
+are allowed. Match a `Funded` event to an application record using its reference and identify
+the deposit by chain, vault address and `depositId`. The contract does not store the reference
+or interpret its contents. The `memo` URI parameter remains application text, not an onchain
+funding argument.
+
+These funding signatures apply to `p2id.vault.v2`. Its factory addresses must be configured
+before use. Existing `p2id.vault.v1` deployments use the earlier signatures without `ref`;
+use their original ABI when interacting with them.
 
 ## Read balances
 
@@ -119,9 +131,11 @@ await token.balanceOf(to); // ERC-20
 ## Identity types
 
 Identity parameters accept an `IdentityType` enum value or a P2ID type name such as `'email'`,
-`'x'` or `'github'` (`'twitter'` and Privy's account-type strings such as `'twitter_oauth'` are
-accepted as aliases). `resolveIdentityType` converts these to the numeric IDs used in identity
-hashes, and `identityTypeName` gives the P2ID name of an ID. The type table is append-only.
+`'x'` or `'github'` (`'twitter'` is accepted as an alias of `'x'`). P2ID core is agnostic of any
+identity provider: it does not accept provider-specific account types (e.g. Privy's
+`'twitter_oauth'`) — callers map those to P2ID names themselves. `resolveIdentityType` converts
+these to the numeric IDs used in identity hashes, and `identityTypeName` gives the P2ID name of an
+ID. The type table is append-only.
 
 | `IdentityType.` | Id | Value | Example | Lowercased |
 | --- | ---: | --- | --- | :---: |
@@ -157,7 +171,7 @@ import { identityHash, p2idAddressForHash, p2idScheme, P2ID_SCHEME, IdentityType
 const hash = identityHash(IdentityType.Email, 'you@example.com'); // identity commitment and vault salt
 p2idAddressForHash(hash, { environment: 'sandbox' });        // same result as p2idAddress(...)
 
-P2ID_SCHEME;   // 'p2id.vault.v1', the current address scheme
+P2ID_SCHEME;   // 'p2id.vault.v2', the current address scheme
 p2idScheme();  // { identityDomain, vaultInitCodeHash, factories: { production, sandbox } }
 ```
 

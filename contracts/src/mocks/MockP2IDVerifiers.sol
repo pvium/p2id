@@ -23,6 +23,12 @@ contract MockIdentityVerifier is IP2IDVerifier {
         }
     }
 
+    uint64 public revision;
+
+    function setRevision(uint64 r) external {
+        revision = r;
+    }
+
     function supportsConstraints() external pure virtual returns (bool) {
         return true;
     }

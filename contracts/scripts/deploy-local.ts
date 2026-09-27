@@ -16,7 +16,8 @@ async function main() {
   const jwk = createPublicKey(readFileSync(join(__dirname, '..', 'test', 'fixtures', 'privy_es256_public.pem'))).export({ format: 'jwk' });
   const x = BigInt('0x' + Buffer.from(jwk.x!, 'base64url').toString('hex'));
   const y = BigInt('0x' + Buffer.from(jwk.y!, 'base64url').toString('hex'));
-  const gate = await ethers.deployContract('PviumIdentity', [await verifier.getAddress(), 1, [x], [y]]);
+  const [deployer] = await ethers.getSigners();
+  const gate = await ethers.deployContract('PviumIdentity', [await verifier.getAddress(), 1, deployer.address, [x], [y]]);
   await gate.waitForDeployment();
   console.log(JSON.stringify({ verifier: await verifier.getAddress(), pviumIdentity: await gate.getAddress() }));
 }

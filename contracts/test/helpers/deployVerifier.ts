@@ -26,9 +26,11 @@ export async function deployIdentityProof(
   signerY: bigint,
   circuitVersion = 1,
   extraKeys: { x: bigint; y: bigint }[] = [],
+  owner?: string,
 ) {
   const keys = [{ x: signerX, y: signerY }, ...extraKeys];
-  const proof = await ethers.deployContract('PviumIdentity', [verifierAddress, circuitVersion, keys.map((k) => k.x), keys.map((k) => k.y)]);
+  owner ??= (await ethers.getSigners())[0].address;
+  const proof = await ethers.deployContract('PviumIdentity', [verifierAddress, circuitVersion, owner, keys.map((k) => k.x), keys.map((k) => k.y)]);
   await proof.waitForDeployment();
   return proof;
 }

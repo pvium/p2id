@@ -34,4 +34,11 @@ interface IP2IDVerifier {
     ///         constrained deposits under a verifier that returns false (or does not implement
     ///         this), so a payer cannot lock funds behind a condition nobody can meet.
     function supportsConstraints() external view returns (bool);
+
+    /// @notice Changes (increments) whenever proofs this verifier accepted before may no longer be
+    ///         trusted, e.g. a signing key was revoked. A vault caches the wallet a proof resolved
+    ///         to and pays it without re-verifying; it discards that cache when the revision moved,
+    ///         so revoking a key also revokes what was proven under it. Return a constant if
+    ///         nothing this verifier trusts can ever be revoked.
+    function revision() external view returns (uint64);
 }

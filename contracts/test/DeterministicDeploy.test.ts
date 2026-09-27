@@ -3,7 +3,7 @@ import { ethers, network } from 'hardhat';
 import { createPublicKey } from 'crypto';
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { deployDeterministic, deployStack, ensureDeterministicDeployer, predictStack, stackStatus, type StackParams } from '../scripts/lib/deterministic';
+import { CURRENT_SCHEME, deployDeterministic, deployStack, ensureDeterministicDeployer, predictStack, stackStatus, type StackParams } from '../scripts/lib/deterministic';
 
 const DAY = 24 * 3600;
 const EMAIL_COMMITMENT = '0xbcda0f09fa9732b2bfdea38199486b654a84e8e06085d7e364af8137f8d7deaf';
@@ -18,7 +18,7 @@ describe('Deterministic deployment: chain-agnostic P2ID addresses', function () 
     const jwk = createPublicKey(readFileSync(join(__dirname, 'fixtures', 'privy_es256_public.pem'))).export({ format: 'jwk' });
     return {
       owner: '0x00000000000000000000000000000000000A11CE',
-      scheme: 'p2id.vault.v1',
+      scheme: CURRENT_SCHEME,
       circuitVersion: 1,
       signerKeys: [
         { x: BigInt('0x' + Buffer.from(jwk.x!, 'base64url').toString('hex')), y: BigInt('0x' + Buffer.from(jwk.y!, 'base64url').toString('hex')) },
@@ -51,6 +51,7 @@ describe('Deterministic deployment: chain-agnostic P2ID addresses', function () 
 
     // and it is the address the SDK formula gives, from constants only
     const sdk = JSON.parse(readFileSync(join(__dirname, '..', '..', 'sdks', 'node', 'p2id-core', 'src', 'p2id.json'), 'utf8'));
+    expect(CURRENT_SCHEME).to.equal(sdk.current);
     expect(ethers.getCreate2Address(second.factory, EMAIL_COMMITMENT, sdk.schemes[sdk.current].vaultInitCodeHash)).to.equal(vault1);
 
     // deploying again is a no-op that returns the same addresses
@@ -82,13 +83,13 @@ describe('Deterministic deployment: chain-agnostic P2ID addresses', function () 
 
   it('the scheme domain is an input to the addresses: it is the factory namespace and the salt', async () => {
     const [a] = await ethers.getSigners();
-    const v1 = await deployStack(await params(), a);
-    const v2 = await deployStack({ ...(await params()), scheme: 'p2id.vault.v2' }, a);
-    expect(v2.factory).to.not.equal(v1.factory);
-    const f1 = await ethers.getContractAt('PviumP2IdVaultFactory', v1.factory);
-    const f2 = await ethers.getContractAt('PviumP2IdVaultFactory', v2.factory);
-    expect(await f1.nsHash()).to.equal(ethers.id('p2id.vault.v1'));
-    expect(await f2.nsHash()).to.equal(ethers.id('p2id.vault.v2'));
+    const current = await deployStack(await params(), a);
+    const next = await deployStack({ ...(await params()), scheme: 'p2id.vault.v3' }, a);
+    expect(next.factory).to.not.equal(current.factory);
+    const f1 = await ethers.getContractAt('PviumP2IdVaultFactory', current.factory);
+    const f2 = await ethers.getContractAt('PviumP2IdVaultFactory', next.factory);
+    expect(await f1.nsHash()).to.equal(ethers.id(CURRENT_SCHEME));
+    expect(await f2.nsHash()).to.equal(ethers.id('p2id.vault.v3'));
     expect(await f1.vaultFor(EMAIL_COMMITMENT)).to.not.equal(await f2.vaultFor(EMAIL_COMMITMENT));
     await expect(deployStack({ ...(await params()), scheme: 'v1' }, a)).to.be.rejectedWith(/bad scheme/);
   });

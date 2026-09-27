@@ -64,12 +64,12 @@ describe('P2IDVault native coin (BNB on BNB Chain, ETH on Base)', function () {
 
   it('fund() is payable for BNB: exact value, recorded funder, refundable in BNB', async () => {
     await deployVault();
-    await expect(vault.connect(payer).fund(NATIVE, bnb('1'), Z, DAY, { value: bnb('0.9') }))
+    await expect(vault.connect(payer).fund(NATIVE, bnb('1'), Z, DAY, ethers.ZeroHash, { value: bnb('0.9') }))
       .to.be.revertedWithCustomError(vault, 'NativeValueMismatch');
-    await expect(vault.connect(payer).fund(NATIVE, bnb('1'), Z, DAY))
+    await expect(vault.connect(payer).fund(NATIVE, bnb('1'), Z, DAY, ethers.ZeroHash))
       .to.be.revertedWithCustomError(vault, 'NativeValueMismatch');
-    await expect(vault.connect(payer).fund(NATIVE, bnb('1'), Z, DAY, { value: bnb('1') }))
-      .to.emit(vault, 'Funded').withArgs(0, payer.address, NATIVE, bnb('1'), V, Z, DAY, 0);
+    await expect(vault.connect(payer).fund(NATIVE, bnb('1'), Z, DAY, ethers.ZeroHash, { value: bnb('1') }))
+      .to.emit(vault, 'Funded').withArgs(0, payer.address, NATIVE, bnb('1'), V, Z, DAY, 0, ethers.ZeroHash);
     expect(await vault.trackedTotal(NATIVE)).to.equal(bnb('1'));
     expect(await vault.untrackedBalance(NATIVE)).to.equal(0n);
 
@@ -86,15 +86,15 @@ describe('P2IDVault native coin (BNB on BNB Chain, ETH on Base)', function () {
     const token = await ethers.deployContract('MockERC20');
     await token.mint(payer.address, 10n);
     await token.connect(payer).approve(await vault.getAddress(), 10n);
-    await expect(vault.connect(payer).fund(await token.getAddress(), 10n, Z, DAY, { value: 1n }))
+    await expect(vault.connect(payer).fund(await token.getAddress(), 10n, Z, DAY, ethers.ZeroHash, { value: 1n }))
       .to.be.revertedWithCustomError(vault, 'NativeValueMismatch');
   });
 
   it('BNB deposits are claimed like tokens: default bucket to the owner, constrained bucket through the proof', async () => {
     await deployVault();
-    await vault.connect(payer).fund(NATIVE, bnb('0.4'), Z, DAY, { value: bnb('0.4') });
+    await vault.connect(payer).fund(NATIVE, bnb('0.4'), Z, DAY, ethers.ZeroHash, { value: bnb('0.4') });
     const c = ethers.id('screened');
-    await vault.connect(payer).fund(NATIVE, bnb('0.6'), c, DAY, { value: bnb('0.6') });
+    await vault.connect(payer).fund(NATIVE, bnb('0.6'), c, DAY, ethers.ZeroHash, { value: bnb('0.6') });
     await payer.sendTransaction({ to: await vault.getAddress(), value: bnb('0.1') }); // direct transfer
 
     const before = await balance(ownerWallet.address);
@@ -109,9 +109,9 @@ describe('P2IDVault native coin (BNB on BNB Chain, ETH on Base)', function () {
 
   it('the factory funds in BNB on the payer\'s behalf, deploying the vault on first use', async () => {
     const addr = await factory.vaultFor(ID);
-    await expect(factory.connect(payer).fund(ID, NATIVE, bnb('2'), Z, DAY, { value: bnb('1') }))
+    await expect(factory.connect(payer).fund(ID, NATIVE, bnb('2'), Z, DAY, ethers.ZeroHash, { value: bnb('1') }))
       .to.be.revertedWithCustomError(await ethers.getContractFactory('P2IDVault'), 'NativeValueMismatch');
-    await factory.connect(payer).fund(ID, NATIVE, bnb('2'), Z, DAY, { value: bnb('2') });
+    await factory.connect(payer).fund(ID, NATIVE, bnb('2'), Z, DAY, ethers.ZeroHash, { value: bnb('2') });
     vault = await ethers.getContractAt('P2IDVault', addr);
     expect((await vault.deposits(0)).funder).to.equal(payer.address);
     expect((await vault.deposits(0)).token).to.equal(NATIVE);
@@ -119,14 +119,14 @@ describe('P2IDVault native coin (BNB on BNB Chain, ETH on Base)', function () {
     expect(await balance(await factory.getAddress())).to.equal(0n);
 
     const token = await ethers.deployContract('MockERC20');
-    await expect(factory.connect(payer).fund(ID, await token.getAddress(), 1n, Z, DAY, { value: 1n }))
+    await expect(factory.connect(payer).fund(ID, await token.getAddress(), 1n, Z, DAY, ethers.ZeroHash, { value: 1n }))
       .to.be.revertedWithCustomError(factory, 'UnexpectedValue');
   });
 
   it('fees in BNB accrue at the deposit\'s rate and are sent to the policy to distribute', async () => {
     await policy.setFee(100, treasury.address); // 1%
     await deployVault();
-    await vault.connect(payer).fund(NATIVE, bnb('10'), Z, DAY, { value: bnb('10') });
+    await vault.connect(payer).fund(NATIVE, bnb('10'), Z, DAY, ethers.ZeroHash, { value: bnb('10') });
     const before = await balance(ownerWallet.address);
     await vault.connect(payer).refreshProofAndSweep(V, proofFor(ownerWallet.address, 1000), NATIVE, 0);
     expect((await balance(ownerWallet.address)) - before).to.equal(bnb('9.9'));
@@ -140,7 +140,7 @@ describe('P2IDVault native coin (BNB on BNB Chain, ETH on Base)', function () {
     expect(await balance(await vault.getAddress())).to.equal(0n);
 
     // a failing distribution moves nothing
-    await vault.connect(payer).fund(NATIVE, bnb('1'), Z, DAY, { value: bnb('1') });
+    await vault.connect(payer).fund(NATIVE, bnb('1'), Z, DAY, ethers.ZeroHash, { value: bnb('1') });
     await vault.connect(payer).sweep(V, NATIVE, 0);
     await policy.setMode(3);
     await expect(vault.withdrawFees(V, NATIVE)).to.be.reverted;

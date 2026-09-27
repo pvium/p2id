@@ -27,9 +27,10 @@ Three facts to keep in mind throughout:
   P2ID address. Changing any of them later means a new stack at new addresses. (Attesters can be
   added and revoked afterwards by the verifier's owner; only the initial one is part of the address.)
 - **The Privy key set is read from the JWKS at deployment time.** Privy publishes two keys per app
-  and may sign with either, so `PviumIdentity` accepts the whole set (fixed forever, no admin).
-  If Privy's JWKS changes between two chains' deployments, the second would get different
-  addresses; the script detects that and refuses (see step 4).
+  and may sign with either, so `PviumIdentity` accepts the whole set. If Privy's JWKS changes
+  between two chains' deployments, the second would get different addresses; the script detects
+  that and refuses (see step 4). Keys Privy adds later are proposed by the owner and accepted
+  after 7 days' public notice (`proposeSignerKey` → `activateSignerKey`), with no redeployment.
 - **Proofs made before the circuit's public inputs changed (the `recipient` input became the checked
   `wallet`) no longer verify.** Nothing was deployed, so the circuit is still version 1, but any
   attestation stored from the earlier build has a different verification key and must be regenerated (step 7).
@@ -85,10 +86,11 @@ seven addresses it will have on every chain of that environment. Nothing is sent
 ## 3. Record the factory, which freezes the scheme
 
 Put each predicted `factory` into `sdks/node/p2id-core/src/p2id.json` under the current scheme
-(`p2id.vault.v1`), in `factories.sandbox` and `factories.production`, and commit.
+(`p2id.vault.v2`), in `factories.sandbox` and `factories.production`, and commit. Preserve the
+existing `p2id.vault.v1` entry and its deployment records.
 
 From this commit on, a change to `P2IDVault` fails the SDK build and the contract tests until a new
-scheme (`p2id.vault.v2`) is added; that is the guard against silently moving addresses. The deploy
+scheme (`p2id.vault.v3`) is added; that is the guard against silently moving addresses. The deploy
 script also refuses to run if its configuration no longer produces the recorded factory.
 
 (Deploying to one testnet first and recording the address from its output is equivalent.)
@@ -110,8 +112,8 @@ The script
    `PviumP2IDPolicy` (the launch policy: allowlist containing that verifier, no fee) and
    `PviumP2IdVaultFactory`, skipping any that already exist, so it is safe to re-run after an
    interruption,
-3. reads everything back and checks the wiring: code at every address, every Privy key and the
-   circuit version in `PviumIdentity`, the attester in `PviumVerifier`, the policy's owner and
+3. reads everything back and checks the wiring: code at every address, every Privy key, the
+   circuit version and the owner in `PviumIdentity`, the attester in `PviumVerifier`, the policy's owner and
    allowlist, and the factory's owner, policy, default verifier, namespace, delay and vault
    init-code hash against `p2id.json`,
 4. writes `contracts/deployments/<scheme>.<environment>.<chainId>.json`, including the Privy keys
@@ -128,7 +130,7 @@ Verify sources on the explorer (optional, recommended). Constructor arguments ar
 deployment record:
 
 ```sh
-yarn hardhat verify --network base <pviumIdentity> --constructor-args identity-args.js   # [zkVerifier, circuitVersion, [x…], [y…]] sorted as in the record
+yarn hardhat verify --network base <pviumIdentity> --constructor-args identity-args.js   # [zkVerifier, circuitVersion, owner, [x…], [y…]] sorted as in the record
 yarn hardhat verify --network base <pviumVerifier> <pviumIdentity> <owner> '[<attester>]'   # '[]' when deployed with none
 yarn hardhat verify --network base <factory> <owner> <keccak256(scheme)> <policy> <pviumVerifier> <policyChangeDelay> <minRefundWindow> <maxRefundWindow>
 yarn hardhat verify --network base <zkVerifier> --libraries libraries.js   # { RelationsLib, ZKTranscriptLib }
@@ -185,7 +187,8 @@ On a testnet, with a test identity you control:
 
 | Change | What to do | Addresses |
 | --- | --- | --- |
-| Privy rotates its keys, or a new circuit version | Deploy a new `PviumIdentity` (new key set) + `PviumVerifier`, `policy.approveVerifier` it (payers can opt in with `fundWith` at once), then `proposeDefaultVerifier` → wait 14 days → `activateDefaultVerifier`. Owners need a fresh proof under the new default before direct transfers follow | unchanged |
+| Privy adds or retires a key | `PviumIdentity.proposeSignerKey(x, y, jwksUrl, kid)` → wait 7 days → `activateSignerKey`; `removeSignerKey` for a retired one, at once. Existing deposits stay claimable | unchanged |
+| A new circuit version | Deploy a new `PviumIdentity` + `PviumVerifier`, `policy.approveVerifier` it (payers can opt in with `fundWith` at once), then `proposeDefaultVerifier` → wait 14 days → `activateDefaultVerifier`. Owners need a fresh proof under the new default before direct transfers follow | unchanged |
 | New attester, or turning screening on | `PviumVerifier.setConstraintSigner(attester, true)` from the verifier's owner; revoke old ones the same way. No new deployment | unchanged |
 | A third party's verifier | `policy.approveVerifier`; payers opt in with `fundWith` | unchanged |
 | A verifier is found unsafe | `policy.approveVerifier(v, false)`: claims under it freeze, refunds still work | unchanged |

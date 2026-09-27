@@ -107,7 +107,7 @@ Identity hashing and vault addressing use independently versioned domains:
 Each address scheme MUST specify its identity domain. A change to vault bytecode does not
 require a change to identity hashing. Existing proofs remain usable only with verifiers that
 accept their proof format and identity domain. In the reference deployment, the scheme domain
-also determines the factory's namespace and deployment salt: `keccak256("p2id.vault.v1")`.
+also determines the factory's namespace and deployment salt: `keccak256(schemeDomain)`.
 
 The constants of every scheme are in [`sdks/node/p2id-core/src/p2id.json`](sdks/node/p2id-core/src/p2id.json), keyed
 by domain. Once a factory is recorded, the scheme's identity domain, bytecode hash and recorded
@@ -116,7 +116,13 @@ match its recorded hash. Changes to those constants require a new scheme entry a
 to `current`. Older entries MUST remain available for address derivation under their original
 schemes. Claim eligibility remains subject to the deployed contracts' verifier and policy rules.
 
+The current scheme, `p2id.vault.v2`, adds the `ref` funding argument and event field. The
+`p2id.vault.v1` entry remains available for deriving
+existing addresses; its funding methods and `Funded` event do not include `ref`.
+
 ### Example
+
+The following vector uses the `p2id.vault.v2` bytecode hash and an illustrative factory address.
 
 ```
 type  = email (0)
@@ -126,8 +132,8 @@ identityHash = SHA-256( "p2id.identity.v1" ‖ 0x00 ‖ "test-9988@privy.io" )
              = 0xbcda0f09fa9732b2bfdea38199486b654a84e8e06085d7e364af8137f8d7deaf
 
 factory           = 0x1111111111111111111111111111111111111111      (illustrative)
-vaultInitCodeHash = 0xe6b8d636ef647cfda0770fa7f2a8c93b886399c3d9405ffcb35ef946083a0802
-p2id              = 0x8A80393355203688dB12731f7c1e677ef49Ca87D
+vaultInitCodeHash = 0x5d4eab8fb0d7ca20e288e2953f8029d9caca9d58cc098f67b8f88d9723328c1e
+p2id              = 0x892b8f40737C601C86e714c451492909f2ad1D1D
 ```
 
 The identity-hash preimage is 35 bytes:
@@ -262,7 +268,7 @@ Parameters, all optional, follow `?` as `key=value` pairs separated by `&`:
 | `constraint` | The `bytes32` commitment passed to `fund()`; its interpretation and evidence format are defined by the selected verifier |
 | `verifier`   | Verifier address for `fundWith()`. Absent: the factory's default                              |
 | `window`     | Refund window in seconds                                                                      |
-| `ref`        | Application reference, such as an invoice id; applications may use it when constructing a constraint, but the vault does not interpret it |
+| `ref`        | Application reference, such as an invoice id; the application defines its encoding or hash for the funding method's `bytes32 ref` |
 | `memo`       | Text shown to the payer or payee                                                              |
 | `claim`      | `<chainId>:<depositId>`: the URI is a claim link for that deposit                             |
 
@@ -340,6 +346,14 @@ records a deposit under the caller-selected verifier. The selected verifier MUST
 by the current policy. Each recorded deposit fixes its verifier, funder, token, amount,
 constraint, refund window and fee rate. A subsequent default-verifier change does not change
 a recorded deposit's verifier.
+
+All vault and factory funding methods accept a final `bytes32 ref` argument. A caller MUST
+pass `bytes32(0)` when no reference is provided. The vault emits `ref` as the final field of
+`Funded`, associated with that event's `depositId`; it does not store the reference in the
+deposit. The reference is public application metadata. It MUST NOT affect verifier selection,
+constraints, fees, claim eligibility or refund rights. References MAY be reused; they do not
+provide idempotency or duplicate-payment protection. Applications identify a deposit by its
+chain, vault address and deposit ID and may use `ref` to associate it with an external record.
 
 A nonzero constraint MUST be satisfied to claim the deposit. The vault rejects constrained
 funding unless the verifier's `supportsConstraints()` returns `true`. A funder MUST NOT reuse

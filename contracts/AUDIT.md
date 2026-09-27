@@ -4,6 +4,12 @@ Date: 2026-09-18. Scope: `P2IDVault`, `PviumP2IdVaultFactory`, `PviumP2IDPolicy`
 `PviumVerifier`, and the `PviumIdentity` integration in the working tree. This review covers
 contract logic and trust boundaries; it is not a circuit or generated-verifier cryptography audit.
 
+**Latest review (2026-09-27):** the current `P2IDVault.sol`
+(`6b07220750557450806a9b808ec7bd34b8b928b0cc9f2ed970a98c26728a63e7`)
+was reviewed again, including the signer-revision cache changes. No new unprivileged theft,
+authorization bypass, or accounting error was identified for native currency and standard,
+fixed-balance ERC-20 tokens. The historical findings and their resolutions remain below.
+
 No unprivileged theft path was identified for standard, fixed-balance ERC-20 tokens under
 honest verifiers and governance. The following recovery and trust assumptions need explicit
 treatment before deployment. Production contracts were not modified.
@@ -117,3 +123,35 @@ and failed fee quotes waive the fee. These were not classified as new vulnerabil
    route direct transfers through a verifier it chose after that notice; reproduced as a test.
 3. **Accepted as a token assumption.** Tokens whose balances contract (negative rebase,
    confiscation, sender-side transfer tax) are unsupported; documented in `README.md`.
+
+## Current vault review (2026-09-27)
+
+The review traced every value-moving entry point: recorded funding and refunds, direct-transfer
+accounting, default and constrained sweeps, fee accrual and withdrawal, factory funding, and
+native-coin callbacks. It also rechecked verifier revision invalidation and the default-verifier
+freshness floor.
+
+`_sweepDefault` resolves the recipient through `_ownerOf`, so both `sweep` and
+`refreshProofAndSweep` reject a cache invalidated by a verifier revision. `sweepDeposits` and
+`sweepUntracked` use the same check. The direct-transfer floor is raised only by the active
+default verifier and survives a default change. Internal accounting consumes a recorded deposit
+before an external payout, and all state-changing value paths hold the reentrancy lock.
+
+The following limits remain intentional and are not classified as new vulnerabilities:
+
+- Bare transfers are governed by the factory's default verifier. A timelocked governance change
+  can select the verifier that controls their future payout; recorded deposits remain pinned to
+  their funding verifier.
+- Rebasing-down, confiscating, and sender-fee tokens can make recorded liabilities exceed the
+  vault balance. The vault supports incoming transfer fees through balance-delta crediting, but
+  does not implement share accounting for balance contractions.
+- A refund and claim submitted after the refund window race; the transaction included first
+  consumes the deposit.
+
+### Current validation
+
+- Vault-focused tests: **68 passed**, covering vault, audit, fee, native-coin, funding-reference,
+  and factory suites.
+- Full contracts suite: **123 passed**.
+- `git diff --check` completed without whitespace errors.
+- No production Solidity was modified by this review.

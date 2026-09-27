@@ -122,10 +122,10 @@ describe('PviumP2IdVaultFactory', function () {
     const ID_B = ethers.id('identity-b');
     await factory
       .connect(payer)
-      .fund(ID, await token.getAddress(), 100n, ethers.ZeroHash, DAY);
+      .fund(ID, await token.getAddress(), 100n, ethers.ZeroHash, DAY, ethers.ZeroHash);
     await factory
       .connect(payer)
-      .fund(ID_B, await token.getAddress(), 200n, ethers.ZeroHash, DAY);
+      .fund(ID_B, await token.getAddress(), 200n, ethers.ZeroHash, DAY, ethers.ZeroHash);
     const vaultA = await ethers.getContractAt(
       'P2IDVault',
       await factory.vaultFor(ID),
@@ -163,6 +163,7 @@ describe('PviumP2IdVaultFactory', function () {
         1n,
         ethers.ZeroHash,
         DAY,
+        ethers.ZeroHash,
       ),
     ).to.be.revertedWithCustomError(vault, 'NotFactory');
   });
@@ -181,8 +182,8 @@ describe('PviumP2IdVaultFactory', function () {
 
     await token.mint(payer.address, 10n);
     await token.connect(payer).approve(await factory.getAddress(), 10n);
-    await factory.connect(payer).fundWith(ID, V2, await token.getAddress(), 4n, ethers.ZeroHash, DAY); // explicit opt-in
-    await factory.connect(payer).fund(ID, await token.getAddress(), 6n, ethers.ZeroHash, DAY); // default, unchanged
+    await factory.connect(payer).fundWith(ID, V2, await token.getAddress(), 4n, ethers.ZeroHash, DAY, ethers.ZeroHash); // explicit opt-in
+    await factory.connect(payer).fund(ID, await token.getAddress(), 6n, ethers.ZeroHash, DAY, ethers.ZeroHash); // default, unchanged
     const vault = await ethers.getContractAt('P2IDVault', await factory.vaultFor(ID));
     expect((await vault.deposits(0)).verifier).to.equal(V2);
     expect((await vault.deposits(1)).verifier).to.equal(await idv.getAddress());

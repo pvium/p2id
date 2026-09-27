@@ -217,7 +217,8 @@ contract PviumP2IdVaultFactory is IP2IdVaultFactory {
         address token,
         uint256 amount,
         bytes32 constraint,
-        uint64 refundWindow
+        uint64 refundWindow,
+        bytes32 ref
     ) external payable returns (address vault, uint256 depositId) {
         return
             _fund(
@@ -226,7 +227,8 @@ contract PviumP2IdVaultFactory is IP2IdVaultFactory {
                 token,
                 amount,
                 constraint,
-                refundWindow
+                refundWindow,
+                ref
             );
     }
 
@@ -237,7 +239,8 @@ contract PviumP2IdVaultFactory is IP2IdVaultFactory {
         address token,
         uint256 amount,
         bytes32 constraint,
-        uint64 refundWindow
+        uint64 refundWindow,
+        bytes32 ref
     ) external payable returns (address vault, uint256 depositId) {
         return
             _fund(
@@ -246,7 +249,8 @@ contract PviumP2IdVaultFactory is IP2IdVaultFactory {
                 token,
                 amount,
                 constraint,
-                refundWindow
+                refundWindow,
+                ref
             );
     }
 
@@ -256,12 +260,13 @@ contract PviumP2IdVaultFactory is IP2IdVaultFactory {
         address token,
         uint256 amount,
         bytes32 constraint,
-        uint64 refundWindow
+        uint64 refundWindow,
+        bytes32 ref
     ) private returns (address vault, uint256 depositId) {
         vault = deploy(identityHash);
         if (token == address(0)) {
             // Native coin: forward exactly the value sent; the vault checks it equals `amount`.
-            return (vault, P2IDVault(payable(vault)).fundFor{value: msg.value}(msg.sender, verifier, token, amount, constraint, refundWindow));
+            return (vault, P2IDVault(payable(vault)).fundFor{value: msg.value}(msg.sender, verifier, token, amount, constraint, refundWindow, ref));
         }
         if (msg.value != 0) revert UnexpectedValue();
         // Collect from the payer (credit what actually arrived, for fee-on-transfer tokens),
@@ -288,7 +293,8 @@ contract PviumP2IdVaultFactory is IP2IdVaultFactory {
             token,
             received,
             constraint,
-            refundWindow
+            refundWindow,
+            ref
         );
     }
 

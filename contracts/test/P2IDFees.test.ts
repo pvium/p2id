@@ -22,7 +22,7 @@ describe('P2IDVault fees and policy limits', function () {
   async function fund(amount: bigint, constraint = Z, verifier = V, from = payer) {
     await token.mint(from.address, amount);
     await token.connect(from).approve(await vault.getAddress(), amount);
-    const rc = await (await vault.connect(from).fundWith(verifier, await token.getAddress(), amount, constraint, DAY)).wait();
+    const rc = await (await vault.connect(from).fundWith(verifier, await token.getAddress(), amount, constraint, DAY, ethers.ZeroHash)).wait();
     const ev = rc!.logs.map((l: any) => { try { return vault.interface.parseLog(l); } catch { return null; } }).find((e: any) => e?.name === 'Funded');
     return Number(ev.args.depositId);
   }
@@ -138,7 +138,7 @@ describe('P2IDVault fees and policy limits', function () {
     const v = await ethers.getContractAt('P2IDVault', await f.vaultFor(ID));
     await token.mint(payer.address, 1_000n);
     await token.connect(payer).approve(await v.getAddress(), 1_000n);
-    await v.connect(payer).fund(await token.getAddress(), 1_000n, Z, DAY);
+    await v.connect(payer).fund(await token.getAddress(), 1_000n, Z, DAY, ethers.ZeroHash);
     await v.refreshProofAndSweep(V, proofFor(ownerWallet.address, 1000), await token.getAddress(), 0);
     expect(await token.balanceOf(ownerWallet.address)).to.equal(1_000n);
     expect(await v.feesOwedTotal(await token.getAddress())).to.equal(0n);
@@ -175,11 +175,11 @@ describe('P2IDVault fees and policy limits', function () {
     await policy.allow(await none.getAddress(), true);
     await token.mint(payer.address, 10n);
     await token.connect(payer).approve(await vault.getAddress(), 10n);
-    await expect(vault.connect(payer).fundWith(await none.getAddress(), await token.getAddress(), 10n, ethers.id('c'), DAY))
+    await expect(vault.connect(payer).fundWith(await none.getAddress(), await token.getAddress(), 10n, ethers.id('c'), DAY, ethers.ZeroHash))
       .to.be.revertedWithCustomError(vault, 'ConstraintsUnsupported').withArgs(await none.getAddress());
     // a contract that is not a verifier at all does not say it supports constraints either
     await policy.allow(await token.getAddress(), true);
-    await expect(vault.connect(payer).fundWith(await token.getAddress(), await token.getAddress(), 10n, ethers.id('c'), DAY))
+    await expect(vault.connect(payer).fundWith(await token.getAddress(), await token.getAddress(), 10n, ethers.id('c'), DAY, ethers.ZeroHash))
       .to.be.revertedWithCustomError(vault, 'ConstraintsUnsupported');
   });
 

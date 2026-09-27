@@ -15,14 +15,20 @@ yarn fixtures   # after re-proving in ../circuit: refresh test fixtures + regene
   `bb write_solidity_verifier`. **Regenerate it whenever the circuit changes**; do not edit by hand.
   It is split into `PviumZKVerifier` (bb emits it as `HonkVerifier`; the refresh script renames it) plus two external libraries (`RelationsLib`, `ZKTranscriptLib`)
   that must be deployed first and linked; `test/helpers/deployVerifier.ts` does this.
-- `src/PviumIdentity.sol` — the contract Pvium deploys per chain **per (circuit version, Privy
-  key set)**, fully immutable and ownerless. Its constructor takes the Honk verifier, the
-  circuit version (`circuit/version.json`) and the raw P-256 coordinates of every key in the
-  Privy app's JWKS, checks each point is on the curve, and stores the set (`isSignerKey`). A key
-  rotation or a new circuit build is a new deployment (and a new `PviumVerifier`) that the vault
-  factory registers alongside the old one; no key can ever be added to an existing deployment,
-  so no admin key can forge proofs. `circuitVersion()` lets a caller confirm they hold the
-  right deployment for an attestation's stated version. Developers call it through `IPviumIdentity`:
+- `src/PviumIdentity.sol` — the contract Pvium deploys per chain **per circuit version**. Its
+  constructor takes the Honk verifier, the circuit version (`circuit/version.json`), an owner and
+  the raw P-256 coordinates of every key in the Privy app's JWKS, checks each point is on the
+  curve, and stores the set (`isSignerKey`). The owner manages that set so a Privy key rotation
+  strands nothing: `proposeSignerKey(x, y, url, kid)` names where the key is published, anyone
+  can check it there during the 7-day notice (`SIGNER_KEY_DELAY`), then `activateSignerKey`
+  accepts it; `removeSignerKey` is immediate, may remove the last key (a freeze, the safe state
+  while a leaked key is replaced), and bumps `keySetRevision`, which vaults read through the
+  verifier's `revision()` to discard wallets they cached from proofs under the old key set. A key
+  proposal is the one power that could forge proofs, which is why it is public for 7 days before it counts.
+  An owner of `address(0)` makes the set permanent. A new circuit build is still a new deployment
+  (and a new `PviumVerifier`) that the vault factory registers alongside the old one.
+  `circuitVersion()` lets a caller confirm they hold the right deployment for an attestation's
+  stated version. Developers call it through `IPviumIdentity`:
   - `verifyIdentity(proof, publicInputs, identityType, bytes32 identityHash, bytes32 walletHash) → issuedAt`.
     Both values are passed as hashes (`P2IDHash`, or the SDK's `identityHash`), so the raw
     identity never appears in calldata. `P2IDHash.walletHash` takes an `address`, or a string
@@ -46,7 +52,9 @@ yarn fixtures   # after re-proving in ../circuit: refresh test fixtures + regene
   proves it. No constructor arguments: the deployer is recorded as `factory` and must call
   `initialize` once, so the creation code is a constant. Every deposit names the `IP2IDVerifier`
   whose proofs can release it (`fund` takes the factory default, `fundWith` any allowed one);
-  buckets, owner wallet and the proof-freshness ratchet are all per verifier. The vault holds
+  buckets, owner wallet and the proof-freshness ratchet are all per verifier, and the owner
+  wallet is cached together with the verifier's `revision()`: if the verifier revokes something
+  it trusted, the cache is void and nothing is paid until the owner proves again. The vault holds
   mechanics only and consults the factory's **policy** on every call, within limits written into
   its own bytecode: fees are capped at `MAX_FEE_BPS` (1%), fixed per deposit when it is made, and
   accrue in the vault per verifier and token without the payout ever calling the policy about
@@ -71,6 +79,10 @@ yarn fixtures   # after re-proving in ../circuit: refresh test fixtures + regene
   (`vaultFor`, `initCodeHash`), so payers can derive it offline and pay before the vault exists.
   `fund()` / `fundWith()` deploy on first use and fund on the caller's behalf: approve the factory
   once to pay any identity.
+  Every vault and factory funding method takes a final `bytes32 ref` argument (`bytes32(0)`
+  for none). The vault emits it as the final field of `Funded`, without adding deposit storage.
+  References can be reused and do not affect claims, refunds or constraints. This ABI belongs
+  to `p2id.vault.v2`; existing `v1` contracts retain their original ABI without `ref`.
 - `src/interfaces/` — `IPviumIdentity`, `IP2IDVault`, `IP2IdVaultFactory`, `IP2IDVerifier`, `IP2IDPolicy`: what developers import.
 - `test/fixtures/` — a proof, its public inputs and the vk hash for the sample email identity,
   copied from `../circuit/target/proof_email`, plus the real sample Privy token and Privy's public key.
@@ -120,7 +132,7 @@ may sign with.
 The full runbook, including configuration, prediction, verification and what to do afterwards, is
 in [DEPLOYMENT.md](../DEPLOYMENT.md). Run it once per chain **with identical values**. It deploys the two Honk libraries,
 `PviumZKVerifier`, `PviumIdentity`, `PviumVerifier` and `PviumP2IdVaultFactory`, skips anything
-already deployed, and prints the addresses. Record `factory` under the scheme (`p2id.vault.v1`) in
+already deployed, and prints the addresses. Record `factory` under the scheme (`p2id.vault.v2`) in
 `sdks/node/p2id-core/src/p2id.json`, which freezes that scheme; the SDK then derives every identity's address
 from constants alone, with no chain id. The scheme domain is the factory's namespace and the
 deployment salt, so a future `p2id.vault.v2` is a separate stack at separate addresses.

@@ -29,7 +29,8 @@ interface IP2IDVault {
     // Sweeps also emit one aggregate event with the net amount paid and the fee.
 
     /// @notice A deposit was recorded via fund()/fundWith()/fundFor().
-    event Funded(uint256 indexed depositId, address indexed funder, address indexed token, uint256 amount, address verifier, bytes32 constraint, uint64 refundWindow, uint16 feeBps);
+    /// @param ref Opaque application reference; zero means absent. Emitted only, not stored or enforced as unique.
+    event Funded(uint256 indexed depositId, address indexed funder, address indexed token, uint256 amount, address verifier, bytes32 constraint, uint64 refundWindow, uint16 feeBps, bytes32 ref);
     /// @notice An unconsumed deposit was returned to its funder after its refund window (never charged a fee).
     event Refunded(uint256 indexed depositId, address indexed funder, address indexed token, uint256 amount);
     /// @notice A deposit was paid out by a sweep: `amount` gross, of which `fee` accrued as a fee.
@@ -50,11 +51,14 @@ interface IP2IDVault {
 
     // funding
     /// @notice Fund under the factory's default verifier. A non-zero `constraint` can be used once per funder.
-    function fund(address token, uint256 amount, bytes32 constraint, uint64 refundWindow) external payable returns (uint256 depositId);
+    /// @param ref Opaque application reference emitted in Funded; bytes32(0) for none. Does not affect claims or refunds.
+    function fund(address token, uint256 amount, bytes32 constraint, uint64 refundWindow, bytes32 ref) external payable returns (uint256 depositId);
     /// @notice Fund under any verifier the factory's policy allows.
-    function fundWith(address verifier, address token, uint256 amount, bytes32 constraint, uint64 refundWindow) external payable returns (uint256 depositId);
+    /// @param ref Opaque application reference emitted in Funded; bytes32(0) for none.
+    function fundWith(address verifier, address token, uint256 amount, bytes32 constraint, uint64 refundWindow, bytes32 ref) external payable returns (uint256 depositId);
     /// @notice Factory-only: record a deposit owned by `funder`; tokens are pulled from the factory.
-    function fundFor(address funder, address verifier, address token, uint256 amount, bytes32 constraint, uint64 refundWindow) external payable returns (uint256 depositId);
+    /// @param ref Opaque application reference emitted in Funded; bytes32(0) for none.
+    function fundFor(address funder, address verifier, address token, uint256 amount, bytes32 constraint, uint64 refundWindow, bytes32 ref) external payable returns (uint256 depositId);
     function refund(uint256 depositId) external;
 
     // proofs

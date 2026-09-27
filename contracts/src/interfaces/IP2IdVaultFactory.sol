@@ -23,20 +23,24 @@ interface IP2IdVaultFactory {
     /// @notice Deploy if needed, then fund under the default verifier on the caller's behalf
     ///         (caller keeps the refund right). ERC-20: approve this factory once to pay any
     ///         identity. Native coin: token = address(0), send `amount` as msg.value.
+    /// @param ref Opaque application reference forwarded to the vault's Funded event; bytes32(0) for none.
     function fund(
         bytes32 identityHash,
         address token,
         uint256 amount,
         bytes32 constraint,
-        uint64 refundWindow
+        uint64 refundWindow,
+        bytes32 ref
     ) external payable returns (address vault, uint256 depositId);
     /// @notice Same, under a chosen approved verifier.
+    /// @param ref Opaque application reference forwarded to the vault's Funded event; bytes32(0) for none.
     function fundWith(
         bytes32 identityHash,
         address verifier,
         address token,
         uint256 amount,
         bytes32 constraint,
-        uint64 refundWindow
+        uint64 refundWindow,
+        bytes32 ref
     ) external payable returns (address vault, uint256 depositId);
 }

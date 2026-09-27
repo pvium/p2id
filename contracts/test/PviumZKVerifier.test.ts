@@ -1,5 +1,6 @@
 import { expect } from 'chai';
 import { ethers } from 'hardhat';
+import { time } from '@nomicfoundation/hardhat-network-helpers';
 import { createHash, createPublicKey, verify as ecdsaVerify } from 'crypto';
 import { readFileSync } from 'fs';
 import { join } from 'path';
@@ -193,16 +194,72 @@ describe('PviumIdentity', function () {
     publicInputs = loadPublicInputs();
   });
 
-  it('stores the accepted signer key set; nothing is updatable', async () => {
+  it('stores the accepted signer key set and its owner; a zero owner makes the set permanent', async () => {
     const { x, y } = sampleSignerKey();
+    const [deployer, other] = await ethers.getSigners();
     const gate = await deployIdentityProof(verifierAddress, x, y);
     expect(await gate.isSignerKey(x, y)).to.equal(true);
     expect(await gate.signerKeyCount()).to.equal(1n);
     expect(await gate.verifier()).to.equal(verifierAddress);
     expect(await gate.circuitVersion()).to.equal(1n);
-    for (const fn of ['configure', 'addSignerKey', 'addCircuit', 'owner', 'transferOwnership']) {
-      expect((gate as any)[fn], fn).to.equal(undefined);
-    }
+    expect(await gate.owner()).to.equal(deployer.address);
+    const frozen = await deployIdentityProof(verifierAddress, x, y, 1, [], ethers.ZeroAddress);
+    await expect(frozen.proposeSignerKey(x, y, '', '')).to.be.revertedWithCustomError(frozen, 'NotOwner');
+    await expect(frozen.connect(other).acceptOwnership()).to.be.revertedWithCustomError(frozen, 'NotPendingOwner');
+  });
+
+  it('a key is accepted 7 days after it is proposed with its JWKS URL, and refused the moment it is removed', async () => {
+    const { x, y } = sampleSignerKey();
+    const [owner, other] = await ethers.getSigners();
+    const gx = 0x6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296n;
+    const gy = 0x4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5n;
+    const gate = await deployIdentityProof(verifierAddress, gx, gy); // deployed without the token's key
+    await expect(gate.verifyAttestation(proof, publicInputs)).to.be.revertedWithCustomError(gate, 'UnknownSigner');
+
+    const url = 'https://auth.privy.io/api/v1/apps/app/jwks.json';
+    await expect(gate.connect(other).proposeSignerKey(x, y, url, 'kid-1')).to.be.revertedWithCustomError(gate, 'NotOwner');
+    await expect(gate.proposeSignerKey(x, y ^ 1n, url, 'kid-1')).to.be.revertedWithCustomError(gate, 'InvalidPublicKey');
+    await expect(gate.proposeSignerKey(gx, gy, url, 'kid-0')).to.be.revertedWithCustomError(gate, 'KeyAlreadyAccepted');
+    const tx = await gate.proposeSignerKey(x, y, url, 'kid-1');
+    const eta = BigInt((await ethers.provider.getBlock((await tx.wait())!.blockNumber))!.timestamp) + 7n * 24n * 3600n;
+    await expect(tx).to.emit(gate, 'SignerKeyProposed').withArgs(x, y, eta, url, 'kid-1');
+    const pending = await gate.signerKeyProposals(await gate.signerKeyHash(x, y));
+    expect([pending.eta, pending.url, pending.kid]).to.deep.equal([eta, url, 'kid-1']);
+
+    await expect(gate.activateSignerKey(x, y)).to.be.revertedWithCustomError(gate, 'TimelockNotElapsed');
+    await expect(gate.verifyAttestation(proof, publicInputs)).to.be.revertedWithCustomError(gate, 'UnknownSigner'); // not yet
+    await time.increase(7 * 24 * 3600);
+    await expect(gate.connect(other).activateSignerKey(x, y)).to.emit(gate, 'SignerKeyAdded').withArgs(x, y); // anyone, once due
+    expect(await gate.signerKeyCount()).to.equal(2n);
+    expect((await gate.verifyAttestation(proof, publicInputs)).iat).to.equal(1789240094n);
+    await expect(gate.activateSignerKey(x, y)).to.be.revertedWithCustomError(gate, 'NothingProposed');
+
+    // cancel: a proposal can be withdrawn until it is activated
+    await gate.proposeSignerKey(1n + gx, gy, url, 'kid-2').catch(() => {}); // off-curve, ignored
+    await gate.removeSignerKey(gx, gy);
+    await gate.proposeSignerKey(gx, gy, url, 'kid-0');
+    await expect(gate.cancelSignerKeyProposal(gx, gy)).to.emit(gate, 'SignerKeyProposalCancelled').withArgs(gx, gy);
+    await expect(gate.cancelSignerKeyProposal(gx, gy)).to.be.revertedWithCustomError(gate, 'NothingProposed');
+
+    // remove: immediate, even the last key (a freeze is the safe state), and each removal bumps the revision
+    expect(await gate.signerKeyCount()).to.equal(1n);
+    expect(await gate.keySetRevision()).to.equal(1n);
+    await expect(gate.removeSignerKey(gx, gy)).to.be.revertedWithCustomError(gate, 'UnknownKey');
+    await gate.proposeSignerKey(gx, gy, url, 'kid-0');
+    await time.increase(7 * 24 * 3600);
+    await gate.activateSignerKey(gx, gy);
+    await expect(gate.removeSignerKey(x, y)).to.emit(gate, 'SignerKeyRemoved').withArgs(x, y);
+    await expect(gate.verifyAttestation(proof, publicInputs)).to.be.revertedWithCustomError(gate, 'UnknownSigner');
+    await gate.removeSignerKey(gx, gy);
+    expect(await gate.signerKeyCount()).to.equal(0n);
+    expect(await gate.keySetRevision()).to.equal(3n);
+
+    // ownership: two steps
+    await gate.transferOwnership(other.address);
+    await expect(gate.connect(other).removeSignerKey(gx, gy)).to.be.revertedWithCustomError(gate, 'NotOwner');
+    await gate.connect(other).acceptOwnership();
+    expect(await gate.owner()).to.equal(other.address);
+    await expect(gate.proposeSignerKey(x, y, url, 'kid-1')).to.be.revertedWithCustomError(gate, 'NotOwner');
   });
 
   it('accepts a proof signed by any key in the set, and refuses empty or duplicate sets', async () => {
@@ -214,9 +271,10 @@ describe('PviumIdentity', function () {
     expect(await gate.signerKeyCount()).to.equal(2n);
     expect((await gate.verifyAttestation(proof, publicInputs)).iat).to.equal(1789240094n);
     const factory = await ethers.getContractFactory('PviumIdentity');
-    await expect(factory.deploy(verifierAddress, 2, [], [])).to.be.revertedWithCustomError(factory, 'NoSignerKeys');
-    await expect(factory.deploy(verifierAddress, 2, [x], [])).to.be.revertedWithCustomError(factory, 'NoSignerKeys');
-    await expect(factory.deploy(verifierAddress, 2, [x, x], [y, y])).to.be.revertedWithCustomError(factory, 'DuplicateSignerKey');
+    const [deployer] = await ethers.getSigners();
+    await expect(factory.deploy(verifierAddress, 2, deployer.address, [], [])).to.be.revertedWithCustomError(factory, 'NoSignerKeys');
+    await expect(factory.deploy(verifierAddress, 2, deployer.address, [x], [])).to.be.revertedWithCustomError(factory, 'NoSignerKeys');
+    await expect(factory.deploy(verifierAddress, 2, deployer.address, [x, x], [y, y])).to.be.revertedWithCustomError(factory, 'DuplicateSignerKey');
   });
 
   it('refuses circuit version 0', async () => {

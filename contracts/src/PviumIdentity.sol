@@ -5,13 +5,17 @@ import {IVerifier} from "./PviumZKVerifier.sol";
 import {IPviumIdentity} from "./interfaces/IPviumIdentity.sol";
 
 /// @title PviumIdentity
-/// @notice On-chain verifier for Pvium attestations. Fully immutable: one deployment per
-///         (circuit version, Privy key set), with no owner and nothing to update. The key set is
-///         the Privy app's JWKS at deployment time (Privy publishes more than one key per app and
-///         may sign with any of them); it is fixed in the constructor and can never grow. A Privy
-///         key rotation or a new circuit build is a new deployment (plus a new PviumVerifier),
-///         which the P2ID vault factory registers alongside the old one; nobody can ever add a key
-///         that forges proofs to an existing deployment. Developers call it through IPviumIdentity.
+/// @notice On-chain verifier for Pvium attestations: one deployment per circuit version. The
+///         accepted signer keys start as the Privy app's JWKS at deployment (Privy publishes more
+///         than one key per app and may sign with any of them). The owner manages the set so a
+///         Privy key rotation does not strand deposits: adding a key is proposed with the JWKS URL
+///         and key id it can be checked at, and takes effect after SIGNER_KEY_DELAY (7 days);
+///         removing one is immediate, because a leaked key must stop being trusted at once. A key
+///         proposal is the strongest power here (a forged key forges proofs), which is why it is
+///         public for 7 days: anyone can verify the key at the URL, and payees and funders can
+///         claim or refund before it activates. An owner of address(0) makes the set permanent.
+///         A new circuit build is still a new deployment (plus a new PviumVerifier), which the
+///         P2ID vault factory registers alongside the old one. Developers call it through IPviumIdentity.
 /// @dev Public input layout emitted by circuit/src/main.nr:
 ///        [0] identity_type   [1] wallet (EVM address checked in-circuit against the token; 0 if none)
 ///        [2] signer_x_hi     [3] signer_x_lo     [4] signer_y_hi   [5] signer_y_lo
@@ -25,10 +29,38 @@ contract PviumIdentity is IPviumIdentity {
     IVerifier public immutable verifier;
     /// @notice Circuit version this deployment verifies (see circuit/version.json). One deployment per version.
     uint16 public immutable circuitVersion;
-    /// @notice Number of accepted signer keys (fixed at construction).
-    uint256 public immutable signerKeyCount;
-    /// @dev Accepted signer keys, keyed by signerKeyHash(x, y). Written only by the constructor.
+    /// @notice Notice a key proposal gives before it can be activated.
+    uint64 public constant SIGNER_KEY_DELAY = 7 days;
+    /// @notice Number of accepted signer keys. Zero (every key revoked) refuses every proof until a
+    ///         proposal matures: a freeze, never a payout.
+    uint256 public signerKeyCount;
+    /// @notice Incremented whenever a key is revoked, i.e. whenever proofs that verified before may
+    ///         no longer be trusted. Vaults discard wallets cached under an older revision.
+    uint64 public keySetRevision;
+    /// @dev Accepted signer keys, keyed by signerKeyHash(x, y).
     mapping(bytes32 keyHash => bool) private _signerKeys;
+    /// @notice Manages the signer key set (two-step transfer); address(0) = the set is permanent.
+    address public owner;
+    address public pendingOwner;
+
+    struct SignerKeyProposal {
+        uint256 x;
+        uint256 y;
+        /// Earliest activation time; zero when there is no proposal for this key.
+        uint64 eta;
+        /// Where the key is published: the JWKS URL and the key id in it, for anyone to check.
+        string url;
+        string kid;
+    }
+    /// @notice Pending key proposals, keyed by signerKeyHash(x, y).
+    mapping(bytes32 keyHash => SignerKeyProposal) public signerKeyProposals;
+
+    event SignerKeyProposed(uint256 indexed x, uint256 indexed y, uint64 eta, string url, string kid);
+    event SignerKeyProposalCancelled(uint256 indexed x, uint256 indexed y);
+    event SignerKeyAdded(uint256 indexed x, uint256 indexed y);
+    event SignerKeyRemoved(uint256 indexed x, uint256 indexed y);
+    event OwnershipTransferStarted(address indexed from, address indexed to);
+    event OwnershipTransferred(address indexed from, address indexed to);
 
     /// @notice Everything an attestation asserts, for Pvium's own contracts (e.g. vault claims
     ///         that pay `wallet`). Developers should use the IPviumIdentity functions.
@@ -57,9 +89,22 @@ contract PviumIdentity is IPviumIdentity {
     error IdentityMismatch();
     error NoWallet();
     error WalletMismatch();
+    error NotOwner();
+    error NotPendingOwner();
+    error KeyAlreadyAccepted(uint256 x, uint256 y);
+    error NothingProposed(uint256 x, uint256 y);
+    error TimelockNotElapsed(uint64 eta);
+    error UnknownKey(uint256 x, uint256 y);
 
+    /// @param _owner Manages the key set; address(0) fixes the set given here forever.
     /// @param _signerXs/_signerYs Raw P-256 coordinates of every key the Privy app signs with.
-    constructor(IVerifier _verifier, uint16 _circuitVersion, uint256[] memory _signerXs, uint256[] memory _signerYs) {
+    constructor(
+        IVerifier _verifier,
+        uint16 _circuitVersion,
+        address _owner,
+        uint256[] memory _signerXs,
+        uint256[] memory _signerYs
+    ) {
         if (address(_verifier).code.length == 0) revert InvalidVerifier();
         if (_circuitVersion == 0) revert InvalidCircuitVersion();
         if (_signerXs.length == 0 || _signerXs.length != _signerYs.length) revert NoSignerKeys();
@@ -73,6 +118,72 @@ contract PviumIdentity is IPviumIdentity {
         verifier = _verifier;
         circuitVersion = _circuitVersion;
         signerKeyCount = _signerXs.length;
+        owner = _owner;
+        emit OwnershipTransferred(address(0), _owner);
+    }
+
+    // ---- signer key management ------------------------------------------------------------
+
+    /// @notice Propose accepting a key, published at `url` under `kid`, after SIGNER_KEY_DELAY.
+    ///         Re-proposing a key restarts its delay.
+    function proposeSignerKey(uint256 x, uint256 y, string calldata url, string calldata kid) external onlyOwner {
+        if (!_isOnCurve(x, y)) revert InvalidPublicKey();
+        bytes32 h = signerKeyHash(x, y);
+        if (_signerKeys[h]) revert KeyAlreadyAccepted(x, y);
+        uint64 eta = uint64(block.timestamp) + SIGNER_KEY_DELAY;
+        signerKeyProposals[h] = SignerKeyProposal({x: x, y: y, eta: eta, url: url, kid: kid});
+        emit SignerKeyProposed(x, y, eta, url, kid);
+    }
+
+    function cancelSignerKeyProposal(uint256 x, uint256 y) external onlyOwner {
+        bytes32 h = signerKeyHash(x, y);
+        if (signerKeyProposals[h].eta == 0) revert NothingProposed(x, y);
+        delete signerKeyProposals[h];
+        emit SignerKeyProposalCancelled(x, y);
+    }
+
+    /// @notice Accept a proposed key once its delay has passed. Anyone may call it: the owner
+    ///         already decided by proposing, and can still cancel until this runs.
+    function activateSignerKey(uint256 x, uint256 y) external {
+        bytes32 h = signerKeyHash(x, y);
+        uint64 eta = signerKeyProposals[h].eta;
+        if (eta == 0) revert NothingProposed(x, y);
+        if (block.timestamp < eta) revert TimelockNotElapsed(eta);
+        delete signerKeyProposals[h];
+        if (_signerKeys[h]) revert KeyAlreadyAccepted(x, y);
+        _signerKeys[h] = true;
+        signerKeyCount++;
+        emit SignerKeyAdded(x, y);
+    }
+
+    /// @notice Stop accepting a key at once (e.g. Privy retired it, or it leaked). Proofs made from
+    ///         tokens it signed fail from now on, and wallets that vaults cached from any proof are
+    ///         discarded (keySetRevision). Removing the last key is allowed: it freezes claims,
+    ///         which is the safe state while a compromised key is replaced.
+    function removeSignerKey(uint256 x, uint256 y) external onlyOwner {
+        bytes32 h = signerKeyHash(x, y);
+        if (!_signerKeys[h]) revert UnknownKey(x, y);
+        _signerKeys[h] = false;
+        signerKeyCount--;
+        keySetRevision++;
+        emit SignerKeyRemoved(x, y);
+    }
+
+    function transferOwnership(address to) external onlyOwner {
+        pendingOwner = to;
+        emit OwnershipTransferStarted(owner, to);
+    }
+
+    function acceptOwnership() external {
+        if (msg.sender != pendingOwner) revert NotPendingOwner();
+        emit OwnershipTransferred(owner, msg.sender);
+        owner = msg.sender;
+        pendingOwner = address(0);
+    }
+
+    modifier onlyOwner() {
+        if (msg.sender != owner || owner == address(0)) revert NotOwner();
+        _;
     }
 
     /// @inheritdoc IPviumIdentity

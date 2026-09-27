@@ -1,5 +1,5 @@
 {
-  "current": "p2id.vault.v1",
+  "current": "p2id.vault.v2",
   "schemes": {
     "p2id.vault.v1": {
       "identityDomain": "p2id.identity.v1",
@@ -7,6 +7,20 @@
       "factories": {
         "production": null,
         "sandbox": "0x21859137b4979B101079742942c741224529eE6D"
+      },
+      "compiler": {
+        "solc": "0.8.28",
+        "optimizerRuns": 200,
+        "evmVersion": "paris",
+        "bytecodeHash": "none"
+      }
+    },
+    "p2id.vault.v2": {
+      "identityDomain": "p2id.identity.v1",
+      "vaultInitCodeHash": "0x5d4eab8fb0d7ca20e288e2953f8029d9caca9d58cc098f67b8f88d9723328c1e",
+      "factories": {
+        "production": null,
+        "sandbox": "0x3738888e239629349eE993097cd1a37Bf823c559"
       },
       "compiler": {
         "solc": "0.8.28",

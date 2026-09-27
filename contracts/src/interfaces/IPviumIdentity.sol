@@ -9,7 +9,7 @@ pragma solidity ^0.8.27;
 interface IPviumIdentity {
     /// @notice Circuit version this deployment verifies. Attestations state theirs; use the matching deployment.
     function circuitVersion() external view returns (uint16);
-    /// @notice Whether tokens signed by this P-256 key are accepted (the set is fixed at deployment).
+    /// @notice Whether tokens signed by this P-256 key are accepted. Keys are added with 7 days' public notice.
     function isSignerKey(uint256 x, uint256 y) external view returns (bool);
 
     /// @notice Verify that the proof binds exactly this identity and this wallet.

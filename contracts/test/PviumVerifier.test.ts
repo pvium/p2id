@@ -88,7 +88,7 @@ describe('PviumVerifier: real ZK proof + signed constraint commitment', function
     const commitment = await verifier.screeningCommitment(POLICY, EMAIL_COMMITMENT, ethers.id('salt'));
     await token.mint(payer.address, 100n);
     await token.connect(payer).approve(await vault.getAddress(), 100n);
-    await vault.connect(payer).fund(await token.getAddress(), 100n, commitment, DAY);
+    await vault.connect(payer).fund(await token.getAddress(), 100n, commitment, DAY, ethers.ZeroHash);
     await vault.refreshProofAndSweep(await verifier.getAddress(), proofBytes('email'), await token.getAddress(), 0);
     expect(await token.balanceOf(LINKED_WALLET)).to.equal(0n); // protected
 
@@ -168,9 +168,9 @@ describe('PviumVerifier: real ZK proof + signed constraint commitment', function
     await token.mint(payer.address, 10n);
     await token.connect(payer).approve(await vault.getAddress(), 10n);
     const commitment = await verifier.screeningCommitment(POLICY, EMAIL_COMMITMENT, ethers.id('salt'));
-    await expect(vault.connect(payer).fundWith(await verifierNoSigner.getAddress(), await token.getAddress(), 10n, commitment, DAY))
+    await expect(vault.connect(payer).fundWith(await verifierNoSigner.getAddress(), await token.getAddress(), 10n, commitment, DAY, ethers.ZeroHash))
       .to.be.revertedWithCustomError(vault, 'ConstraintsUnsupported');
-    await vault.connect(payer).fundWith(await verifierNoSigner.getAddress(), await token.getAddress(), 10n, ethers.ZeroHash, DAY); // unconstrained is fine
+    await vault.connect(payer).fundWith(await verifierNoSigner.getAddress(), await token.getAddress(), 10n, ethers.ZeroHash, DAY, ethers.ZeroHash); // unconstrained is fine
   });
 
   it('a verifier without a constraint signer refuses constrained sweeps but still proves identity', async () => {

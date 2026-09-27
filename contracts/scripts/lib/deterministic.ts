@@ -48,7 +48,7 @@ export interface StackAddresses {
   factory: string;
 }
 
-export const CURRENT_SCHEME = 'p2id.vault.v1';
+export const CURRENT_SCHEME = 'p2id.vault.v2';
 
 /** Make sure the proxy exists. On a local Hardhat network it is installed; elsewhere it must already be there. */
 export async function ensureDeterministicDeployer(): Promise<void> {
@@ -196,6 +196,7 @@ export async function deployStack(
     await initCodeOf('PviumIdentity', [
       zkVerifier,
       p.circuitVersion,
+      p.owner,
       keys.map((k) => k.x),
       keys.map((k) => k.y),
     ]),
@@ -265,6 +266,7 @@ export async function checkStack(p: StackParams, a: StackAddresses, expectedVaul
   const identity = await ethers.getContractAt('PviumIdentity', a.pviumIdentity);
   if (!same(await identity.verifier(), a.zkVerifier)) fail('PviumIdentity.verifier', await identity.verifier(), a.zkVerifier);
   if (Number(await identity.circuitVersion()) !== p.circuitVersion) fail('circuitVersion', await identity.circuitVersion(), p.circuitVersion);
+  if (!same(await identity.owner(), p.owner)) fail('PviumIdentity.owner', await identity.owner(), p.owner);
   if (Number(await identity.signerKeyCount()) !== p.signerKeys.length) fail('signerKeyCount', await identity.signerKeyCount(), p.signerKeys.length);
   for (const k of p.signerKeys) if (!(await identity.isSignerKey(k.x, k.y))) fail(`signer key ${k.x.toString(16).slice(0, 12)}…`, 'missing', 'accepted');
   const verifier = await ethers.getContractAt('PviumVerifier', a.pviumVerifier);

@@ -58,7 +58,7 @@ describe('P2IDVault audit findings', function () {
   it('a verifier payers merely opted into cannot raise the direct-transfer floor', async () => {
     const { newWallet, a1, a2, vault, token } = await setup();
     await vault.refreshProof(a1, proof(newWallet.address, 2000)); // a1 is the default
-    await vault.refreshProof(a2, proof(newWallet.address, 9_999_999_999)); // not the default: ignored for the floor
+    await vault.refreshProof(a2, proof(newWallet.address, 3000)); // not the default: ignored for the floor
     expect(await vault.untrackedProofIat()).to.equal(2000n);
     await token.mint(await vault.getAddress(), 5n);
     await vault.sweepUntracked(await token.getAddress());
@@ -103,7 +103,7 @@ describe('P2IDVault audit findings', function () {
     // but it takes no new deposits while revoked
     await token.mint(payer.address, 10n);
     await token.connect(payer).approve(await vault.getAddress(), 10n);
-    await expect(vault.connect(payer).fund(await token.getAddress(), 10n, ethers.ZeroHash, day))
+    await expect(vault.connect(payer).fund(await token.getAddress(), 10n, ethers.ZeroHash, day, ethers.ZeroHash))
       .to.be.revertedWithCustomError(vault, 'VerifierNotApproved');
   });
 
@@ -113,7 +113,7 @@ describe('P2IDVault audit findings', function () {
     for (const signer of [payer, oldWallet]) {
       await token.mint(signer.address, 100n);
       await token.connect(signer).approve(vaultAddress, 100n);
-      await vault.connect(signer).fund(tokenAddress, 100n, ethers.ZeroHash, day);
+      await vault.connect(signer).fund(tokenAddress, 100n, ethers.ZeroHash, day, ethers.ZeroHash);
     }
     // MockERC20.balanceOf is at slot 3. Model an external negative rebase/balance confiscation.
     const slot = ethers.keccak256(ethers.AbiCoder.defaultAbiCoder()

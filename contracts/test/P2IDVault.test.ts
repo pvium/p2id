@@ -24,7 +24,7 @@ describe('P2IDVault', function () {
   async function fundAs(signer: any, tok: any, amount: bigint, constraint = Z, window = DAY) {
     await tok.mint(signer.address, amount);
     await tok.connect(signer).approve(await vault.getAddress(), amount);
-    const tx = await vault.connect(signer).fund(await tok.getAddress(), amount, constraint, window);
+    const tx = await vault.connect(signer).fund(await tok.getAddress(), amount, constraint, window, ethers.ZeroHash);
     const rc = await tx.wait();
     const ev = rc!.logs.map((l: any) => { try { return vault.interface.parseLog(l); } catch { return null; } }).find((e: any) => e?.name === 'Funded');
     return Number(ev.args.depositId);
@@ -201,6 +201,57 @@ describe('P2IDVault', function () {
     await expect(fundAs(alice, token, 10n, c)).to.be.revertedWithCustomError(vault, 'ConstraintUsed').withArgs(0);
   });
 
+  it('a verifier revision change voids the cached owner until a proof is presented again', async () => {
+    await fundAs(alice, token, 10n);
+    await vault.refreshProof(V, proofFor(ownerWallet.address, 1000));
+    await idv.setRevision(1);
+    await expect(vault.sweep(V, await token.getAddress(), 0)).to.be.revertedWithCustomError(vault, 'OwnerRevoked');
+    await expect(vault.sweepUntracked(await token.getAddress())).to.be.revertedWithCustomError(vault, 'OwnerRevoked');
+    expect(await vault.sweepable(V, await token.getAddress())).to.equal(10n); // deposits still count; untracked does not
+    // a proof the ratchet retired stays retired; the latest one (same age) re-establishes the owner
+    await expect(vault.refreshProof(V, proofFor(spammer.address, 999))).to.be.revertedWithCustomError(vault, 'ProofTooOld');
+    await expect(vault.refreshProof(V, proofFor(ownerWallet.address, 1000))).to.emit(vault, 'OwnerRefreshed');
+    expect(await vault.ownerRevision(V)).to.equal(1n);
+    await vault.sweep(V, await token.getAddress(), 0);
+    expect(await token.balanceOf(ownerWallet.address)).to.equal(10n);
+  });
+
+  it('a wallet the owner moved away from cannot come back through an unrelated revocation', async () => {
+    await fundAs(alice, token, 10n);
+    await vault.refreshProof(V, proofFor(spammer.address, 1000)); // the old wallet, later compromised
+    await vault.refreshProof(V, proofFor(ownerWallet.address, 2000)); // rotated away from it
+    await idv.setRevision(1); // e.g. a retired key was revoked
+    await expect(vault.refreshProofAndSweep(V, proofFor(spammer.address, 1000), await token.getAddress(), 0))
+      .to.be.revertedWithCustomError(vault, 'ProofTooOld');
+    await vault.refreshProofAndSweep(V, proofFor(ownerWallet.address, 2000), await token.getAddress(), 0);
+    expect(await token.balanceOf(ownerWallet.address)).to.equal(10n);
+    expect(await token.balanceOf(spammer.address)).to.equal(0n);
+  });
+
+  it('after a revision change, a same-age proof restores only the recorded wallet; another wallet needs a newer proof', async () => {
+    await fundAs(alice, token, 10n);
+    await vault.refreshProof(V, proofFor(ownerWallet.address, 1000));
+    await idv.setRevision(1);
+    await vault.refreshProof(V, proofFor(spammer.address, 1000)); // same age, different wallet: verified, but not the owner
+    expect(await vault.owner(V)).to.equal(ownerWallet.address);
+    await expect(vault.sweep(V, await token.getAddress(), 0)).to.be.revertedWithCustomError(vault, 'OwnerRevoked'); // still void
+    await expect(vault.refreshProofAndSweep(V, proofFor(spammer.address, 1000), await token.getAddress(), 0))
+      .to.be.revertedWithCustomError(vault, 'OwnerRevoked'); // the combined path pays nobody either
+    await vault.refreshProof(V, proofFor(ownerWallet.address, 1000)); // the recorded wallet re-validates
+    expect(await vault.ownerRevision(V)).to.equal(1n);
+    await vault.sweep(V, await token.getAddress(), 0);
+    expect(await token.balanceOf(ownerWallet.address)).to.equal(10n);
+    expect(await token.balanceOf(spammer.address)).to.equal(0n);
+    await vault.refreshProof(V, proofFor(spammer.address, 1001)); // a newer proof moves the owner as always
+    expect(await vault.owner(V)).to.equal(spammer.address);
+  });
+
+  it('a proof issued in the future is refused, so a forged issue time cannot poison the ratchets', async () => {
+    const now = await time.latest();
+    await expect(vault.refreshProof(V, proofFor(ownerWallet.address, now + 3600))).to.be.revertedWithCustomError(vault, 'ProofFromFuture');
+    await vault.refreshProof(V, proofFor(ownerWallet.address, now + 60));
+  });
+
   it('re-proving the owner retires older proofs for constrained sweeps too', async () => {
     const c = ethers.id('screened');
     await fundAs(alice, token, 10n, c);
@@ -259,10 +310,10 @@ describe('P2IDVault', function () {
   it('deposits name their verifier; only factory-approved verifiers are accepted', async () => {
     await token.mint(alice.address, 10n);
     await token.connect(alice).approve(await vault.getAddress(), 10n);
-    await expect(vault.connect(alice).fundWith(V2, await token.getAddress(), 10n, Z, DAY))
+    await expect(vault.connect(alice).fundWith(V2, await token.getAddress(), 10n, Z, DAY, ethers.ZeroHash))
       .to.be.revertedWithCustomError(vault, 'VerifierNotApproved').withArgs(V2);
     await policy.approveVerifier(V2, true);
-    await vault.connect(alice).fundWith(V2, await token.getAddress(), 10n, Z, DAY);
+    await vault.connect(alice).fundWith(V2, await token.getAddress(), 10n, Z, DAY, ethers.ZeroHash);
     expect((await vault.deposits(0)).verifier).to.equal(V2);
     expect(await vault.bucketTotal(V2, Z, await token.getAddress())).to.equal(10n);
     expect(await vault.bucketTotal(V, Z, await token.getAddress())).to.equal(0n);
@@ -273,7 +324,7 @@ describe('P2IDVault', function () {
     await fundAs(alice, token, 100n); // default verifier (V)
     await token.mint(alice.address, 40n);
     await token.connect(alice).approve(await vault.getAddress(), 40n);
-    await vault.connect(alice).fundWith(V2, await token.getAddress(), 40n, Z, DAY);
+    await vault.connect(alice).fundWith(V2, await token.getAddress(), 40n, Z, DAY, ethers.ZeroHash);
     await token.mint(await vault.getAddress(), 7n); // bare transfer
 
     // a proof under V does not unlock V2's bucket
@@ -294,7 +345,7 @@ describe('P2IDVault', function () {
     await policy.approveVerifier(V2, true);
     await token.mint(alice.address, 10n);
     await token.connect(alice).approve(await vault.getAddress(), 10n);
-    await vault.connect(alice).fundWith(V2, await token.getAddress(), 10n, Z, DAY);
+    await vault.connect(alice).fundWith(V2, await token.getAddress(), 10n, Z, DAY, ethers.ZeroHash);
     await vault.refreshProof(V2, proofFor(ownerWallet.address, 1000));
 
     await policy.approveVerifier(V2, false);
@@ -307,7 +358,7 @@ describe('P2IDVault', function () {
 
     await token.mint(alice.address, 5n);
     await token.connect(alice).approve(await vault.getAddress(), 5n);
-    await vault.connect(alice).fundWith(V2, await token.getAddress(), 5n, Z, DAY);
+    await vault.connect(alice).fundWith(V2, await token.getAddress(), 5n, Z, DAY, ethers.ZeroHash);
     await policy.approveVerifier(V2, false);
     await time.increase(DAY + 1);
     await vault.connect(alice).refund(1); // still refundable while frozen

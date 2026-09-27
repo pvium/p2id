@@ -111,6 +111,13 @@ contract PviumVerifier is IP2IDVerifier {
     }
 
     /// @inheritdoc IP2IDVerifier
+    /// @dev Attester changes never affect which wallet a proof resolves to, so only the identity
+    ///      contract's key revocations count.
+    function revision() external view returns (uint64) {
+        return pviumIdentity.keySetRevision();
+    }
+
+    /// @inheritdoc IP2IDVerifier
     function supportsConstraints() external view returns (bool) {
         return constraintSignerCount != 0;
     }

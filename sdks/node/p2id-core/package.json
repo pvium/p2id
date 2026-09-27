@@ -4,13 +4,15 @@
   "description": "P2ID protocol core: identity types and hashing, chain-agnostic P2ID address derivation, and the Solidity sources",
   "license": "MIT",
   "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "./dist/cjs/index.js",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/esm/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "default": "./dist/index.js"
+      "types": "./dist/esm/index.d.ts",
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.js",
+      "default": "./dist/esm/index.js"
     },
     "./contracts/*": "./contracts/*"
   },
@@ -20,7 +22,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "sh scripts/sync-contracts.sh && node scripts/embed-p2id.mjs && tsc -p tsconfig.json",
+    "build": "sh scripts/sync-contracts.sh && node scripts/embed-p2id.mjs && tsc -p tsconfig.esm.json && tsc -p tsconfig.cjs.json && node scripts/finalize-dist.mjs",
     "test": "yarn build && node --test --import tsx test/*.test.ts",
     "prepublishOnly": "node scripts/embed-p2id.mjs --require-production && yarn test"
   },

@@ -17,18 +17,14 @@ export const P2ID_TYPE_NAMES = {
   wallet: IdentityType.Wallet,
 } as const;
 
-/** Every accepted name: the P2ID names, `twitter`, and Privy's `linked_accounts[].type` strings. */
+/**
+ * Every accepted name: the canonical P2ID names plus `twitter` (an alias of `x`). P2ID core is
+ * agnostic of any identity provider — it does not know Privy (or any other verifier's) account
+ * types. Callers map their provider's account types to these names themselves.
+ */
 export const IDENTITY_TYPE_BY_NAME = {
   ...P2ID_TYPE_NAMES,
   twitter: IdentityType.Twitter,
-  google_oauth: IdentityType.Google,
-  twitter_oauth: IdentityType.Twitter,
-  discord_oauth: IdentityType.Discord,
-  github_oauth: IdentityType.Github,
-  linkedin_oauth: IdentityType.Linkedin,
-  apple_oauth: IdentityType.Apple,
-  tiktok_oauth: IdentityType.Tiktok,
-  instagram_oauth: IdentityType.Instagram,
 } as const;
 
 export type P2IDTypeName = keyof typeof P2ID_TYPE_NAMES;

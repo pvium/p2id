@@ -86,7 +86,7 @@ test('rejects a wallet the proof does not bind', async () => {
 
 test('rejects the wrong identity value or type', async () => {
   const v = await verifyIdentity({ attestation, signer: pem, identityType: 'email', identityValue: 'other@privy.io' });
-  const t = await verifyIdentity({ attestation, signer: pem, identityType: 'github_oauth', identityValue: 'test-9988@privy.io' });
+  const t = await verifyIdentity({ attestation, signer: pem, identityType: 'github', identityValue: 'test-9988@privy.io' });
   assert.deepEqual(v, { valid: false, reason: 'identity value mismatch' });
   assert.deepEqual(t, { valid: false, reason: 'identity type mismatch' });
 });
