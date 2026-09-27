@@ -45,8 +45,8 @@ address using a factory address and vault creation bytecode hash. Vaults support
 currency and ERC-20 tokens; a vault can receive funds before it is deployed, but must be
 deployed before those funds can be claimed.
 
-This specification defines identity encoding, vault address derivation, address scheme
-versioning, URI syntax, claim processing and the verifier and policy interfaces.
+This specification defines identity encoding, vault address derivation, address stability,
+URI syntax, claim processing and the verifier and policy interfaces.
 
 ## Identity verification scope
 
@@ -84,7 +84,7 @@ p2id         = last 20 bytes of Keccak-256( 0xff ‖ factory ‖ identityHash �
 | `"p2id.identity.v1"` | ASCII domain prefix                                            | 16 bytes    |
 | `typeId`             | identity type id, see the table below                          | 1 byte      |
 | `value`              | the identity as UTF-8; lowercasing is ASCII only (`A`–`Z`)     | 1–128 bytes |
-| `factory`            | the vault factory address for the scheme and environment       | 20 bytes    |
+| `factory`            | the vault factory address of the deployment and environment    | 20 bytes    |
 | `vaultInitCodeHash`  | Keccak-256 of the `P2IDVault` creation bytecode                | 32 bytes    |
 
 `‖` denotes byte concatenation. The address formula uses CREATE2 with `identityHash` as the
@@ -95,34 +95,31 @@ The vault stores `identityHash` as its identity commitment and passes it to the 
 each proof submission. The verifier MUST reject a proof that does not authenticate that
 commitment.
 
-### Schemes and versions
+### Address stability
 
-Identity hashing and vault addressing use independently versioned domains:
+Identity hashing is versioned by its domain prefix (`p2id.identity.v1`): it changes only if
+existing identity commitments would change, and never because of a vault or factory change.
 
-| Domain             | Versions                                             | Changes when                                 |
-| ------------------ | ---------------------------------------------------- | -------------------------------------------- |
-| `p2id.identity.vN` | the identity hash: prefix, type table, normalisation | existing identity commitments would change |
-| `p2id.vault.vN`    | the address: `factory` and `vaultInitCodeHash`       | the vault bytecode or the factory changes    |
+Vault addressing is fixed by two deployment constants, `factory` and `vaultInitCodeHash`. Any
+change to the vault or factory code yields a different factory address and therefore a different
+address for every identity; the constants are not versioned by this specification. A deployment
+MUST publish its constants, MUST NOT change them once a mainnet factory exists, and MUST keep
+older constants available so addresses issued under them remain derivable. How a deployment
+names, records and freezes its constants is the deployment's concern (for Pvium's, see
+[`DEPLOYMENT.md`](DEPLOYMENT.md)). Claim eligibility remains subject to the deployed contracts'
+verifier and policy rules.
 
-Each address scheme MUST specify its identity domain. A change to vault bytecode does not
-require a change to identity hashing. Existing proofs remain usable only with verifiers that
-accept their proof format and identity domain. In the reference deployment, the scheme domain
-also determines the factory's namespace and deployment salt: `keccak256(schemeDomain)`.
+### Vault interface version
 
-The constants of every scheme are in [`sdks/node/p2id-core/src/p2id.json`](sdks/node/p2id-core/src/p2id.json), keyed
-by domain. Once a factory is recorded, the scheme's identity domain, bytecode hash and recorded
-factory addresses MUST NOT change. The reference build rejects vault bytecode that does not
-match its recorded hash. Changes to those constants require a new scheme entry and an update
-to `current`. Older entries MUST remain available for address derivation under their original
-schemes. Claim eligibility remains subject to the deployed contracts' verifier and policy rules.
-
-The current scheme, `p2id.vault.v2`, adds the `ref` funding argument and event field. The
-`p2id.vault.v1` entry remains available for deriving
-existing addresses; its funding methods and `Funded` event do not include `ref`.
+`p2id.vault.v1` is the P2ID vault interface version. A conforming vault MUST expose
+`p2idVersion()` and return exactly `"p2id.vault.v1"`. A conforming factory MUST expose the
+same method and return exactly `"p2id.factory.v1"`. These values identify the required
+interfaces and behavior; they do not identify a particular deployment. Implementers use separate
+deployment namespaces and creation-code hashes for deterministic address derivation.
 
 ### Example
 
-The following vector uses the `p2id.vault.v2` bytecode hash and an illustrative factory address.
+The following vector uses the reference vault's bytecode hash and an illustrative factory address.
 
 ```
 type  = email (0)
@@ -132,8 +129,8 @@ identityHash = SHA-256( "p2id.identity.v1" ‖ 0x00 ‖ "test-9988@privy.io" )
              = 0xbcda0f09fa9732b2bfdea38199486b654a84e8e06085d7e364af8137f8d7deaf
 
 factory           = 0x1111111111111111111111111111111111111111      (illustrative)
-vaultInitCodeHash = 0x5d4eab8fb0d7ca20e288e2953f8029d9caca9d58cc098f67b8f88d9723328c1e
-p2id              = 0x892b8f40737C601C86e714c451492909f2ad1D1D
+vaultInitCodeHash = 0x59c2f7f1e9725340e25a45b122fae7d1e9cbd9c7b00dba6215ebaa67cfb691ef
+p2id              = 0xDea27e257491f6C1f7Ae85A08c1a1Fb15Ce27325
 ```
 
 The identity-hash preimage is 35 bytes:
@@ -215,8 +212,8 @@ its identity provider's account kinds onto these types; the Pvium verifier's map
 ## Chains and environments
 
 Address derivation contains no chain identifier. The reference factory uses the deterministic deployment
-proxy (`contracts/scripts/deploy-deterministic.ts`) with the scheme's deployment salt. Within
-one scheme and environment, identical factory addresses and vault bytecode produce identical
+proxy (`contracts/scripts/deploy-deterministic.ts`) with a fixed salt. Within one deployment
+and environment, identical factory addresses and vault bytecode produce identical
 vault addresses across supported chains. Chains with different CREATE2 semantics are outside
 the scope of this specification.
 
@@ -227,7 +224,7 @@ derived address are held at that same address after deployment.
 A deployment MAY define environments, each with its own factory configuration. Pvium defines
 `production` for mainnets and `sandbox` for testnets, with a separate identity-provider app for
 each environment. Address derivation requires a configured factory address for the selected
-scheme and environment. The Node SDK defaults to `production`.
+deployment and environment. The Node SDK defaults to `production`.
 
 ## P2ID URIs
 
@@ -242,7 +239,7 @@ value starts after the first `:` following the type and runs to the `?` or the e
 `?`, `#`, `%` and spaces in the value MUST be percent-encoded; `@`, `+`, `.` and `/` may appear
 unencoded. The URI has no authority component and MUST NOT include `//` after `p2id:`.
 The optional `chain` parameter selects the payment chain. Address derivation on that chain
-still requires the factory and bytecode hash for the selected scheme and environment.
+still requires the factory and bytecode hash for the selected deployment and environment.
 
 ```
 p2id:email:feminefa@example.com
@@ -254,7 +251,7 @@ p2id:email:feminefa@example.com?amount=25&token=USDC&chain=56&ref=inv-42
 The canonical form MUST use the lowercase type name from the table and the value normalised
 according to the address derivation rules. The value MUST be percent-decoded before hashing.
 The type and decoded value determine `identityHash`; deriving a vault address additionally
-requires the scheme and environment configuration. This specification defines no reverse
+requires the deployment's factory and bytecode hash. This specification defines no reverse
 mapping from a hash or vault address to an identity. The Node SDK also accepts `twitter` as
 an alias of `x` and recognises provider-specific names.
 

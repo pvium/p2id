@@ -16,7 +16,7 @@ async function fixture() {
     admin.address, [await verifier.getAddress(), await alternate.getAddress()],
   ]);
   const factory = await ethers.deployContract('PviumP2IdVaultFactory', [
-    admin.address, ethers.id('p2id.vault.v2'), await policy.getAddress(),
+    admin.address, ethers.id('pvium.vault.v1'), await policy.getAddress(),
     await verifier.getAddress(), 7 * DAY, DAY, 30 * DAY,
   ]);
   const vault = await ethers.getContractAt('P2IDVault', await factory.vaultFor(ID));

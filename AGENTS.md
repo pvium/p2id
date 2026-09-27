@@ -52,8 +52,9 @@ Install with `yarn install`, run scripts with `yarn <script>`, run binaries with
 - `P2ID.md` at the repo root is the protocol spec (address formula, identity type ids). The type
   table is append-only: never reassign or reuse an id; keep identity.nr, P2IDHash.sol, the SDK
   and the prover in step and update P2ID.md with them.
-- The identity-hash domain prefix is `p2id.identity.v1`. Prefixes are dot-separated
-  (`p2id.<component>.vN`).
+- The identity-hash domain prefix is `p2id.identity.v1`; it names the hash formula and never
+  changes with address-scheme or circuit versions (proofs stay valid across vault changes).
+  Prefixes are dot-separated (`p2id.<component>.vN`); the vault salt is the versionless `pvium.vault.v1`.
 - Tests and their fixtures live in each package's `test/` folder (`circuit/test`, `contracts/test`).
   Sample token/keys are in `circuit/test/fixtures`; `contracts/test/fixtures` is a copy refreshed by
   `yarn fixtures`. Run `sh test/e2e.sh` in `circuit/` after changing the circuit or script.

@@ -83,14 +83,16 @@ PREDICT=1 P2ID_ENV=production yarn hardhat run scripts/deploy-deterministic.ts  
 Prints the environment, the Privy keys it fetched (with their `kid`), the configuration, and the
 seven addresses it will have on every chain of that environment. Nothing is sent.
 
-## 3. Record the factory, which freezes the scheme
+## 3. Record the factory; the production one freezes the scheme
 
 Put each predicted `factory` into `sdks/node/p2id-core/src/p2id.json` under the current scheme
-(`p2id.vault.v2`), in `factories.sandbox` and `factories.production`, and commit. Preserve the
-existing `p2id.vault.v1` entry and its deployment records.
+(`pvium.vault.v1`), in `factories.sandbox` and `factories.production`, and commit.
 
-From this commit on, a change to `P2IDVault` fails the SDK build and the contract tests until a new
-scheme (`p2id.vault.v3`) is added; that is the guard against silently moving addresses. The deploy
+Recording the sandbox factory freezes nothing: while `production` is `null` the vault may still
+change, `node scripts/embed-p2id.mjs --update` refreshes the init-code hash, and the sandbox
+factory is re-predicted and re-recorded. From the commit that records the production factory, a
+change to `P2IDVault` fails the SDK build and the contract tests until a new scheme
+(a new scheme entry with its own salt name) is added; that is the guard against silently moving mainnet addresses. The deploy
 script also refuses to run if its configuration no longer produces the recorded factory.
 
 (Deploying to one testnet first and recording the address from its output is equivalent.)
@@ -194,4 +196,4 @@ On a testnet, with a test identity you control:
 | A verifier is found unsafe | `policy.approveVerifier(v, false)`: claims under it freeze, refunds still work | unchanged |
 | Protocol fees, or permissionless verifier registration (staking) | Deploy a new `IP2IDPolicy`, then `factory.proposePolicy` → wait the delay → `activatePolicy`. Fees stay capped at 1% by the vault and apply only to deposits made after the switch; the new policy's `distributeFee` decides who receives them (e.g. a verifier operator's share) | unchanged |
 | Vault, factory or launch-policy code changes before release | While no factory is recorded in `p2id.json`: rebuild, `embed-p2id.mjs --update`, deploy again (a superseded testnet record in `deployments/` must be moved aside first) | new addresses for the changed contracts |
-| Vault or factory code changes after release | Add `p2id.vault.v(N+1)` to `p2id.json`, deploy that stack, release the SDK; the old scheme stays derivable and claimable | **new scheme, new addresses** |
+| Vault or factory code changes after release | Add a new scheme entry (its own salt name) to `p2id.json`, deploy that stack, release the SDK; the old scheme stays derivable and claimable | **new scheme, new addresses** |

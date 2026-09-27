@@ -84,12 +84,12 @@ describe('Deterministic deployment: chain-agnostic P2ID addresses', function () 
   it('the scheme domain is an input to the addresses: it is the factory namespace and the salt', async () => {
     const [a] = await ethers.getSigners();
     const current = await deployStack(await params(), a);
-    const next = await deployStack({ ...(await params()), scheme: 'p2id.vault.v3' }, a);
+    const next = await deployStack({ ...(await params()), scheme: 'pvium.vault.v3' }, a);
     expect(next.factory).to.not.equal(current.factory);
     const f1 = await ethers.getContractAt('PviumP2IdVaultFactory', current.factory);
     const f2 = await ethers.getContractAt('PviumP2IdVaultFactory', next.factory);
     expect(await f1.nsHash()).to.equal(ethers.id(CURRENT_SCHEME));
-    expect(await f2.nsHash()).to.equal(ethers.id('p2id.vault.v3'));
+    expect(await f2.nsHash()).to.equal(ethers.id('pvium.vault.v3'));
     expect(await f1.vaultFor(EMAIL_COMMITMENT)).to.not.equal(await f2.vaultFor(EMAIL_COMMITMENT));
     await expect(deployStack({ ...(await params()), scheme: 'v1' }, a)).to.be.rejectedWith(/bad scheme/);
   });

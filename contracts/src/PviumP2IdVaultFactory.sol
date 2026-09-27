@@ -173,6 +173,11 @@ contract PviumP2IdVaultFactory is IP2IdVaultFactory {
     // ------------------------------------------------------------------ vaults
 
     /// @inheritdoc IP2IdVaultFactory
+    function p2idVersion() external pure returns (string memory) {
+        return "p2id.factory.v1";
+    }
+
+    /// @inheritdoc IP2IdVaultFactory
     function vaultFor(bytes32 identityHash) public view returns (address) {
         return
             address(

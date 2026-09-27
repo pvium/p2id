@@ -18,7 +18,7 @@ export interface StackParams {
    */
   owner: string;
   /**
-   * Address-scheme domain, e.g. "p2id.vault.v1" (the key in sdks/node/p2id-core/src/p2id.json). Its hash is
+   * Address-scheme domain, e.g. "pvium.vault.v1" (the key in sdks/node/p2id-core/src/p2id.json). Its hash is
    * both the factory's namespace and the deployment salt, so the scheme name is an input to every
    * address rather than only a label.
    */
@@ -48,7 +48,7 @@ export interface StackAddresses {
   factory: string;
 }
 
-export const CURRENT_SCHEME = 'p2id.vault.v2';
+export const CURRENT_SCHEME = 'pvium.vault.v1';
 
 /** Make sure the proxy exists. On a local Hardhat network it is installed; elsewhere it must already be there. */
 export async function ensureDeterministicDeployer(): Promise<void> {
@@ -167,7 +167,7 @@ export async function deployStack(
   log?: DeployLog,
 ): Promise<StackAddresses> {
   if (signer !== null) await ensureDeterministicDeployer();
-  if (!/^p2id\.vault\.v[1-9][0-9]*$/.test(p.scheme)) throw new Error(`bad scheme "${p.scheme}" (expected p2id.vault.vN)`);
+  if (!/^pvium\.vault\.v[1-9][0-9]*$/.test(p.scheme)) throw new Error(`bad scheme "${p.scheme}" (expected pvium.vault.vN)`);
   const nsHash = ethers.id(p.scheme);
   const salt = p.salt ?? nsHash;
   const relationsLib = await deployDeterministic(

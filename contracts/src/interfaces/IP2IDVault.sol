@@ -80,10 +80,12 @@ interface IP2IDVault {
     function withdrawFees(address verifier, address token) external returns (uint256 amount);
 
     // views
+    /// @notice P2ID vault interface version implemented by this contract.
+    function p2idVersion() external pure returns (string memory);
     function MAX_FEE_BPS() external view returns (uint16);
     /// @notice address(0): the token address standing for the native coin.
     function NATIVE() external view returns (address);
-    /// @notice keccak256 of the address scheme this vault was issued under, e.g. keccak256("p2id.vault.v1").
+    /// @notice keccak256 of the address scheme this vault was issued under, e.g. keccak256("pvium.vault.v1").
     function nsHash() external view returns (bytes32);
     function factory() external view returns (address);
     function policy() external view returns (address);

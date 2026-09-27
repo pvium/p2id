@@ -112,9 +112,8 @@ the deposit by chain, vault address and `depositId`. The contract does not store
 or interpret its contents. The `memo` URI parameter remains application text, not an onchain
 funding argument.
 
-These funding signatures apply to `p2id.vault.v2`. Its factory addresses must be configured
-before use. Existing `p2id.vault.v1` deployments use the earlier signatures without `ref`;
-use their original ABI when interacting with them.
+These funding signatures apply to `pvium.vault.v1`. Its factory addresses must be configured
+before use.
 
 ## Read balances
 
@@ -171,7 +170,7 @@ import { identityHash, p2idAddressForHash, p2idScheme, P2ID_SCHEME, IdentityType
 const hash = identityHash(IdentityType.Email, 'you@example.com'); // identity commitment and vault salt
 p2idAddressForHash(hash, { environment: 'sandbox' });        // same result as p2idAddress(...)
 
-P2ID_SCHEME;   // 'p2id.vault.v2', the current address scheme
+P2ID_SCHEME;   // 'pvium.vault.v1', the current address scheme
 p2idScheme();  // { identityDomain, vaultInitCodeHash, factories: { production, sandbox } }
 ```
 
@@ -181,7 +180,7 @@ separate factories.
 
 An address scheme fixes the identity domain, factory addresses and vault creation-code hash.
 Factory or vault bytecode changes require a new scheme. To derive an address under a previous
-scheme, pass its name, for example `scheme: 'p2id.vault.v1'`.
+scheme, pass its name, for example `scheme: 'pvium.vault.v1'`.
 See [P2ID.md](https://github.com/pvium/zkid/blob/main/P2ID.md) for the protocol specification.
 
 ## Solidity

@@ -10,7 +10,7 @@ yarn workspace @pvium/p2id-core test    # copies ../../../contracts/src, embeds 
 - `src/p2id.json` records every address scheme. While the current scheme has no factory recorded,
   `node scripts/embed-p2id.mjs --update` refreshes its vault creation-code hash from the Hardhat
   artifact. Once a factory is recorded the scheme is frozen and the build fails on drift; a vault
-  change then ships as the next `p2id.vault.vN`.
+  change then ships as a new scheme entry with its own salt name.
 - `contracts/` is generated from `../../../contracts/src` at build time. Never edit it here.
 - **Publishing.** `prepublishOnly` refuses to publish while the current scheme has no production
   factory, because `p2idAddress()` would throw for every user. Record it first (see `DEPLOYMENT.md`

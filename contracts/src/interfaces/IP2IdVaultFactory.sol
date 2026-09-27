@@ -7,6 +7,9 @@ pragma solidity ^0.8.27;
 interface IP2IdVaultFactory {
     event VaultDeployed(bytes32 indexed identityHash, address indexed vault);
 
+    /// @notice P2ID factory interface version implemented by this contract.
+    function p2idVersion() external pure returns (string memory);
+
     // ---- what vaults consult on every call; both change only through a timelock ----
     /// @notice The IP2IDPolicy deciding which verifiers are allowed and what (capped) fee applies.
     function policy() external view returns (address);

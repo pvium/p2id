@@ -16,7 +16,7 @@ export type P2IDEnvironment = 'production' | 'sandbox';
  *   p2id         = keccak256(0xff ‖ factory ‖ identityHash ‖ vaultInitCodeHash)[12..]
  *
  * `normalize` ASCII-lowercases every type except phone and wallet, and lowercases `0x…` wallet
- * addresses. A *scheme* (`p2id.vault.vN`) fixes the three constants: the identity domain, the
+ * addresses. A *scheme* (`pvium.vault.v1`, or a later `pvium.vault.vN`) fixes the three constants: the identity domain, the
  * vault creation-code hash and the factory. The factory is deployed through the deterministic
  * deployment proxy, so it is at the same address on every EVM chain: a P2ID address is
  * chain-agnostic, like any wallet address. (The vault contract still has to be deployed on each

@@ -1,8 +1,8 @@
 // Embed the P2ID address schemes from src/p2id.json into src/p2idConstants.ts. Run by `yarn build`;
 // the .ts is generated and gitignored. When the Hardhat artifact for P2IDVault is present
 // (../../contracts compiled), the CURRENT scheme's init code hash is recomputed from it and must
-// match. `--update` rewrites it, but only while that scheme is unreleased (no factory recorded):
-// a released scheme is frozen, and a vault change then needs a new p2id.vault.vN entry.
+// match. `--update` rewrites it, but only while that scheme is unreleased (no production factory
+// recorded): a released scheme is frozen, and a vault change then needs a new scheme entry with its own salt name (e.g. pvium.vault.v2).
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,7 +14,7 @@ const cfg = JSON.parse(readFileSync(jsonPath, 'utf8'));
 const current = cfg.schemes[cfg.current];
 if (!current) throw new Error(`src/p2id.json: current scheme "${cfg.current}" is not defined`);
 for (const [name, s] of Object.entries(cfg.schemes)) {
-  if (!/^p2id\.vault\.v[1-9][0-9]*$/.test(name)) throw new Error(`bad scheme name "${name}" (expected p2id.vault.vN)`);
+  if (!/^pvium\.vault\.v[1-9][0-9]*$/.test(name)) throw new Error(`bad scheme name "${name}" (expected pvium.vault.vN)`);
   if (!/^0x[0-9a-f]{64}$/.test(s.vaultInitCodeHash)) throw new Error(`${name}: bad vaultInitCodeHash`);
   for (const env of ['production', 'sandbox']) {
     const f = s.factories?.[env];
@@ -30,11 +30,12 @@ if (existsSync(artifact)) {
   const bytes = Uint8Array.from(hex.match(/../g).map((b) => parseInt(b, 16)));
   const actual = '0x' + Buffer.from(keccak_256(bytes)).toString('hex');
   if (actual !== current.vaultInitCodeHash) {
-    const released = Object.entries(current.factories).filter(([, f]) => f !== null);
-    if (released.length > 0) {
+    // Only a mainnet factory freezes a scheme: sandbox stacks are redeployed freely while the
+    // vault is still changing, and their recorded factory is simply re-predicted.
+    if (current.factories.production !== null) {
       throw new Error(
-        `P2IDVault now hashes to ${actual}, but ${cfg.current} is released (${released.map(([e, f]) => `${e} factory ${f}`).join(', ')}) and frozen at ` +
-          `${current.vaultInitCodeHash}. A vault change moves every address: add the next p2id.vault.vN scheme to src/p2id.json and make it current.`,
+        `P2IDVault now hashes to ${actual}, but ${cfg.current} is released (production factory ${current.factories.production}) and frozen at ` +
+          `${current.vaultInitCodeHash}. A vault change moves every address: add a new scheme entry with its own salt name (e.g. pvium.vault.v2) to src/p2id.json and make it current.`,
       );
     }
     if (!process.argv.includes('--update')) {

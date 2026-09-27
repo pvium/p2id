@@ -415,6 +415,11 @@ contract P2IDVault is IP2IDVault {
 
     // ------------------------------------------------------------------ views
 
+    /// @inheritdoc IP2IDVault
+    function p2idVersion() external pure returns (string memory) {
+        return "p2id.vault.v1";
+    }
+
     /// @notice The factory's current policy (replaceable there only through a timelock).
     function policy() public view returns (address) {
         return IP2IdVaultFactory(factory).policy();

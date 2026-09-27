@@ -54,7 +54,8 @@ global MAX_SIGNING_LEN: u32 = MAX_HEADER_B64_LEN + 1 + MAX_B64_LEN;
 global MAX_VALUE_LEN: u32 = 128;
 /// Unix timestamps are 10 digits until the year 2286.
 global TS_DIGITS: u32 = 10;
-/// Domain-separation prefix for `identity_hash`. Bump the version if the preimage layout changes.
+/// Domain-separation prefix for `identity_hash`. Named per hash formula; it does not change with
+/// address-scheme or circuit versions, so proofs never need regenerating for a vault change.
 global HASH_PREFIX: [u8; 16] = "p2id.identity.v1".as_bytes();
 
 // JSON fragments. Top-level claims use plain quotes; linked_accounts is a

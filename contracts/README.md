@@ -81,8 +81,8 @@ yarn fixtures   # after re-proving in ../circuit: refresh test fixtures + regene
   once to pay any identity.
   Every vault and factory funding method takes a final `bytes32 ref` argument (`bytes32(0)`
   for none). The vault emits it as the final field of `Funded`, without adding deposit storage.
-  References can be reused and do not affect claims, refunds or constraints. This ABI belongs
-  to `p2id.vault.v2`; existing `v1` contracts retain their original ABI without `ref`.
+  References can be reused and do not affect claims, refunds or constraints. This is the
+  `pvium.vault.v1` ABI.
 - `src/interfaces/` — `IPviumIdentity`, `IP2IDVault`, `IP2IdVaultFactory`, `IP2IDVerifier`, `IP2IDPolicy`: what developers import.
 - `test/fixtures/` — a proof, its public inputs and the vk hash for the sample email identity,
   copied from `../circuit/target/proof_email`, plus the real sample Privy token and Privy's public key.
@@ -132,10 +132,10 @@ may sign with.
 The full runbook, including configuration, prediction, verification and what to do afterwards, is
 in [DEPLOYMENT.md](../DEPLOYMENT.md). Run it once per chain **with identical values**. It deploys the two Honk libraries,
 `PviumZKVerifier`, `PviumIdentity`, `PviumVerifier` and `PviumP2IdVaultFactory`, skips anything
-already deployed, and prints the addresses. Record `factory` under the scheme (`p2id.vault.v2`) in
+already deployed, and prints the addresses. Record `factory` under the scheme (`pvium.vault.v1`) in
 `sdks/node/p2id-core/src/p2id.json`, which freezes that scheme; the SDK then derives every identity's address
 from constants alone, with no chain id. The scheme domain is the factory's namespace and the
-deployment salt, so a future `p2id.vault.v2` is a separate stack at separate addresses.
+deployment salt, so a later stack under another salt name is a separate stack at separate addresses.
 
 - Any different parameter (owner, Privy key, attester, delays, scheme) is a different stack at
   different addresses, so the addresses are a commitment to the configuration. The owner must be

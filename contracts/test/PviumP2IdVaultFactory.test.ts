@@ -46,6 +46,7 @@ describe('PviumP2IdVaultFactory', function () {
   });
 
   it('the vault address is derivable offline from the factory address and a constant', async () => {
+    expect(await factory.p2idVersion()).to.equal('p2id.factory.v1');
     expect(await factory.initCodeHash()).to.equal(
       ethers.keccak256((await ethers.getContractFactory('P2IDVault')).bytecode),
     );
@@ -57,6 +58,7 @@ describe('PviumP2IdVaultFactory', function () {
       .withArgs(ID, predicted);
     expect(await factory.isDeployed(ID)).to.equal(true);
     const vault = await ethers.getContractAt('P2IDVault', predicted);
+    expect(await vault.p2idVersion()).to.equal('p2id.vault.v1');
     expect(await vault.saltCommitment()).to.equal(ID);
     expect(await vault.nsHash()).to.equal(NS);
     expect(await vault.defaultVerifier()).to.equal(await idv.getAddress());

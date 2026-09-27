@@ -2,7 +2,7 @@ import { expect } from 'chai';
 import { ethers } from 'hardhat';
 import { time } from '@nomicfoundation/hardhat-network-helpers';
 
-const NS = ethers.id('p2id.vault.v1');
+const NS = ethers.id('pvium.vault.v1');
 const ID = ethers.id('identity');
 const DAY = 24 * 3600;
 const Z = ethers.ZeroHash;
