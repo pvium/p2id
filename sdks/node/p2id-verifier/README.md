@@ -6,6 +6,8 @@ types and hashing rules, then checks the attestation's zero-knowledge proof loca
 bundled circuit verification key and configured trusted signing keys. `p2id-core` is installed
 automatically as this package's runtime dependency.
 
+Learn more about P2ID in the [P2ID protocol specification](https://github.com/pvium/zkid/blob/main/P2ID.md).
+
 ## Install
 
 ```sh
