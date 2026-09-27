@@ -1,18 +1,24 @@
 name: CI
 
-# Runs only when something a job tests changed; docs, the spec and the other workflows skip CI.
-# `changes` then narrows further so each job runs only for its own paths.
+# Runs on pushes to develop and main, and on PRs, but only when something a job tests changed;
+# docs, the spec and the other workflows skip CI. `changes` then narrows further so each job runs
+# only for its own paths. Keep the two path lists identical.
 on:
-  pull_request:
-    paths: &ci-paths
+  push:
+    branches: [main, develop]
+    paths:
       - 'circuit/**'
       - 'contracts/**'
       - 'http-prover/**'
       - 'sdks/node/**'
       - '.github/workflows/ci.yml'
-  push:
-    branches: [main]
-    paths: *ci-paths
+  pull_request:
+    paths:
+      - 'circuit/**'
+      - 'contracts/**'
+      - 'http-prover/**'
+      - 'sdks/node/**'
+      - '.github/workflows/ci.yml'
 
 # Pull requests from forks get no secrets; nothing here needs any.
 permissions:
