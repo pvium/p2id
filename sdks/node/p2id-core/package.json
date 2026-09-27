@@ -23,7 +23,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/pvium/zkid.git"
+    "url": "git+https://github.com/pvium/p2id.git"
   },
   "scripts": {
     "build": "sh scripts/sync-contracts.sh && node scripts/embed-p2id.mjs && tsc -p tsconfig.esm.json && tsc -p tsconfig.cjs.json && node scripts/finalize-dist.mjs",
