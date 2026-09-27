@@ -12,6 +12,7 @@ yarn workspace @pvium/p2id-core test    # copies ../../../contracts/src, embeds 
   artifact. Once a factory is recorded the scheme is frozen and the build fails on drift; a vault
   change then ships as a new scheme entry with its own salt name.
 - `contracts/` is generated from `../../../contracts/src` at build time. Never edit it here.
-- **Publishing.** `prepublishOnly` refuses to publish while the current scheme has no production
-  factory, because `p2idAddress()` would throw for every user. Record it first (see `DEPLOYMENT.md`
-  at the repository root). Publish this package before `@pvium/p2id-verifier`, which depends on it.
+- **Publishing.** The SDK may be published before a production factory is recorded. In that state,
+  `p2idAddress()` rejects production derivation unless the caller supplies `factory` explicitly;
+  sandbox derivation works when its factory is recorded. Publish this package before
+  `@pvium/p2id-verifier`, which depends on it.

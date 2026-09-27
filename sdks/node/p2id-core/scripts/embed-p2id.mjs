@@ -47,12 +47,6 @@ if (existsSync(artifact)) {
   }
 }
 
-// Publishing guard (prepublishOnly): a release without a production factory would make
-// p2idAddress() throw for every user, so it must not reach npm.
-if (process.argv.includes('--require-production') && current.factories.production === null) {
-  throw new Error(`cannot publish: ${cfg.current} has no production factory recorded in src/p2id.json (see DEPLOYMENT.md)`);
-}
-
 const schemes = Object.fromEntries(
   Object.entries(cfg.schemes).map(([name, s]) => [name, { identityDomain: s.identityDomain, vaultInitCodeHash: s.vaultInitCodeHash, factories: s.factories }]),
 );

@@ -28,7 +28,7 @@
   "scripts": {
     "build": "sh scripts/sync-contracts.sh && node scripts/embed-p2id.mjs && tsc -p tsconfig.esm.json && tsc -p tsconfig.cjs.json && node scripts/finalize-dist.mjs",
     "test": "yarn build && node --test --import tsx test/*.test.ts",
-    "prepublishOnly": "node scripts/embed-p2id.mjs --require-production && yarn test"
+    "prepublishOnly": "yarn test"
   },
   "dependencies": {
     "@noble/hashes": "^1.5.0"
