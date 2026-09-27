@@ -4,6 +4,8 @@ Derive deterministic EVM vault addresses from email addresses, social handles an
 identities. Addresses can receive funds before the recipient registers or the vault is deployed.
 Claims pay the wallet bound by an accepted identity proof.
 
+Learn more about P2ID in the [P2ID protocol specification](https://github.com/pvium/zkid/blob/main/P2ID.md).
+
 The package includes identity hashing, address derivation and Solidity sources. For off-chain
 proof verification, use
 [`@pvium/p2id-verifier`](https://www.npmjs.com/package/@pvium/p2id-verifier).
