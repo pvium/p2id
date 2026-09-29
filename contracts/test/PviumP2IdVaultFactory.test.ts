@@ -3,8 +3,10 @@ import { ethers } from 'hardhat';
 import { time } from '@nomicfoundation/hardhat-network-helpers';
 import { readFileSync } from 'fs';
 import { join } from 'path';
+import { CURRENT_SCHEME } from '../scripts/lib/deterministic';
 
-const NS = ethers.id('p2id.email.v1');
+// The namespace the deploy library uses, so a mismatch between it and the SDK record is caught here.
+const NS = ethers.id(CURRENT_SCHEME);
 const DAY = 86400;
 const ID = ethers.id('identity-a');
 
@@ -20,7 +22,7 @@ describe('PviumP2IdVaultFactory', function () {
 
   /** Offline derivation: keccak256(0xff ‖ factory ‖ identityHash ‖ keccak256(creationCode)). */
   async function deriveOffline(identityHash: string) {
-    const creationCode = (await ethers.getContractFactory('P2IDVault'))
+    const creationCode = (await ethers.getContractFactory('PviumP2IDVaultProxy'))
       .bytecode;
     return ethers.getCreate2Address(
       await factory.getAddress(),
@@ -48,7 +50,7 @@ describe('PviumP2IdVaultFactory', function () {
   it('the vault address is derivable offline from the factory address and a constant', async () => {
     expect(await factory.p2idVersion()).to.equal('p2id.factory.v1');
     expect(await factory.initCodeHash()).to.equal(
-      ethers.keccak256((await ethers.getContractFactory('P2IDVault')).bytecode),
+      ethers.keccak256((await ethers.getContractFactory('PviumP2IDVaultProxy')).bytecode),
     );
     const predicted = await factory.vaultFor(ID);
     expect(predicted).to.equal(await deriveOffline(ID));
@@ -71,9 +73,11 @@ describe('PviumP2IdVaultFactory', function () {
 
   it('the init code hash the Node SDK ships (sdks/node/p2id-core/src/p2id.json) matches this build', async () => {
     const sdk = JSON.parse(readFileSync(join(__dirname, '..', '..', 'sdks', 'node', 'p2id-core', 'src', 'p2id.json'), 'utf8'));
+    expect(sdk.current, 'deploy library and SDK record disagree on the deployment scheme').to.equal(CURRENT_SCHEME);
+    expect(await factory.nsHash()).to.equal(ethers.id(sdk.current));
     expect(await factory.initCodeHash()).to.equal(
       sdk.schemes[sdk.current].vaultInitCodeHash,
-      'vault bytecode changed: run node sdks/node/p2id-core/scripts/embed-p2id.mjs --update, or add the next p2id.vault.vN if this scheme is released',
+      'vault bytecode changed: run node sdks/node/p2id-core/scripts/embed-p2id.mjs --update, or add the next pvium.vault.vN entry if this scheme is released',
     );
   });
 
@@ -86,7 +90,8 @@ describe('PviumP2IdVaultFactory', function () {
   });
 
   it('initialize is factory-only and runs once', async () => {
-    const loose = await ethers.deployContract('P2IDVault'); // deployer is an EOA, so it is the "factory"
+    const [deployer] = await ethers.getSigners();
+    const loose = await ethers.deployContract('P2IDVault', [deployer.address]); // an EOA as the "factory"
     await expect(
       loose.connect(payer).initialize(NS, ID, DAY, 30 * DAY),
     ).to.be.revertedWithCustomError(loose, 'NotFactory');

@@ -6,7 +6,10 @@
   "scripts": {
     "compile": "hardhat compile",
     "test": "hardhat test",
-    "fixtures": "sh scripts/refresh-fixtures.sh"
+    "fixtures": "sh scripts/refresh-fixtures.sh",
+    "verify": "hardhat run scripts/verify-deployments.ts",
+    "layout": "hardhat run scripts/check-storage-layout.ts",
+    "deploy:implementation": "hardhat run scripts/deploy-vault-implementation.ts"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-chai-matchers": "^2.0.0",

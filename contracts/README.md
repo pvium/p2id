@@ -68,21 +68,37 @@ yarn fixtures   # after re-proving in ../circuit: refresh test fixtures + regene
   which verifiers are allowed, what fee applies, and how collected fees are distributed. The launch policy is an owner-managed
   allowlist with no fee. Permissionless, stake-based verifier registration and protocol fees are
   later policies; switching to one never changes the vault or any address.
-- `src/PviumP2IdVaultFactory.sol` — deploys vaults with CREATE2 salted by identity hash, and
-  points them at the current policy and default verifier. Both change only through a timelock:
+- `src/PviumP2IdVaultFactory.sol` — deploys `PviumP2IDVaultProxy` with CREATE2 salted by identity hash,
+  initializes it in the same transaction, and provides policy and default-verifier settings.
+  Both settings change through a timelock:
   the policy after `policyChangeDelay` (7 days by default), the default verifier after a fixed
   14 days (`DEFAULT_VERIFIER_DELAY`), since direct transfers follow it and have no refund path.
-  The vault never lets the policy freeze claims through the current default, so during that
-  notice anyone can sweep. So a
-  compromised owner can only announce changes that stay visible on chain for the whole delay. An
-  identity's vault address is `keccak256(0xff ‖ factory ‖ identityHash ‖ keccak256(P2IDVault creationCode))`
+  An identity's vault address is the low 160 bits of
+  `keccak256(0xff ‖ factory ‖ identityHash ‖ keccak256(PviumP2IDVaultProxy creationCode))`
   (`vaultFor`, `initCodeHash`), so payers can derive it offline and pay before the vault exists.
   `fund()` / `fundWith()` deploy on first use and fund on the caller's behalf: approve the factory
-  once to pay any identity.
+  for the requested token amount. The constructor deploys the original `P2IDVault(factory)`,
+  exposed as `initialImplementation`. `baseImplementation` is the current starting implementation.
+  Owner-only `deployVaultImplementation(creationCode, makeDefault)` uses CREATE2 and immediately
+  proposes registration. After 14 days, `registerImplementation()` registers the target and, when
+  requested, selects it for future proxies. Existing vaults opt in through proof-authorized
+  `upgradeTo`. Manual `proposeImplementation` remains an opt-in-only registration path.
+  Deterministic deployment and default selection check the target's raw `factory()` binding;
+  manual registration checks code presence. Review storage compatibility and behavior for all targets.
+  Revocation blocks future selection but does not disable installed code; the original implementation
+  and current default cannot be revoked.
   Every vault and factory funding method takes a final `bytes32 ref` argument (`bytes32(0)`
   for none). The vault emits it as the final field of `Funded`, without adding deposit storage.
   References can be reused and do not affect claims, refunds or constraints. This is the
   `pvium.vault.v1` ABI.
+- `storage/P2IDVault.layout.json` — the original vault storage layout.
+  `yarn layout` checks the base against this snapshot; `CANDIDATE=<Contract> yarn layout`
+  checks candidate storage, the owner-proof hook ABI, reserved function signatures and selected
+  source-level hazards. These checks do not establish behavioral safety or compatibility with
+  storage appended by other versions. `UPDATE=1 yarn layout` rewrites the snapshot; do so only
+  before deployment.
+- `scripts/deploy-vault-implementation.ts` — deterministic deployment and registration activation;
+  see [the deployment workflow](../DEPLOYMENT.md#deterministic-vault-implementations).
 - `src/interfaces/` — `IPviumIdentity`, `IP2IDVault`, `IP2IdVaultFactory`, `IP2IDVerifier`, `IP2IDPolicy`: what developers import.
 - `test/fixtures/` — a proof, its public inputs and the vk hash for the sample email identity,
   copied from `../circuit/target/proof_email`, plus the real sample Privy token and Privy's public key.
@@ -157,8 +173,12 @@ deployment salt, so a later stack under another salt name is a separate stack at
 - Fee-on-transfer tokens work: a deposit records what actually arrived, and the payee bears the
   outbound fee.
 - Tokens that return no data, `true`, or revert on failure all work; a `false` return reverts.
-- **Rebasing-down tokens are unsupported.** If the balance falls below what the vault's records
-  say, a default sweep can consume deposits while paying less than their recorded amounts.
+- **A supported token's vault balance must never decrease except through the vault's own
+  transfers.** Negative rebases, confiscation or blacklist burns, and any other balance
+  contraction break the per-deposit refund guarantee: if the balance falls below what the vault's
+  records say, a sweep can consume deposits while paying less than their recorded amounts.
+- Sweeps visit at most `MAX_SWEEP_PAGE` (100) deposit records per call; larger buckets are
+  swept in pages, and `bucketDepositIds` is paged (`offset`, `limit`) for the same reason.
 - **Blocklisting tokens** (USDC-style): if the owner wallet is blocklisted, default-bucket sweeps
   revert until a newer proof moves the owner to another linked wallet. Constrained sweeps pay the
   wallet in their own proof.

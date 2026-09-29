@@ -1,6 +1,6 @@
 {
   "name": "@pvium/p2id-core",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "P2ID protocol core: identity types and hashing, chain-agnostic P2ID address derivation, and the Solidity sources",
   "license": "MIT",
   "type": "module",

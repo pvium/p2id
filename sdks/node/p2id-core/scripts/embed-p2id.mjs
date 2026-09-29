@@ -1,5 +1,5 @@
 // Embed the P2ID address schemes from src/p2id.json into src/p2idConstants.ts. Run by `yarn build`;
-// the .ts is generated and gitignored. When the Hardhat artifact for P2IDVault is present
+// the .ts is generated and gitignored. When the Hardhat artifact for the vault proxy is present
 // (../../contracts compiled), the CURRENT scheme's init code hash is recomputed from it and must
 // match. `--update` rewrites it, but only while that scheme is unreleased (no production factory
 // recorded): a released scheme is frozen, and a vault change then needs a new scheme entry with its own salt name (e.g. pvium.vault.v2).
@@ -23,7 +23,7 @@ for (const [name, s] of Object.entries(cfg.schemes)) {
   }
 }
 
-const artifact = join(root, '..', '..', '..', 'contracts', 'artifacts', 'src', 'P2IDVault.sol', 'P2IDVault.json');
+const artifact = join(root, '..', '..', '..', 'contracts', 'artifacts', 'src', 'PviumP2IDVaultProxy.sol', 'PviumP2IDVaultProxy.json');
 if (existsSync(artifact)) {
   const { bytecode } = JSON.parse(readFileSync(artifact, 'utf8'));
   const hex = bytecode.startsWith('0x') ? bytecode.slice(2) : bytecode;
@@ -34,12 +34,12 @@ if (existsSync(artifact)) {
     // vault is still changing, and their recorded factory is simply re-predicted.
     if (current.factories.production !== null) {
       throw new Error(
-        `P2IDVault now hashes to ${actual}, but ${cfg.current} is released (production factory ${current.factories.production}) and frozen at ` +
+        `the vault proxy now hashes to ${actual}, but ${cfg.current} is released (production factory ${current.factories.production}) and frozen at ` +
           `${current.vaultInitCodeHash}. A vault change moves every address: add a new scheme entry with its own salt name (e.g. pvium.vault.v2) to src/p2id.json and make it current.`,
       );
     }
     if (!process.argv.includes('--update')) {
-      throw new Error(`P2IDVault artifact hashes to ${actual} but ${cfg.current} says ${current.vaultInitCodeHash}; run node scripts/embed-p2id.mjs --update`);
+      throw new Error(`vault proxy artifact hashes to ${actual} but ${cfg.current} says ${current.vaultInitCodeHash}; run node scripts/embed-p2id.mjs --update`);
     }
     current.vaultInitCodeHash = actual;
     writeFileSync(jsonPath, JSON.stringify(cfg, null, 2) + '\n');

@@ -118,8 +118,8 @@ normalizedValue = "test-9988@privy.io"
 
 identityHash = 0xbcda0f09fa9732b2bfdea38199486b654a84e8e06085d7e364af8137f8d7deaf
 factory      = 0x1111111111111111111111111111111111111111
-vaultInitCodeHash = 0x59c2f7f1e9725340e25a45b122fae7d1e9cbd9c7b00dba6215ebaa67cfb691ef
-p2idAddress  = 0xDea27e257491f6C1f7Ae85A08c1a1Fb15Ce27325
+vaultInitCodeHash = 0x4c76d638c6e156d8a95617576f1dcac6189257696607110346ba4f5fe2932ca6
+p2idAddress  = 0xA02E9cB3BAcA8a1A3577CAA6b081Eef55C128e7e
 ```
 
 ## Contract versions

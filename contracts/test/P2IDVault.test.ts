@@ -70,7 +70,7 @@ describe('P2IDVault', function () {
     await vault.sweep(V, await token.getAddress(), 0);
     expect(await token.balanceOf(ownerWallet.address)).to.equal(100n);
     expect(await vault.bucketDepositCount(V, Z, await token.getAddress())).to.equal(1n);
-    expect(gas).to.be.lessThan(150_000n);
+    expect(gas).to.be.lessThan(160_000n); // one proxy delegatecall on top of the sweep itself
   });
 
   it('bounded sweep walks the bucket in pages via the cursor', async () => {
@@ -259,6 +259,43 @@ describe('P2IDVault', function () {
     await expect(vault.sweepBucket(V, constraintOf(c), await token.getAddress(), proofFor(spammer.address, 1000), 0))
       .to.be.revertedWithCustomError(vault, 'ProofTooOld');
     await vault.sweepBucket(V, constraintOf(c), await token.getAddress(), proofFor(ownerWallet.address, 2000), 0);
+    expect(await token.balanceOf(ownerWallet.address)).to.equal(10n);
+  });
+
+  it('a sweep visits at most MAX_SWEEP_PAGE records, so any bucket can be swept in pages', async () => {
+    const T = await token.getAddress();
+    expect(await vault.MAX_SWEEP_PAGE()).to.equal(100n);
+    for (let i = 0; i < 120; i++) await fundAs(alice, token, 1n);
+    await vault.refreshProof(V, proofFor(ownerWallet.address, 1000));
+    const [, consumed] = await vault.sweep.staticCall(V, T, 0);
+    expect(consumed).to.equal(100n); // 0 means one full page, not everything
+    await vault.sweep(V, T, 0);
+    expect(await vault.bucketCursor(V, Z, T)).to.equal(100n);
+    await vault.sweep(V, T, 1_000_000); // above the cap: capped, not reverted
+    expect(await vault.bucketCursor(V, Z, T)).to.equal(120n);
+    expect(await token.balanceOf(ownerWallet.address)).to.equal(120n);
+  });
+
+  it('bucketDepositIds is paged', async () => {
+    const T = await token.getAddress();
+    for (let i = 0; i < 5; i++) await fundAs(alice, token, 1n);
+    expect(await vault.bucketDepositIds(V, Z, T, 0, 0)).to.deep.equal([0n, 1n, 2n, 3n, 4n]);
+    expect(await vault.bucketDepositIds(V, Z, T, 1, 2)).to.deep.equal([1n, 2n]);
+    expect(await vault.bucketDepositIds(V, Z, T, 3, 10)).to.deep.equal([3n, 4n]);
+    expect(await vault.bucketDepositIds(V, Z, T, 5, 0)).to.deep.equal([]);
+    expect(await vault.bucketDepositCount(V, Z, T)).to.equal(5n);
+  });
+
+  it('a verifier whose revision() cannot be read gets no proofless claims and no new proofs', async () => {
+    await fundAs(alice, token, 10n);
+    await vault.refreshProof(V, proofFor(ownerWallet.address, 1000));
+    await idv.breakRevision(true);
+    await expect(vault.sweep(V, await token.getAddress(), 0)).to.be.revertedWithCustomError(vault, 'OwnerRevoked');
+    await expect(vault.sweepUntracked(await token.getAddress())).to.be.revertedWithCustomError(vault, 'OwnerRevoked');
+    await expect(vault.refreshProof(V, proofFor(ownerWallet.address, 1001))).to.be.revertedWithCustomError(vault, 'RevisionUnavailable');
+    await expect(vault.connect(alice).refund(0)).to.be.revertedWithCustomError(vault, 'RefundNotReady'); // refunds never ask
+    await idv.breakRevision(false);
+    await vault.sweep(V, await token.getAddress(), 0);
     expect(await token.balanceOf(ownerWallet.address)).to.equal(10n);
   });
 

@@ -4,33 +4,40 @@ pragma solidity ^0.8.27;
 import {IP2IdVaultFactory} from "./interfaces/IP2IdVaultFactory.sol";
 import {IP2IDPolicy} from "./interfaces/IP2IDPolicy.sol";
 import {P2IDVault} from "./P2IDVault.sol";
+import {PviumP2IDVaultProxy} from "./PviumP2IDVaultProxy.sol";
+import {IP2IDVault} from "./interfaces/IP2IDVault.sol";
 
 /// @title PviumP2IdVaultFactory
-/// @notice Deploys P2IDVaults with CREATE2, salted by identity hash, and points them at the
-///         current policy (which verifiers are allowed, what capped fee applies) and default verifier. A vault takes no constructor arguments
-///         (the factory calls `initialize` right after `new`), so its creation code is a constant
-///         and an identity's vault address is
-///         `keccak256(0xff ‖ factory ‖ identityHash ‖ keccak256(creationCode))`, computable
-///         anywhere from two constants. Funds sent to that address before deployment are swept
-///         by the owner after deployment (see P2IDVault: bare transfers are untracked and irrevocable).
-/// @dev Everything expected to evolve is in the policy (IP2IDPolicy), so this factory and the vault
-///      code, which fix every P2ID address, never have to change. Both move only through a
-///      timelock (propose, wait, activate): the policy after `policyChangeDelay`, the default
-///      verifier after DEFAULT_VERIFIER_DELAY, a fixed 14 days. Direct transfers follow the default
-///      verifier and have no refund path, so a change to it gets the longer notice: anyone who
-///      objects can sweep first, and the vault guarantees nothing can freeze their claim meanwhile.
-///      What a policy can do is bounded by the vault (fee cap, fees fixed at funding, no fee on
-///      refunds, never redirecting a payout, never blocking claims through the default verifier).
+/// @notice Deploys one PviumP2IDVaultProxy per identity with CREATE2 (salt = identityHash) and
+///         supplies policy and default-verifier settings. The proxy takes no constructor arguments;
+///         its address is the low 160 bits of keccak256(0xff || factory || identityHash || initCodeHash()).
+/// @dev The policy and the default verifier change only through a timelock (propose, wait,
+///      activate): the policy after `policyChangeDelay`, the default verifier after the fixed
+///      DEFAULT_VERIFIER_DELAY. Implementation registration also has a timelock; revocation is
+///      immediate and does not change existing proxies. Vault upgrades preserve their addresses.
+///      Manual registration checks code presence; deterministic deployment also checks factory binding.
+///      Neither path verifies storage compatibility or implementation behavior.
 contract PviumP2IdVaultFactory is IP2IdVaultFactory {
     bytes32 public immutable nsHash;
+    /// @notice Starting implementation for new proxies, changed only by a delayed default proposal.
+    address public baseImplementation;
+    /// @notice Original implementation, kept registered as a fallback.
+    address public immutable initialImplementation;
+    bytes32 public constant IMPLEMENTATION_SALT = keccak256("pvium.vault.implementation.v1");
+    bool public proposedImplementationMakeDefault;
+    /// @notice Target allowlist checked by PviumP2IDVaultProxy.upgradeTo.
+    mapping(address implementation => bool) public isRegisteredImplementation;
+    address public proposedImplementation;
+    /// @notice Earliest time the proposed implementation can be registered; 0 when nothing is proposed.
+    uint64 public proposedImplementationEta;
     uint64 public immutable minRefundWindow;
     uint64 public immutable maxRefundWindow;
 
-    /// @notice Proposes and activates policy / default-verifier changes (a Pvium multisig). Two-step transfer.
+    /// @notice Administrative owner for settings and implementation registration; transferred in two steps.
     address public owner;
     address public pendingOwner;
 
-    /// @notice The policy every vault consults. Changes only via the timelock below.
+    /// @notice Policy address returned to vaults; changed through proposePolicy/activatePolicy.
     address public policy;
     /// @notice Verifier used when a payer does not choose one. Changes only via the timelock below.
     address public defaultVerifier;
@@ -67,6 +74,8 @@ contract PviumP2IdVaultFactory is IP2IdVaultFactory {
     error TokenBalanceQueryFailed();
     error NothingReceived();
     error UnexpectedValue();
+    error InvalidImplementation();
+    error ImplementationProposalPending();
 
     constructor(
         address _owner,
@@ -91,6 +100,113 @@ contract PviumP2IdVaultFactory is IP2IdVaultFactory {
         emit PolicyActivated(_policy);
         defaultVerifier = _defaultVerifier;
         emit DefaultVerifierActivated(_defaultVerifier);
+        address base = address(new P2IDVault(address(this)));
+        baseImplementation = base;
+        initialImplementation = base;
+        isRegisteredImplementation[base] = true;
+        emit ImplementationRegistered(base);
+    }
+
+    // ------------------------------------------------------------------ vault implementations (timelocked)
+
+    /// @notice Predict the CREATE2 address from full creation code, including constructor arguments.
+    function implementationFor(bytes32 creationCodeHash) public view returns (address) {
+        return address(uint160(uint256(keccak256(abi.encodePacked(
+            bytes1(0xff), address(this), IMPLEMENTATION_SALT, creationCodeHash
+        )))));
+    }
+
+    /// @notice Deploy full creation code with CREATE2 and propose registration in the same transaction.
+    /// @dev Reuses existing code. An identical pending proposal keeps its ETA; a different proposal
+    ///      must first be cancelled. makeDefault affects new proxies only, after registration.
+    function deployVaultImplementation(bytes memory creationCode, bool makeDefault)
+        external onlyOwner returns (address implementation)
+    {
+        if (creationCode.length == 0) revert InvalidImplementation();
+        implementation = implementationFor(keccak256(creationCode));
+        if (implementation.code.length == 0) {
+            bytes32 salt = IMPLEMENTATION_SALT;
+            address deployed;
+            assembly {
+                deployed := create2(0, add(creationCode, 32), mload(creationCode), salt)
+            }
+            if (deployed != implementation || deployed.code.length == 0) revert InvalidImplementation();
+            emit ImplementationDeployed(implementation, keccak256(creationCode));
+        }
+        _checkFactoryBinding(implementation);
+        if (proposedImplementationEta != 0) {
+            if (proposedImplementation != implementation || proposedImplementationMakeDefault != makeDefault) {
+                revert ImplementationProposalPending();
+            }
+            return implementation;
+        }
+        if (isRegisteredImplementation[implementation] && (!makeDefault || baseImplementation == implementation)) {
+            return implementation;
+        }
+        _proposeImplementation(implementation, makeDefault);
+    }
+
+    /// @notice Propose an opt-in upgrade target. Replaces a pending proposal and resets its delay.
+    function proposeImplementation(address implementation) external onlyOwner {
+        if (implementation.code.length == 0 || isRegisteredImplementation[implementation]) revert InvalidImplementation();
+        _proposeImplementation(implementation, false);
+    }
+
+    /// @notice Propose a registered target as the starting implementation for future proxies.
+    function proposeDefaultImplementation(address implementation) external onlyOwner {
+        if (!isRegisteredImplementation[implementation] || implementation == baseImplementation) revert InvalidImplementation();
+        _checkFactoryBinding(implementation);
+        _proposeImplementation(implementation, true);
+    }
+
+    function _proposeImplementation(address implementation, bool makeDefault) private {
+        proposedImplementation = implementation;
+        proposedImplementationMakeDefault = makeDefault;
+        proposedImplementationEta = uint64(block.timestamp) + DEFAULT_VERIFIER_DELAY;
+        emit ImplementationProposed(implementation, proposedImplementationEta);
+        emit ImplementationDefaultProposed(implementation, makeDefault, proposedImplementationEta);
+    }
+
+    function _checkFactoryBinding(address implementation) private view {
+        (bool ok, bytes memory result) = implementation.staticcall(abi.encodeWithSignature("factory()"));
+        if (!ok || result.length != 32 || abi.decode(result, (bytes32)) != bytes32(uint256(uint160(address(this))))) {
+            revert InvalidImplementation();
+        }
+    }
+
+    function cancelImplementationProposal() external onlyOwner {
+        if (proposedImplementationEta == 0) revert NothingProposed();
+        emit ImplementationProposalCancelled(proposedImplementation);
+        delete proposedImplementation;
+        delete proposedImplementationEta;
+        delete proposedImplementationMakeDefault;
+    }
+
+    function registerImplementation() external onlyOwner {
+        uint64 eta = proposedImplementationEta;
+        if (eta == 0) revert NothingProposed();
+        if (block.timestamp < eta) revert TimelockNotElapsed(eta);
+        address implementation = proposedImplementation;
+        bool makeDefault = proposedImplementationMakeDefault;
+        if (implementation.code.length == 0) revert InvalidImplementation();
+        if (makeDefault) _checkFactoryBinding(implementation);
+        delete proposedImplementation;
+        delete proposedImplementationEta;
+        delete proposedImplementationMakeDefault;
+        isRegisteredImplementation[implementation] = true;
+        emit ImplementationRegistered(implementation);
+        if (makeDefault) {
+            baseImplementation = implementation;
+            emit DefaultImplementationActivated(implementation);
+        }
+    }
+
+    /// @notice Remove a registered target immediately, except the current default and original implementation.
+    ///         This changes the registry, not the implementation stored in existing proxies.
+    function revokeImplementation(address implementation) external onlyOwner {
+        if (implementation == baseImplementation || implementation == initialImplementation || !isRegisteredImplementation[implementation]) revert InvalidImplementation();
+        isRegisteredImplementation[implementation] = false;
+        emit ImplementationRevoked(implementation);
     }
 
     // ------------------------------------------------------------------ policy (timelocked)
@@ -111,8 +227,7 @@ contract PviumP2IdVaultFactory is IP2IdVaultFactory {
         delete proposedPolicyEta;
     }
 
-    /// @notice Switch every vault to the proposed policy once the delay has elapsed. The new policy
-    ///         must allow the current default verifier, so bare transfers stay claimable.
+    /// @notice Set policy after the proposal delay, provided it approves the current default verifier.
     function activatePolicy() external onlyOwner {
         uint64 eta = proposedPolicyEta;
         if (eta == 0) revert NothingProposed();
@@ -144,8 +259,8 @@ contract PviumP2IdVaultFactory is IP2IdVaultFactory {
         delete proposedDefaultEta;
     }
 
-    /// @notice Make the proposed verifier the default once the delay has elapsed. The policy must
-    ///         still allow it (a revocation in the meantime cancels it in effect).
+    /// @notice Set the proposed default after its delay, provided the current policy approves it.
+    ///         Failed approval leaves the proposal pending.
     function activateDefaultVerifier() external onlyOwner {
         uint64 eta = proposedDefaultEta;
         if (eta == 0) revert NothingProposed();
@@ -201,18 +316,17 @@ contract PviumP2IdVaultFactory is IP2IdVaultFactory {
         return vaultFor(identityHash).code.length != 0;
     }
 
-    /// @notice keccak256 of the P2IDVault creation code (no constructor arguments), for offline derivation.
+    /// @notice keccak256 of the vault proxy's creation code (no constructor arguments), for offline derivation.
     function initCodeHash() public pure returns (bytes32) {
-        return keccak256(type(P2IDVault).creationCode);
+        return keccak256(type(PviumP2IDVaultProxy).creationCode);
     }
 
     /// @inheritdoc IP2IdVaultFactory
     function deploy(bytes32 identityHash) public returns (address vault) {
         vault = vaultFor(identityHash);
         if (vault.code.length != 0) return vault;
-        P2IDVault v = new P2IDVault{salt: identityHash}();
-        v.initialize(nsHash, identityHash, minRefundWindow, maxRefundWindow);
-        vault = address(v);
+        vault = address(new PviumP2IDVaultProxy{salt: identityHash}());
+        IP2IDVault(vault).initialize(nsHash, identityHash, minRefundWindow, maxRefundWindow);
         emit VaultDeployed(identityHash, vault);
     }
 
@@ -274,8 +388,8 @@ contract PviumP2IdVaultFactory is IP2IdVaultFactory {
             return (vault, P2IDVault(payable(vault)).fundFor{value: msg.value}(msg.sender, verifier, token, amount, constraint, refundWindow, ref));
         }
         if (msg.value != 0) revert UnexpectedValue();
-        // Collect from the payer (credit what actually arrived, for fee-on-transfer tokens),
-        // then let the vault pull exactly that and record the payer as funder.
+        // Measure the factory's balance increase, approve that amount to the vault, and record
+        // msg.sender as funder. The vault measures its own balance increase during the second transfer.
         uint256 before = _balanceOf(token);
         _callToken(
             token,

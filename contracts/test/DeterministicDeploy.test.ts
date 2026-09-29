@@ -3,7 +3,7 @@ import { ethers, network } from 'hardhat';
 import { createPublicKey } from 'crypto';
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { CURRENT_SCHEME, deployDeterministic, deployStack, ensureDeterministicDeployer, predictStack, stackStatus, type StackParams } from '../scripts/lib/deterministic';
+import { CURRENT_SCHEME, checkStack, deployDeterministic, deployStack, ensureDeterministicDeployer, predictStack, stackStatus, type StackParams } from '../scripts/lib/deterministic';
 
 const DAY = 24 * 3600;
 const EMAIL_COMMITMENT = '0xbcda0f09fa9732b2bfdea38199486b654a84e8e06085d7e364af8137f8d7deaf';
@@ -122,5 +122,24 @@ describe('Deterministic deployment: chain-agnostic P2ID addresses', function () 
     await deployStack(p, a, (m) => again.push(m));
     expect(again.every((l) => /already deployed, skipped/.test(l))).to.equal(true);
     await network.provider.send('evm_revert', [snapshot]);
+  });
+
+  it('checks the base implementation and refund bounds in deployment validation', async () => {
+    const [signer] = await ethers.getSigners();
+    const p = { ...(await params()), salt: ethers.id('factory-validation-audit') };
+    const stack = await deployStack(p, signer);
+    await checkStack(p, stack);
+    await expect(checkStack({ ...p, minRefundWindow: p.minRefundWindow + 1 }, stack))
+      .to.be.rejectedWith('minRefundWindow');
+    await expect(checkStack({ ...p, maxRefundWindow: p.maxRefundWindow + 1 }, stack))
+      .to.be.rejectedWith('maxRefundWindow');
+    const factory = await ethers.getContractAt('PviumP2IdVaultFactory', stack.factory);
+    const snapshot = await network.provider.send('evm_snapshot');
+    try {
+      await network.provider.send('hardhat_setCode', [await factory.baseImplementation(), '0x']);
+      await expect(checkStack(p, stack)).to.be.rejectedWith('base implementation code');
+    } finally {
+      await network.provider.send('evm_revert', [snapshot]);
+    }
   });
 });

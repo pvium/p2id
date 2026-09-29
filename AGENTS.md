@@ -55,6 +55,23 @@ Install with `yarn install`, run scripts with `yarn <script>`, run binaries with
 - The identity-hash domain prefix is `p2id.identity.v1`; it names the hash formula and never
   changes with address-scheme or circuit versions (proofs stay valid across vault changes).
   Prefixes are dot-separated (`p2id.<component>.vN`); the vault salt is the versionless `pvium.vault.v1`.
+- **Vault implementations live behind a proxy: storage layout is frozen.** Every P2ID address is a
+  `PviumP2IDVaultProxy` delegating to a registered `P2IDVault` implementation, and an owner may move
+  a vault between implementations, so all of them share one storage layout. Before changing vault
+  code:
+  - never reorder, remove, retype or insert state variables in `P2IDVault`; append new ones at the
+    end only. Mappings and structs count: a struct field change changes the layout;
+  - a post-deployment change is a new contract (e.g. `src/P2IDVaultV2.sol`), not an edit of the
+    deployed one; it keeps `acceptOwnerProof` (returning its selector), never uses `delegatecall`
+    or `selfdestruct`, and never defines the proxy's reserved selectors (`implementation()`,
+    `lastUpgrade()`, `upgradeTo(bytes32,address,bytes)`);
+  - run `CANDIDATE=<Contract> yarn layout` in `contracts/` and fix every error before proposing it;
+    `yarn layout` alone checks the base still matches `contracts/storage/P2IDVault.layout.json`.
+    `UPDATE=1 yarn layout` rewrites that snapshot and is only legitimate while no factory is deployed;
+  - register through `IMPLEMENTATION=<Contract> yarn implementation --network <chain>` (deploy +
+    propose; `REGISTER=1` after the 14-day notice). The scheme name, salt and factory never change
+    for a vault change; `pvium.vault.vN` bumps only if the *proxy or factory* code changes after a
+    mainnet release.
 - Tests and their fixtures live in each package's `test/` folder (`circuit/test`, `contracts/test`).
   Sample token/keys are in `circuit/test/fixtures`; `contracts/test/fixtures` is a copy refreshed by
   `yarn fixtures`. Run `sh test/e2e.sh` in `circuit/` after changing the circuit or script.

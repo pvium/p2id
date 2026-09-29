@@ -2,8 +2,7 @@
 pragma solidity ^0.8.27;
 
 /// @title IP2IDVerifier
-/// @notice Use-case-agnostic identity verification: given a proof, return the wallet the proven
-///         identity resolves to. Optionally also verify a funding constraint.
+/// @notice Resolve an identity proof to a wallet and issue time, with optional constraint evidence.
 interface IP2IDVerifier {
     /// @notice A funding constraint and the evidence that it is satisfied.
     /// @param commitment bytes32(0) = no constraint; otherwise the commitment a deposit was funded with.
@@ -15,9 +14,7 @@ interface IP2IDVerifier {
         bytes signature;
     }
 
-    /// @param identityHash The identity the caller expects the proof to be for (e.g. the vault's
-    ///                     commitment). Proofs are public once used on-chain, so the caller MUST
-    ///                     pin the identity rather than trust whatever the submitted proof proves.
+    /// @param identityHash Expected identity commitment that the implementation must match against the proof.
     /// @param proof        Opaque identity proof; the implementation defines the encoding.
     /// @param constraint   Skipped when `constraint.commitment == bytes32(0)`.
     /// @return wallet Wallet associated with the proven identity (never address(0)).
@@ -30,15 +27,14 @@ interface IP2IDVerifier {
         Constraint calldata constraint
     ) external view returns (address wallet, uint64 iat);
 
-    /// @notice Whether this verifier can ever satisfy a non-zero constraint. Vaults refuse
-    ///         constrained deposits under a verifier that returns false (or does not implement
-    ///         this), so a payer cannot lock funds behind a condition nobody can meet.
+    /// @notice Whether this verifier currently supports nonzero constraints. P2IDVault requires
+    ///         a successful true response when funding a constrained deposit; this does not establish
+    ///         that any particular commitment can be satisfied.
     function supportsConstraints() external view returns (bool);
 
-    /// @notice Changes (increments) whenever proofs this verifier accepted before may no longer be
-    ///         trusted, e.g. a signing key was revoked. A vault caches the wallet a proof resolved
-    ///         to and pays it without re-verifying; it discards that cache when the revision moved,
-    ///         so revoking a key also revokes what was proven under it. Return a constant if
-    ///         nothing this verifier trusts can ever be revoked.
+    /// @notice Cache revision. Implementations must increment it when previously accepted identity
+    ///         proofs may no longer be trusted, or return a constant if trust cannot be revoked.
+    /// @dev P2IDVault rejects cached-owner claims when this differs from the stored revision, and
+    ///      rejects cached-owner claims and proof updates when the revision cannot be read.
     function revision() external view returns (uint64);
 }

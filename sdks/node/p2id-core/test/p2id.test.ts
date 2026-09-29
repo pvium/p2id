@@ -8,8 +8,8 @@ import { identityTypeName } from '../src/identityNames.js';
 const EMAIL_COMMITMENT = '0xbcda0f09fa9732b2bfdea38199486b654a84e8e06085d7e364af8137f8d7deaf';
 // Reference vectors produced with ethers.getCreate2Address(factory, salt, initCodeHash).
 const FACTORY = '0x1111111111111111111111111111111111111111';
-const V1_INIT_CODE_HASH = '0x59c2f7f1e9725340e25a45b122fae7d1e9cbd9c7b00dba6215ebaa67cfb691ef';
-const EXPECTED = '0xDea27e257491f6C1f7Ae85A08c1a1Fb15Ce27325';
+const V1_INIT_CODE_HASH = '0x4c76d638c6e156d8a95617576f1dcac6189257696607110346ba4f5fe2932ca6';
+const EXPECTED = '0xA02E9cB3BAcA8a1A3577CAA6b081Eef55C128e7e';
 
 test('IdentityType.X is the same identity as IdentityType.Twitter and the Privy name', async () => {
   assert.equal(IdentityType.X, IdentityType.Twitter);

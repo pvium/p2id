@@ -4,12 +4,9 @@ pragma solidity ^0.8.27;
 import {IP2IDPolicy} from "./interfaces/IP2IDPolicy.sol";
 
 /// @title PviumP2IDPolicy
-/// @notice The launch policy for P2ID vaults: an owner-managed allowlist of verifiers, and no fee.
-///         Later capabilities (permissionless verifier registration with a stake, protocol fees)
-///         ship as a new policy that the vault factory switches to through its timelock; the
-///         vaults and their addresses do not change.
-/// @dev `owner` should be a Pvium multisig. Approving a verifier only lets payers opt into it;
-///      revoking one freezes claims under it (refunds still work) and never moves funds.
+/// @notice Owner-managed verifier allowlist with a zero fee quote.
+/// @dev Approval checks code presence, not verifier behavior. P2IDVault uses the allowlist for
+///      funding and non-default-verifier claims; its current default verifier bypasses the claim check.
 contract PviumP2IDPolicy is IP2IDPolicy {
     address public owner;
     address public pendingOwner;
@@ -48,7 +45,7 @@ contract PviumP2IDPolicy is IP2IDPolicy {
     }
 
     /// @inheritdoc IP2IDPolicy
-    /// @dev The launch policy charges no fee, so a vault never has fees for it to distribute.
+    /// @dev Distribution is unsupported, including for fees accrued under an earlier policy.
     function distributeFee(address, address, uint256) external payable {
         revert NoFees();
     }

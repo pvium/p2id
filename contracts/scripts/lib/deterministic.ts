@@ -46,6 +46,8 @@ export interface StackAddresses {
   pviumVerifier: string;
   policy: string;
   factory: string;
+  /** The base vault implementation: the factory's first CREATE, made in its constructor. */
+  baseImplementation: string;
 }
 
 export const CURRENT_SCHEME = 'pvium.vault.v1';
@@ -238,6 +240,7 @@ export async function deployStack(
     pviumVerifier,
     policy,
     factory,
+    baseImplementation: ethers.getCreateAddress({ from: factory, nonce: 1 }),
   };
 }
 
@@ -261,6 +264,7 @@ export async function checkStack(p: StackParams, a: StackAddresses, expectedVaul
   };
   const same = (x: string, y: string) => x.toLowerCase() === y.toLowerCase();
   for (const [name, address] of Object.entries(a)) {
+    if (name === 'baseImplementation') continue; // checked below, with its binding and registration
     if (!(await hasCode(address, { reads: 5, delayMs: 2000 }))) fail(`${name} code at ${address}`, 'empty', 'deployed');
   }
   const identity = await ethers.getContractAt('PviumIdentity', a.pviumIdentity);
@@ -279,6 +283,20 @@ export async function checkStack(p: StackParams, a: StackAddresses, expectedVaul
   if (!same(await factory.owner(), p.owner)) fail('factory.owner', await factory.owner(), p.owner);
   if (!same(await factory.defaultVerifier(), a.pviumVerifier)) fail('factory.defaultVerifier', await factory.defaultVerifier(), a.pviumVerifier);
   if (!same(await factory.policy(), a.policy)) fail('factory.policy', await factory.policy(), a.policy);
+  const baseAddress = await factory.initialImplementation();
+  const expectedBase = a.baseImplementation ?? ethers.getCreateAddress({ from: a.factory, nonce: 1 });
+  if (!same(baseAddress, expectedBase)) fail('factory.initialImplementation', baseAddress, expectedBase);
+  if (!(await hasCode(baseAddress))) fail('base implementation code', 'empty', 'deployed');
+  const base = await ethers.getContractAt('P2IDVault', baseAddress);
+  if (!same(await base.factory(), a.factory)) fail('base implementation factory', await base.factory(), a.factory);
+  if (!(await factory.isRegisteredImplementation(baseAddress))) fail('base implementation registered', false, true);
+  const currentBase = await factory.baseImplementation();
+  if (!(await hasCode(currentBase))) fail('current default implementation code', 'empty', 'deployed');
+  if (!(await factory.isRegisteredImplementation(currentBase))) fail('current default registered', false, true);
+  const current = await ethers.getContractAt('P2IDVault', currentBase);
+  if (!same(await current.factory(), a.factory)) fail('current default factory', await current.factory(), a.factory);
+  if (Number(await factory.minRefundWindow()) !== p.minRefundWindow) fail('minRefundWindow', await factory.minRefundWindow(), p.minRefundWindow);
+  if (Number(await factory.maxRefundWindow()) !== p.maxRefundWindow) fail('maxRefundWindow', await factory.maxRefundWindow(), p.maxRefundWindow);
   const policy = await ethers.getContractAt('PviumP2IDPolicy', a.policy);
   if (!same(await policy.owner(), p.owner)) fail('policy.owner', await policy.owner(), p.owner);
   if (!(await policy.isVerifierAllowed(a.pviumVerifier))) fail('default verifier allowed by the policy', false, true);
