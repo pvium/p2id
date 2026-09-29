@@ -7,75 +7,28 @@ import {IP2IDPolicy} from "./interfaces/IP2IDPolicy.sol";
 import {IP2IdVaultFactory} from "./interfaces/IP2IdVaultFactory.sol";
 
 /// @title P2IDVault
-/// @notice A namespace-bound vault that holds ERC-20 funds until the identity owner claims them.
-/// @dev Holds ERC-20 tokens and the chain's native coin (BNB, ETH), the latter identified by
-///      token == NATIVE (address(0)) everywhere: in deposits, buckets, sweeps, fees and views.
-///
-///      **A bare transfer to this contract (ERC-20 transfer, or plain native send) is irrevocable:
-///      it records no funder, has no refund path, and is claimable only through the factory's
-///      default verifier.** Use fund() when refund rights, a funding constraint, or a specific
-///      verifier are required.
-///
-///      This contract holds mechanics only; everything expected to evolve is decided by the
-///      factory's policy (IP2IDPolicy), consulted on every call, so it can change without
-///      changing this bytecode and therefore without moving any P2ID address. The limits a
-///      policy can never cross are enforced here:
-///        - fees are capped at MAX_FEE_BPS, fixed per deposit when it is made (a failing quote
-///          means no fee), and accrue in the vault per (verifier, token); a payout never calls
-///          the policy about fees, so fee handling can never block a claim. withdrawFees hands
-///          accrued fees to the current policy, which pulls exactly the approved amount and
-///          distributes it;
-///        - refunds never pay a fee and never consult the policy;
-///        - the policy can gate which verifiers are usable (freezing claims under a disallowed
-///          one), but cannot redirect a payout: every claim still pays the wallet the verifier
-///          resolved for this vault's identity. Claims through the factory's current default
-///          verifier can never be frozen: direct transfers have no refund path, so the only thing
-///          that may change who receives them is a default-verifier change with 14 days' notice.
-///          (The policy still gates *funding* under the default, so a revoked default takes no
-///          new deposits.)
-///
-///      Verifiers. Every deposit names the IP2IDVerifier whose proofs can release it, chosen by
-///      the payer among those the policy allows (fund() takes the factory default). Every claim
-///      path hands the verifier this vault's `saltCommitment` plus a proof and gets back the
-///      wallet to pay; the verifier reverts unless the proof is for exactly that identity.
-///      A constrained deposit is refused under a verifier that cannot satisfy constraints.
-///
-///      Accounting is per bucket, where a bucket is (verifier, constraint, token) and the
-///      default bucket of a verifier is constraint == bytes32(0). Each bucket keeps its own
-///      deposit-id list and cursor, so sweeps are bounded per bucket, can be paged
-///      (`depositCountLimit` = number of deposit records visited from the cursor, consumed or
-///      not; 0 = all) or aimed at specific ids, and spam in other tokens or buckets never blocks
-///      a sweep.
-///
-///      Proof freshness ratchet, per verifier: every proof presented must be at least as fresh
-///      as the newest one this vault has seen under that verifier, and a newer proof becomes the
-///      owner proof, so presenting a proof for a new wallet retires every older proof. Funds
-///      already inside before that reset are not protected: reset immediately after a wallet
-///      compromise.
-///
-///      Direct transfers follow the factory's default verifier, which governance can change after 14
-///      days' public notice. So that a change cannot bring back a wallet the owner has already moved away from,
-///      direct transfers have their own freshness floor, `untrackedProofIat`: the newest proof
-///      presented through whichever verifier was the default at the time. It carries across a
-///      default change, and direct transfers are paid only to a default-verifier owner whose proof
-///      is at least that fresh. Only the default verifier (chosen by governance, under the
-///      timelock) can raise it, so a verifier payers merely opted into cannot affect it.
-///
-///      Invariant kept by every path: token balance >= trackedTotal[token] + feesOwedTotal[token].
+/// @notice Vault implementation for ERC-20 and native-coin deposits associated with an identity.
+///         Uses its immutable factory for policy and default-verifier settings.
+/// @dev Deposits are indexed by (verifier, constraint, token). Cursor-based sweeps visit at most
+///      MAX_SWEEP_PAGE records; explicit-id sweeps iterate the supplied list. Owner caches and
+///      proof floors are per verifier, with an additional cross-default floor for untracked funds.
+///      Direct transfers create no deposit record and have no refund entry point. Token accounting
+///      relies on the token's reported balances and transfer behavior.
 contract P2IDVault is IP2IDVault {
-    /// @notice Hard cap on the fee any policy can charge on a payout: 1%. Part of this bytecode.
+    /// @notice Maximum fee rate recorded or quoted by this implementation: 100 basis points (1%).
     uint16 public constant MAX_FEE_BPS = 100;
-    /// @notice The token address that stands for the chain's native coin (BNB on BNB Chain).
+    /// @notice Token identifier used for the native coin.
     address public constant NATIVE = address(0);
     uint256 private constant BPS = 10_000;
-    /// @dev Gas given to optional policy/verifier queries, so a misbehaving contract cannot burn
-    ///      the caller's gas; a query that fails or runs out is treated as "no fee" / "unsupported".
+    /// @dev Gas cap for _query calls. Failed fee/support queries return zero/false; failed revision
+    ///      queries invalidate cached-owner reads and prevent proof updates.
     uint256 private constant QUERY_GAS = 50_000;
-    /// @dev How far ahead of the block a proof's issue time may be (clock skew between the token
-    ///      issuer and the chain); proofs are made after their token is issued, so this is slack only.
+    /// @notice Record limit for cursor-based sweeps; a zero or larger requested limit uses this value.
+    uint256 public constant MAX_SWEEP_PAGE = 100;
+    /// @dev Maximum accepted issue time ahead of block.timestamp.
     uint64 private constant FUTURE_SLACK = 15 minutes;
 
-    /// @notice Deployer (PviumP2IdVaultFactory): the policy's source, and the only caller of initialize() and fundFor().
+    /// @notice Factory supplied at construction; source of settings and authorized caller of initialize()/fundFor().
     address public immutable factory;
     bytes32 public nsHash;
     bytes32 public saltCommitment;
@@ -83,18 +36,17 @@ contract P2IDVault is IP2IDVault {
     uint64 public maxRefundWindow;
     bool private _initialized;
 
-    /// @notice Wallet of the newest proof presented under a verifier; paid by that verifier's default-bucket sweeps.
+    /// @notice Cached payout wallet per verifier. Equal-time proofs do not replace an existing wallet.
     mapping(address verifier => address) public owner;
-    /// @notice Issue time of that proof. Older proofs are refused under that verifier on every path.
+    /// @notice Stored issue-time floor checked by _apply for this verifier.
     mapping(address verifier => uint64) public latestProofIat;
-    /// @notice The verifier's `revision()` when its owner was cached. A cache from an older revision
-    ///         is void: the verifier revoked something it trusted then, so the owner must re-prove.
+    /// @notice Revision stored with the cached owner; _ownerFresh requires equality with the current revision.
     mapping(address verifier => uint64) public ownerRevision;
     /// @notice Freshness floor for direct transfers: the newest proof presented through the verifier
     ///         that was the default at the time. Carries across default changes.
     uint64 public untrackedProofIat;
 
-    /// @notice All deposits ever made, by id.
+    /// @notice Deposit records, including consumed records, indexed by id.
     Deposit[] public deposits;
 
     /// @notice Unconsumed total per (verifier, constraint, token) bucket.
@@ -105,16 +57,16 @@ contract P2IDVault is IP2IDVault {
     mapping(address verifier => mapping(bytes32 constraint => mapping(address token => uint256[]))) private _bucketDeposits;
     /// @notice Index into the bucket's deposit list below which every deposit is consumed.
     mapping(address verifier => mapping(bytes32 constraint => mapping(address token => uint256))) public bucketCursor;
-    /// @dev keccak256(constraint, funder) => depositId + 1. A funder can use a constraint once, so a
-    ///      signature over it releases at most one of their deposits; another funder reusing the
-    ///      same value only puts their own money in the bucket.
+    /// @dev keccak256(abi.encode(constraint, funder)) => depositId + 1 for nonzero constraints.
+    ///      Entries persist after claims and refunds, preventing reuse by the same funder in this vault.
     mapping(bytes32 => uint256) private _constraintDeposit;
     /// @notice Fees accrued and not yet distributed, per verifier they were earned through and token.
     mapping(address verifier => mapping(address token => uint256)) public feesOwed;
     /// @notice Sum of feesOwed per token: held for distribution, never part of a payout.
     mapping(address token => uint256) public feesOwedTotal;
 
-    uint256 private reentrancyLock = 1;
+    /// @dev 2 while a guarded call runs; any other value (including the 0 a fresh proxy starts with) is idle.
+    uint256 private reentrancyLock;
 
     error InvalidRefundWindow();
     error VerifierNotApproved(address verifier);
@@ -123,6 +75,9 @@ contract P2IDVault is IP2IDVault {
     error InvalidToken();
     error OwnerNotInitialized();
     error OwnerRevoked();
+    error RevisionUnavailable(address verifier);
+    error NotSelf();
+    error NotOwnerProof(address owner);
     error ProofFromFuture();
     error ProofTooOld();
     error InvalidWallet();
@@ -142,19 +97,18 @@ contract P2IDVault is IP2IDVault {
     error NativeValueMismatch();
     error NativeTransferFailed();
 
-    /// @dev No constructor arguments, so the creation code is identical for every vault and
-    ///      `keccak256(creationCode)` is a constant anyone can use to derive an identity's vault
-    ///      address from the factory address. The deployer is recorded and must call initialize().
-    constructor() {
-        factory = msg.sender;
+    /// @dev This constructor runs only for the implementation; each proxy's storage is set up
+    ///      separately by the factory calling initialize(). Address derivation uses proxy creation code.
+    /// @param _factory Address embedded in this implementation for internal factory references.
+    constructor(address _factory) {
+        factory = _factory;
     }
 
-    /// @notice Plain native-coin sends (e.g. fee payouts from a launchpad) are accepted as direct
-    ///         transfers: untracked, claimable through the default verifier, never refundable.
-    ///         Deliberately empty, so it works with the 2300-gas stipend of `transfer`/`send`.
+    /// @notice Accept native coin without creating a deposit record.
+    /// @dev Calls to a vault proxy with empty calldata are handled by the proxy's own receive().
     receive() external payable {}
 
-    /// @notice Set by the factory once, immediately after deployment.
+    /// @notice Initialize vault settings once; callable only by the configured factory.
     function initialize(
         bytes32 _nsHash,
         bytes32 _saltCommitment,
@@ -201,9 +155,8 @@ contract P2IDVault is IP2IDVault {
         return _fund(msg.sender, verifier, token, amount, constraint, refundWindow, ref);
     }
 
-    /// @notice Factory-only: fund on behalf of `funder`, who keeps the refund right. Tokens are
-    ///         pulled from the factory, which has already collected them from `funder`; native
-    ///         coin arrives as msg.value.
+    /// @notice Factory-only: record a deposit for `funder`. ERC-20 tokens are pulled from the
+    ///         factory; native coin is supplied as msg.value.
     /// @param ref Opaque application reference emitted in Funded; bytes32(0) for none.
     function fundFor(
         address funder,
@@ -218,8 +171,8 @@ contract P2IDVault is IP2IDVault {
         return _fund(funder, verifier, token, amount, constraint, refundWindow, ref);
     }
 
-    /// @dev Take `amount` of `token` from msg.sender (native: exactly msg.value; ERC-20: pulled,
-    ///      crediting what actually arrived) and record a deposit owned by `funder`, with the fee
+    /// @dev Receive native msg.value or pull ERC-20 from msg.sender, crediting the reported balance
+    ///      increase for ERC-20. Record a deposit owned by `funder`, with the fee
     ///      rate the policy quotes now (capped) fixed for it.
     function _fund(
         address funder,
@@ -244,7 +197,7 @@ contract P2IDVault is IP2IDVault {
             if (msg.value != amount) revert NativeValueMismatch();
             credited = amount;
         } else {
-            if (msg.value != 0) revert NativeValueMismatch(); // never strand native coin on an ERC-20 deposit
+            if (msg.value != 0) revert NativeValueMismatch(); // ERC-20 deposits do not accept msg.value
             if (token.code.length == 0) revert InvalidToken();
             uint256 beforeBalance = _balanceOf(token);
             _callToken(token, abi.encodeWithSignature("transferFrom(address,address,uint256)", msg.sender, address(this), amount));
@@ -291,17 +244,15 @@ contract P2IDVault is IP2IDVault {
 
     // ------------------------------------------------------------------ proofs
 
-    /// @notice Present a proof under `verifier` without claiming: sets that verifier's owner
-    ///         wallet from it if it is newer than anything seen before, and retires every older
-    ///         proof. Call this immediately after moving to a new wallet.
+    /// @notice Verify a proof and update this verifier's owner cache and issue-time floor using _apply.
     function refreshProof(address verifier, bytes calldata proof) external nonReentrant {
         _present(verifier, proof, _noConstraint());
     }
 
-    /// @notice Present a proof and sweep `verifier`'s default bucket for `token` in one call (first claim).
+    /// @notice Present a proof, then sweep `verifier`'s default bucket for `token`.
     /// @param depositCountLimit Number of deposit records to visit from the bucket cursor (not
-    ///        an amount, not an index); 0 = all. For the default verifier, untracked
-    ///        (bare-transfer) funds are always included.
+    ///        an amount, not an index); zero or above MAX_SWEEP_PAGE uses MAX_SWEEP_PAGE.
+    /// @dev Includes untracked funds only when _paysUntracked(verifier) is true.
     function refreshProofAndSweep(
         address verifier,
         bytes calldata proof,
@@ -315,8 +266,9 @@ contract P2IDVault is IP2IDVault {
     // ------------------------------------------------------------------ claiming
 
     /// @notice Sweep `verifier`'s default bucket for `token` to that verifier's owner. Walks only
-    ///         this bucket's list from its cursor; `depositCountLimit` records per call (0 = all).
-    ///         When `verifier` is the factory default, untracked funds are included.
+    ///         this bucket's list from its cursor; `depositCountLimit` records per call (0 = MAX_SWEEP_PAGE, also the cap).
+    ///         Includes untracked funds when the verifier is the current default and its owner cache
+    ///         meets the revision and untrackedProofIat checks.
     function sweep(address verifier, address token, uint256 depositCountLimit)
         external
         nonReentrant
@@ -325,7 +277,7 @@ contract P2IDVault is IP2IDVault {
         return _sweepDefault(verifier, token, depositCountLimit); // checks the owner is set and current
     }
 
-    /// @notice Sweep only untracked funds (bare ERC-20 transfers backed by no deposit record) to
+    /// @notice Sweep only untracked ERC-20 or native funds to
     ///         the default verifier's owner. The fee rate is quoted now.
     function sweepUntracked(address token) external nonReentrant returns (uint256 amount) {
         address verifier = defaultVerifier();
@@ -354,7 +306,7 @@ contract P2IDVault is IP2IDVault {
 
     /// @notice Sweep the bucket funded under `verifier` and `constraint.commitment`. The verifier
     ///         must accept both the identity proof and the constraint evidence; funds go to the
-    ///         wallet the proof resolves to. Default buckets (zero commitment) are swept via sweep().
+    ///         wallet the proof resolves to. This entry point rejects a zero commitment.
     function sweepBucket(
         address verifier,
         IP2IDVerifier.Constraint calldata constraint,
@@ -388,9 +340,9 @@ contract P2IDVault is IP2IDVault {
 
     // ------------------------------------------------------------------ fees
 
-    /// @notice Hand the fees earned through `verifier` in `token` to the current policy, which
-    ///         pulls them and distributes them. Anyone may call it: the tokens can only go to the
-    ///         policy, and only as much as is owed. Returns the amount the policy took.
+    /// @notice Call the current policy to distribute accrued fees; callable by any address.
+    ///         Native fees are sent as msg.value. For ERC-20, approve the accrued amount, reset the
+    ///         allowance after the call, and deduct the observed balance decrease; revert if it exceeds fees owed.
     function withdrawFees(address verifier, address token) external nonReentrant returns (uint256 amount) {
         uint256 owed = feesOwed[verifier][token];
         if (owed == 0) return 0;
@@ -420,12 +372,12 @@ contract P2IDVault is IP2IDVault {
         return "p2id.vault.v1";
     }
 
-    /// @notice The factory's current policy (replaceable there only through a timelock).
+    /// @notice Policy address returned by the configured factory.
     function policy() public view returns (address) {
         return IP2IdVaultFactory(factory).policy();
     }
 
-    /// @notice The factory's current default verifier (timelocked there): used by fund() and for untracked funds.
+    /// @notice Default verifier returned by the configured factory, used by fund() and untracked claims.
     function defaultVerifier() public view returns (address) {
         return IP2IdVaultFactory(factory).defaultVerifier();
     }
@@ -434,40 +386,48 @@ contract P2IDVault is IP2IDVault {
         return deposits.length;
     }
 
-    /// @notice Deposit ids in a bucket, in funding order (consumed ones included; see `deposits`).
-    function bucketDepositIds(address verifier, bytes32 constraint, address token) external view returns (uint256[] memory) {
-        return _bucketDeposits[verifier][constraint][token];
+    /// @notice A page of a bucket's deposit ids, in funding order (consumed ones included; see
+    ///         `deposits`): up to `limit` ids from `offset`, or all from `offset` when `limit` is 0.
+    function bucketDepositIds(address verifier, bytes32 constraint, address token, uint256 offset, uint256 limit)
+        external
+        view
+        returns (uint256[] memory ids)
+    {
+        uint256[] storage all = _bucketDeposits[verifier][constraint][token];
+        if (offset >= all.length) return ids;
+        uint256 end = all.length;
+        if (limit != 0 && end - offset > limit) end = offset + limit;
+        ids = new uint256[](end - offset);
+        for (uint256 k = offset; k < end; k++) ids[k - offset] = all[k];
     }
 
     function bucketDepositCount(address verifier, bytes32 constraint, address token) external view returns (uint256) {
         return _bucketDeposits[verifier][constraint][token].length;
     }
 
-    /// @notice The deposit `funder` made under `constraint`, if any. Each funder can use a constraint once.
+    /// @notice Recorded deposit for a nonzero constraint and funder; the record persists after consumption.
     function constraintDeposit(bytes32 constraint, address funder) external view returns (bool used, uint256 depositId) {
         uint256 stored = _constraintDeposit[keccak256(abi.encode(constraint, funder))];
         return stored == 0 ? (false, 0) : (true, stored - 1);
     }
 
-    /// @notice Gross amount `sweep(verifier, token, 0)` would release now, before fees: every
-    ///         unconsumed default deposit under `verifier`, plus untracked funds when it is the default verifier.
+    /// @notice Total default-bucket amount plus untracked funds when _paysUntracked is true.
+    /// @dev Does not apply the sweep page limit or validate default-bucket claimability.
     function sweepable(address verifier, address token) external view returns (uint256) {
         uint256 amount = bucketTotal[verifier][bytes32(0)][token];
         if (_paysUntracked(verifier)) amount += _untrackedBalance(token);
         return amount;
     }
 
-    /// @notice Untracked funds only: bare ERC-20 transfers not backed by any deposit record.
+    /// @notice Reported balance minus tracked deposits and accrued fees, floored at zero; supports native coin.
     function untrackedBalance(address token) external view returns (uint256) {
         return _untrackedBalance(token);
     }
 
     // ------------------------------------------------------------------ internals
 
-    /// @dev Every proof enters through here. Requires `verifier` to be allowed, verifies the proof
-    ///      for this vault's identity (the verifier reverts for any other identity), refuses it if
-    ///      older than the newest proof seen under that verifier, and if it is newer makes its
-    ///      wallet that verifier's owner. Returns the wallet to pay.
+    /// @dev Check verifier claimability, request verification for saltCommitment, then apply the
+    ///      returned wallet and issue time. Proxy-verified results enter through acceptOwnerProof.
     function _present(
         address verifier,
         bytes calldata proof,
@@ -475,15 +435,34 @@ contract P2IDVault is IP2IDVault {
     ) private onlyClaimable(verifier) returns (address wallet) {
         uint64 iat;
         (wallet, iat) = IP2IDVerifier(verifier).getIdentityWallet(saltCommitment, proof, constraint);
+        _apply(verifier, wallet, iat);
+    }
+
+    /// @notice Apply a proxy-verified wallet and issue time; require msg.sender == address(this).
+    ///         Revert unless wallet is the cached owner afterwards, then return the hook selector.
+    /// @dev The self-call check relies on the proxy verifying the result before invoking this hook.
+    function acceptOwnerProof(address verifier, address wallet, uint64 iat)
+        external
+        nonReentrant
+        onlyClaimable(verifier)
+        returns (bytes4)
+    {
+        if (msg.sender != address(this)) revert NotSelf();
+        _apply(verifier, wallet, iat);
+        if (owner[verifier] != wallet) revert NotOwnerProof(owner[verifier]);
+        return IP2IDVault.acceptOwnerProof.selector; // compatibility acknowledgement after applying the result
+    }
+
+    /// @dev The freshness and revision rules for a verified (wallet, iat) under `verifier`: refuses
+    ///      proofs older than the newest seen, and makes a newer wallet the owner.
+    function _apply(address verifier, address wallet, uint64 iat) private {
         if (wallet == address(0)) revert InvalidWallet();
-        // A forged token could carry any issue time; refusing future ones (beyond clock skew) bounds
-        // how far a forged proof can push the freshness ratchets, so a real owner recovers with a
-        // token issued minutes later rather than days.
+        // Bound the issue time before storing it as a freshness floor.
         if (iat > block.timestamp + FUTURE_SLACK) revert ProofFromFuture();
-        uint64 rev = _revision(verifier);
+        (bool revOk, uint64 rev) = _revision(verifier);
+        if (!revOk) revert RevisionUnavailable(verifier);
         bool fresh = ownerRevision[verifier] == rev;
-        // The ratchet survives a revision change: a void cache pays nobody, but proofs it already
-        // retired stay retired, so re-proving takes a proof at least as recent as the last one.
+        // Revision changes do not reset this verifier's stored issue-time floor.
         uint64 latest = latestProofIat[verifier];
         if (iat < latest) revert ProofTooOld();
         if (iat > latest || owner[verifier] == address(0)) {
@@ -502,7 +481,7 @@ contract P2IDVault is IP2IDVault {
         // wallet slot of the same token). The owner stays, and constrained paths pay `wallet`.
     }
 
-    /// @dev Constrained-bucket entry: default buckets are only reachable through sweep().
+    /// @dev Verify a constrained claim; reject zero commitments at this entry point.
     function _verifyForThisVault(
         address verifier,
         bytes calldata proof,
@@ -512,14 +491,13 @@ contract P2IDVault is IP2IDVault {
         return _present(verifier, proof, constraint);
     }
 
-    /// @dev Direct transfers go to `verifier`'s owner only if it is the current default and its
-    ///      owner proof is at least as fresh as the newest proof any default has seen.
+    /// @dev Whether verifier is the current default, its revision matches the cache, and its
+    ///      stored proof time meets untrackedProofIat. Does not check for a nonzero owner.
     function _paysUntracked(address verifier) private view returns (bool) {
         return verifier == defaultVerifier() && _ownerFresh(verifier) && latestProofIat[verifier] >= untrackedProofIat;
     }
 
-    /// @dev Owner wallet for proof-less default sweeps; the verifier must still be claimable and
-    ///      must not have revoked anything since the owner was proven.
+    /// @dev Require a claimable verifier, nonzero cached owner and matching readable revision.
     function _ownerOf(address verifier) private view onlyClaimable(verifier) returns (address to) {
         to = owner[verifier];
         if (to == address(0)) revert OwnerNotInitialized();
@@ -528,7 +506,8 @@ contract P2IDVault is IP2IDVault {
 
     /// @dev Whether the cached owner was proven under the verifier's current revision.
     function _ownerFresh(address verifier) private view returns (bool) {
-        return ownerRevision[verifier] == _revision(verifier);
+        (bool ok, uint64 rev) = _revision(verifier);
+        return ok && ownerRevision[verifier] == rev;
     }
 
     function _noConstraint() private pure returns (IP2IDVerifier.Constraint memory c) {
@@ -536,9 +515,8 @@ contract P2IDVault is IP2IDVault {
         c.signature = "";
     }
 
-    /// @dev Default-bucket sweep for one verifier: the default deposits consumed here at their
-    ///      fixed rates, plus the untracked surplus (at the rate quoted now) when `verifier` is the
-    ///      factory default.
+    /// @dev Consume a page of default-bucket deposits at their stored fee rates. Include untracked
+    ///      surplus at the current quoted rate when _paysUntracked returns true.
     function _sweepDefault(address verifier, address token, uint256 depositCountLimit)
         private
         returns (uint256 amount, uint256 consumed)
@@ -569,9 +547,9 @@ contract P2IDVault is IP2IDVault {
         uint256[] storage ids = _bucketDeposits[verifier][constraint][token];
         uint256 i = bucketCursor[verifier][constraint][token];
         uint256 end = ids.length;
-        // Bound by records visited, not records consumed: a run of already-consumed records
-        // (refunded, or swept by id) is paged through at a fixed cost per call.
-        if (depositCountLimit != 0 && end - i > depositCountLimit) end = i + depositCountLimit;
+        // Limit records visited, including already-consumed entries, to MAX_SWEEP_PAGE.
+        uint256 page = (depositCountLimit == 0 || depositCountLimit > MAX_SWEEP_PAGE) ? MAX_SWEEP_PAGE : depositCountLimit;
+        if (end - i > page) end = i + page;
         while (i < end) {
             uint256 id = ids[i];
             Deposit storage deposit = deposits[id];
@@ -656,10 +634,12 @@ contract P2IDVault is IP2IDVault {
         return v > MAX_FEE_BPS ? MAX_FEE_BPS : uint16(v);
     }
 
-    /// @dev The verifier's revision; 0 if it does not report one (nothing it trusts is revocable).
-    function _revision(address verifier) private view returns (uint64) {
-        (bool ok, uint256 v) = _query(verifier, abi.encodeCall(IP2IDVerifier.revision, ()));
-        return ok ? uint64(v) : 0;
+    /// @dev Query revision() with QUERY_GAS; ok is false on call failure, wrong length or uint64 overflow.
+    function _revision(address verifier) private view returns (bool ok, uint64 rev) {
+        uint256 v;
+        (ok, v) = _query(verifier, abi.encodeCall(IP2IDVerifier.revision, ()));
+        if (ok && v > type(uint64).max) ok = false;
+        rev = uint64(v);
     }
 
     /// @dev Whether `verifier` declares it can satisfy constraints; false if it does not say.
@@ -678,8 +658,8 @@ contract P2IDVault is IP2IDVault {
 
     // ------------------------------------------------------------------ tokens
 
-    /// @dev Pay out `amount` of `token`; native coin goes with all remaining gas (every caller
-    ///      holds the reentrancy lock), so smart-contract wallets can receive it.
+    /// @dev Transfer tokens or call the native recipient without an explicit gas limit.
+    ///      Entry points reaching this helper hold the reentrancy lock.
     function _transfer(address token, address to, uint256 amount) private {
         if (token == NATIVE) {
             (bool ok, ) = payable(to).call{value: amount}("");
@@ -709,8 +689,7 @@ contract P2IDVault is IP2IDVault {
         _;
     }
 
-    /// @dev Claiming: through the factory's current default verifier always (see the contract
-    ///      notes), otherwise only while the policy allows the verifier.
+    /// @dev Skip policy approval for the current default verifier; check approval for other verifiers.
     modifier onlyClaimable(address verifier) {
         if (verifier != defaultVerifier() && !_policy().isVerifierAllowed(verifier)) revert VerifierNotApproved(verifier);
         _;
@@ -721,14 +700,14 @@ contract P2IDVault is IP2IDVault {
         _;
     }
 
-    /// @dev Proof-less default-bucket payouts need an owner wallet under an allowed verifier.
+    /// @dev Require a cached owner that passes _ownerOf's claimability and revision checks.
     modifier onlyInitialized(address verifier) {
         _ownerOf(verifier);
         _;
     }
 
     modifier nonReentrant() {
-        if (reentrancyLock != 1) revert Reentrancy();
+        if (reentrancyLock == 2) revert Reentrancy();
         reentrancyLock = 2;
         _;
         reentrancyLock = 1;

@@ -85,15 +85,23 @@ seven addresses it will have on every chain of that environment. Nothing is sent
 
 ## 3. Record the factory; the production one freezes the scheme
 
-Put each predicted `factory` into `sdks/node/p2id-core/src/p2id.json` under the current scheme
-(`pvium.vault.v1`), in `factories.sandbox` and `factories.production`, and commit.
+The deploy script records the factory itself: after a successful run whose wiring checks pass, if
+`sdks/node/p2id-core/src/p2id.json` has no factory yet for that environment under the current
+scheme (`pvium.vault.v1`), it writes the deployed address into `factories.sandbox` or
+`factories.production`. Rebuild the SDK (`yarn build` in `sdks/node`) and commit the file; pushing
+then publishes an SDK that derives against it. (Recording the predicted address by hand before
+deploying is equivalent, and the script refuses to deploy if its configuration would produce a
+different one.)
 
-Recording the sandbox factory freezes nothing: while `production` is `null` the vault may still
-change, `node scripts/embed-p2id.mjs --update` refreshes the init-code hash, and the sandbox
-factory is re-predicted and re-recorded. From the commit that records the production factory, a
-change to `P2IDVault` fails the SDK build and the contract tests until a new scheme
-(a new scheme entry with its own salt name) is added; that is the guard against silently moving mainnet addresses. The deploy
-script also refuses to run if its configuration no longer produces the recorded factory.
+Recording the sandbox factory freezes nothing: while `production` is `null` the vault proxy may
+still change, and the deploy script refreshes `vaultInitCodeHash` from the build it deploys
+(dropping a sandbox factory recorded under the old hash, then recording the new one);
+`node scripts/embed-p2id.mjs --update` in `sdks/node/p2id-core` does the same by hand. From the commit that records the production factory, a
+change to the proxy creation code fails the init-code-hash consistency check until a new scheme
+(a new scheme entry with its own salt name) is added. Changes to the factory or its embedded base
+implementation also change the predicted factory address. Deploying a standalone registered vault
+implementation for an existing factory does not change its vault addresses. The deploy script
+refuses to run if its configuration no longer produces the recorded factory.
 
 (Deploying to one testnet first and recording the address from its output is equivalent.)
 
@@ -116,8 +124,8 @@ The script
    interruption,
 3. reads everything back and checks the wiring: code at every address, every Privy key, the
    circuit version and the owner in `PviumIdentity`, the attester in `PviumVerifier`, the policy's owner and
-   allowlist, and the factory's owner, policy, default verifier, namespace, delay and vault
-   init-code hash against `p2id.json`,
+   allowlist, and the factory's owner, policy, default verifier, namespace, delays, refund bounds,
+   base implementation address/code/factory binding/registration, and vault init-code hash against `p2id.json`,
 4. writes `contracts/deployments/<scheme>.<environment>.<chainId>.json`, including the Privy keys
    and their `kid`s. Commit it.
 
@@ -128,15 +136,20 @@ cause (for example, the Privy JWKS changed since the first chain was deployed).
 **Confirm:** it ends with `wiring checks passed (<environment>)`, and `factory` equals the recorded
 one on every chain of that environment. Expect roughly 9–10M gas in total; the Honk verifier is most of it.
 
-Verify sources on the explorer (optional, recommended). Constructor arguments are in the
-deployment record:
+Verify sources on the explorer (optional, recommended). `scripts/verify-deployments.ts` reads the
+chain's deployment record, asks the explorer which addresses are already verified, and submits
+the rest with the constructor arguments the record holds. One `ETHERSCAN_API_KEY` in `.env`
+covers every chain (Etherscan V2 API):
 
 ```sh
-yarn hardhat verify --network base <pviumIdentity> --constructor-args identity-args.js   # [zkVerifier, circuitVersion, owner, [x…], [y…]] sorted as in the record
-yarn hardhat verify --network base <pviumVerifier> <pviumIdentity> <owner> '[<attester>]'   # '[]' when deployed with none
-yarn hardhat verify --network base <factory> <owner> <keccak256(scheme)> <policy> <pviumVerifier> <policyChangeDelay> <minRefundWindow> <maxRefundWindow>
-yarn hardhat verify --network base <zkVerifier> --libraries libraries.js   # { RelationsLib, ZKTranscriptLib }
+yarn verify --network base                                   # every deployments/*.<chainId>.json for the chain
+DEPLOYMENT=deployments/pvium.vault.v1.production.8453.json yarn verify --network base
+VAULTS=0x…,0x… yarn verify --network bsc                     # vaults the factory has deployed (no constructor args)
+DRY_RUN=1 yarn verify --network base                         # print the plan, call nothing
 ```
+
+Run it from the commit that produced the record: the explorer compares the compiled bytecode with
+what is on chain, so a record from an older build verifies only with that build checked out.
 
 Nothing needs to be handed over afterwards: the factory and the launch policy were given `OWNER`
 at construction, and no other contract has an admin.
@@ -196,4 +209,58 @@ On a testnet, with a test identity you control:
 | A verifier is found unsafe | `policy.approveVerifier(v, false)`: claims under it freeze, refunds still work | unchanged |
 | Protocol fees, or permissionless verifier registration (staking) | Deploy a new `IP2IDPolicy`, then `factory.proposePolicy` → wait the delay → `activatePolicy`. Fees stay capped at 1% by the vault and apply only to deposits made after the switch; the new policy's `distributeFee` decides who receives them (e.g. a verifier operator's share) | unchanged |
 | Vault, factory or launch-policy code changes before release | While no factory is recorded in `p2id.json`: rebuild, `embed-p2id.mjs --update`, deploy again (a superseded testnet record in `deployments/` must be moved aside first) | new addresses for the changed contracts |
-| Vault or factory code changes after release | Add a new scheme entry (its own salt name) to `p2id.json`, deploy that stack, release the SDK; the old scheme stays derivable and claimable | **new scheme, new addresses** |
+| Compatible vault implementation for an existing factory | `IMPLEMENTATION=<Contract> yarn implementation --network <chain>`: runs the `yarn layout` checks (storage layout against `storage/P2IDVault.layout.json`, the owner-proof hook, no `delegatecall`/`selfdestruct`, no proxy-reserved selectors), deploys through `factory.deployVaultImplementation` at the same CREATE2 address on every chain, and proposes it (`MAKE_DEFAULT=1` to also make new vaults start on it; prints calldata when the owner is a multisig); after 14 days `REGISTER=1 yarn implementation`. Verify it with `IMPLEMENTATIONS=src/X.sol:X@0x… yarn verify`. Each vault owner opts in with `upgradeTo` and an identity proof | vault addresses unchanged; new vaults use the current default |
+| Revoke an implementation | `revokeImplementation` removes it as an upgrade target immediately; installed copies continue executing. The original implementation and current default cannot be revoked | unchanged |
+| Factory or proxy code changes after release | Add a new scheme entry to `p2id.json`, deploy the new stack and release the SDK. Existing vaults remain on their original factory/proxy | **new scheme, new addresses** |
+
+
+## Deterministic vault implementations
+
+This workflow requires a factory deployed with `deployVaultImplementation`. Existing deployed
+factories cannot acquire this API: the factory itself is not upgradeable. Changing the factory
+bytecode changes the address predicted by the stack deployment script. Existing deployment records
+and SDK factory addresses must be handled as a separate rollout; this workflow does not overwrite them.
+
+The factory owner calls `deployVaultImplementation(creationCode, makeDefault)`. Creation code
+includes constructor arguments. CREATE2 uses the factory as deployer and
+`keccak256("pvium.vault.implementation.v1")` as salt. The bytecode hash determines the address;
+the default flag does not. Solidity requires the boolean argument; the script defaults it to false.
+
+Deployment and proposal are atomic. A fresh implementation is not registered immediately.
+After 14 days, the owner calls `registerImplementation()`. With `makeDefault=true`, that call
+also sets the implementation used when future vault proxies are deployed. Existing vaults keep
+their implementation until their owners authorize an upgrade. Counterfactual vaults funded before
+deployment receive whichever default is active when they are deployed.
+
+From `contracts/`, with the configured network and owner signer:
+
+```sh
+# Review a plan; writes owner transaction calldata without broadcasting.
+FACTORY=0x... CANDIDATE=src/MyVaultV2.sol:MyVaultV2 MAKE_DEFAULT=true OUT=/tmp/vault-v2-plan.json yarn deploy:implementation --network baseSepolia
+
+# Deploy through the factory and immediately propose registration.
+FACTORY=0x... CANDIDATE=src/MyVaultV2.sol:MyVaultV2 MAKE_DEFAULT=true EXECUTE=1 yarn deploy:implementation --network baseSepolia
+
+# Once the on-chain ETA is reached, activate that exact candidate and flag.
+FACTORY=0x... CANDIDATE=src/MyVaultV2.sol:MyVaultV2 MAKE_DEFAULT=true ACTION=activate EXECUTE=1 yarn deploy:implementation --network baseSepolia
+```
+
+The script supports implementations with `constructor(address factory)`, checks the candidate
+against the committed original storage layout, predicts the address and simulates the owner call.
+For multisig ownership, submit the plan's `to` and `data` from the owner account.
+`OUT` refuses to overwrite an existing file. Keep the same source, compiler settings and constructor
+arguments for activation. Verify the deployed implementation on the explorer with its factory
+constructor argument.
+
+Repeating an identical pending deployment request reuses the code and preserves its ETA.
+A different pending proposal must be cancelled before this deployment API can proceed.
+Repeating an already registered opt-in deployment is a no-op. Changing it to the default starts
+a new 14-day proposal. `proposeDefaultImplementation(address)` can also select an already
+registered implementation, including the original fallback, after the same delay.
+Manual `proposeImplementation(address)` replaces a pending proposal and clears its default flag.
+
+The factory checks code presence and raw factory binding on deterministic deployment and default
+activation; it cannot prove storage compatibility or safe delegatecall behavior. Review each
+candidate against every implementation users may upgrade from, including appended storage.
+The original fallback preserves only its known fields and may not interpret data introduced by
+later versions. No live deployment is performed by the dry-run command.

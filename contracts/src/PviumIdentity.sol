@@ -5,17 +5,10 @@ import {IVerifier} from "./PviumZKVerifier.sol";
 import {IPviumIdentity} from "./interfaces/IPviumIdentity.sol";
 
 /// @title PviumIdentity
-/// @notice On-chain verifier for Pvium attestations: one deployment per circuit version. The
-///         accepted signer keys start as the Privy app's JWKS at deployment (Privy publishes more
-///         than one key per app and may sign with any of them). The owner manages the set so a
-///         Privy key rotation does not strand deposits: adding a key is proposed with the JWKS URL
-///         and key id it can be checked at, and takes effect after SIGNER_KEY_DELAY (7 days);
-///         removing one is immediate, because a leaked key must stop being trusted at once. A key
-///         proposal is the strongest power here (a forged key forges proofs), which is why it is
-///         public for 7 days: anyone can verify the key at the URL, and payees and funders can
-///         claim or refund before it activates. An owner of address(0) makes the set permanent.
-///         A new circuit build is still a new deployment (plus a new PviumVerifier), which the
-///         P2ID vault factory registers alongside the old one. Developers call it through IPviumIdentity.
+/// @notice Verifies attestations using an immutable proof verifier and circuit version.
+///         The constructor supplies the initial P-256 signer keys. The owner can propose additions
+///         with a 7-day activation delay or remove accepted keys immediately.
+/// @dev Proposal URLs and key ids are metadata; this contract does not validate them against JWKS.
 /// @dev Public input layout emitted by circuit/src/main.nr:
 ///        [0] identity_type   [1] wallet (EVM address checked in-circuit against the token; 0 if none)
 ///        [2] signer_x_hi     [3] signer_x_lo     [4] signer_y_hi   [5] signer_y_lo
@@ -27,19 +20,17 @@ contract PviumIdentity is IPviumIdentity {
     uint256 public constant PUBLIC_INPUT_COUNT = 11;
 
     IVerifier public immutable verifier;
-    /// @notice Circuit version this deployment verifies (see circuit/version.json). One deployment per version.
+    /// @notice Circuit version identifier supplied at deployment; not checked against the verifier's bytecode.
     uint16 public immutable circuitVersion;
     /// @notice Notice a key proposal gives before it can be activated.
     uint64 public constant SIGNER_KEY_DELAY = 7 days;
-    /// @notice Number of accepted signer keys. Zero (every key revoked) refuses every proof until a
-    ///         proposal matures: a freeze, never a payout.
+    /// @notice Number of accepted signer keys. When zero, the signer check rejects attestations.
     uint256 public signerKeyCount;
-    /// @notice Incremented whenever a key is revoked, i.e. whenever proofs that verified before may
-    ///         no longer be trusted. Vaults discard wallets cached under an older revision.
+    /// @notice Incremented by removeSignerKey; exposed to consumers for cache invalidation.
     uint64 public keySetRevision;
     /// @dev Accepted signer keys, keyed by signerKeyHash(x, y).
     mapping(bytes32 keyHash => bool) private _signerKeys;
-    /// @notice Manages the signer key set (two-step transfer); address(0) = the set is permanent.
+    /// @notice Owner authorized to propose/remove keys and transfer ownership; zero disables owner-only calls.
     address public owner;
     address public pendingOwner;
 
@@ -48,7 +39,7 @@ contract PviumIdentity is IPviumIdentity {
         uint256 y;
         /// Earliest activation time; zero when there is no proposal for this key.
         uint64 eta;
-        /// Where the key is published: the JWKS URL and the key id in it, for anyone to check.
+        /// Caller-supplied JWKS URL and key id; stored without publication checks.
         string url;
         string kid;
     }
@@ -62,13 +53,11 @@ contract PviumIdentity is IPviumIdentity {
     event OwnershipTransferStarted(address indexed from, address indexed to);
     event OwnershipTransferred(address indexed from, address indexed to);
 
-    /// @notice Everything an attestation asserts, for Pvium's own contracts (e.g. vault claims
-    ///         that pay `wallet`). Developers should use the IPviumIdentity functions.
+    /// @notice Decoded public inputs returned by verifyAttestation after verification.
     struct Attestation {
         uint8 identityType;
-        /// EVM address of the wallet linked in the same token. The circuit decodes it from the
-        /// signed token and asserts equality, so it is never prover-chosen. Zero when the proof
-        /// carries no wallet or the wallet is not an EVM address (then only walletHash is set).
+        /// EVM wallet public input. The circuit checks the selected wallet against the signed token;
+        /// zero represents an absent or non-EVM wallet.
         address wallet;
         /// When Privy issued the token (unix seconds). Freshness policy is the caller's.
         uint64 iat;
@@ -96,8 +85,9 @@ contract PviumIdentity is IPviumIdentity {
     error TimelockNotElapsed(uint64 eta);
     error UnknownKey(uint256 x, uint256 y);
 
-    /// @param _owner Manages the key set; address(0) fixes the set given here forever.
-    /// @param _signerXs/_signerYs Raw P-256 coordinates of every key the Privy app signs with.
+    /// @param _owner Key-set administrator; address(0) disables owner-only calls.
+    /// @param _signerXs X coordinates of the initial accepted P-256 keys.
+    /// @param _signerYs Corresponding Y coordinates.
     constructor(
         IVerifier _verifier,
         uint16 _circuitVersion,
@@ -124,7 +114,7 @@ contract PviumIdentity is IPviumIdentity {
 
     // ---- signer key management ------------------------------------------------------------
 
-    /// @notice Propose accepting a key, published at `url` under `kid`, after SIGNER_KEY_DELAY.
+    /// @notice Propose a key with caller-supplied `url` and `kid`, eligible after SIGNER_KEY_DELAY.
     ///         Re-proposing a key restarts its delay.
     function proposeSignerKey(uint256 x, uint256 y, string calldata url, string calldata kid) external onlyOwner {
         if (!_isOnCurve(x, y)) revert InvalidPublicKey();
@@ -142,8 +132,7 @@ contract PviumIdentity is IPviumIdentity {
         emit SignerKeyProposalCancelled(x, y);
     }
 
-    /// @notice Accept a proposed key once its delay has passed. Anyone may call it: the owner
-    ///         already decided by proposing, and can still cancel until this runs.
+    /// @notice Accept an uncancelled proposal once its delay has passed. Callable by any address.
     function activateSignerKey(uint256 x, uint256 y) external {
         bytes32 h = signerKeyHash(x, y);
         uint64 eta = signerKeyProposals[h].eta;
@@ -156,10 +145,8 @@ contract PviumIdentity is IPviumIdentity {
         emit SignerKeyAdded(x, y);
     }
 
-    /// @notice Stop accepting a key at once (e.g. Privy retired it, or it leaked). Proofs made from
-    ///         tokens it signed fail from now on, and wallets that vaults cached from any proof are
-    ///         discarded (keySetRevision). Removing the last key is allowed: it freezes claims,
-    ///         which is the safe state while a compromised key is replaced.
+    /// @notice Remove an accepted key and increment keySetRevision. The last key may be removed.
+    ///         Attestations naming this key fail the signer check until it is added again.
     function removeSignerKey(uint256 x, uint256 y) external onlyOwner {
         bytes32 h = signerKeyHash(x, y);
         if (!_signerKeys[h]) revert UnknownKey(x, y);
@@ -210,8 +197,8 @@ contract PviumIdentity is IPviumIdentity {
 
     // ---- lower level ----------------------------------------------------------------------
 
-    /// @notice Verify a proof and return everything it asserts. Reverts unless the proof is valid
-    ///         and was produced from a token signed by one of the accepted keys.
+    /// @notice Check the public-input count and accepted signer, require verifier.verify to return
+    ///         true, and return the decoded attestation.
     function verifyAttestation(bytes calldata proof, bytes32[] calldata publicInputs)
         public
         view
@@ -239,7 +226,7 @@ contract PviumIdentity is IPviumIdentity {
         return a.iat;
     }
 
-    /// @dev Cheap checks first (layout, signer), so bad requests fail before the 4M-gas verify.
+    /// @dev Check input count and signer membership before calling the proof verifier.
     function _decode(bytes32[] calldata publicInputs) internal view returns (Attestation memory a) {
         if (publicInputs.length != PUBLIC_INPUT_COUNT) revert WrongPublicInputCount(publicInputs.length);
         bytes32 x = _join(publicInputs[2], publicInputs[3]);
@@ -256,7 +243,7 @@ contract PviumIdentity is IPviumIdentity {
         return bytes32((uint256(hi) << 128) | uint256(lo));
     }
 
-    /// @dev y^2 == x^3 - 3x + b (mod p) on NIST P-256. Guards against registering a typo.
+    /// @dev Check coordinate bounds and y^2 == x^3 - 3x + b (mod p) on NIST P-256.
     function _isOnCurve(uint256 x, uint256 y) internal pure returns (bool) {
         uint256 p = 0xFFFFFFFF00000001000000000000000000000000FFFFFFFFFFFFFFFFFFFFFFFF;
         uint256 b = 0x5AC635D8AA3A93E7B3EBBD55769886BC651D06B0CC53B0F63BCE3C3E27D2604B;

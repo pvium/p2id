@@ -1,0 +1,346 @@
+{
+  "storage": [
+    {
+      "astId": 43,
+      "contract": "src/P2IDVault.sol:P2IDVault",
+      "label": "nsHash",
+      "offset": 0,
+      "slot": "0",
+      "type": "t_bytes32"
+    },
+    {
+      "astId": 45,
+      "contract": "src/P2IDVault.sol:P2IDVault",
+      "label": "saltCommitment",
+      "offset": 0,
+      "slot": "1",
+      "type": "t_bytes32"
+    },
+    {
+      "astId": 47,
+      "contract": "src/P2IDVault.sol:P2IDVault",
+      "label": "minRefundWindow",
+      "offset": 0,
+      "slot": "2",
+      "type": "t_uint64"
+    },
+    {
+      "astId": 49,
+      "contract": "src/P2IDVault.sol:P2IDVault",
+      "label": "maxRefundWindow",
+      "offset": 8,
+      "slot": "2",
+      "type": "t_uint64"
+    },
+    {
+      "astId": 51,
+      "contract": "src/P2IDVault.sol:P2IDVault",
+      "label": "_initialized",
+      "offset": 16,
+      "slot": "2",
+      "type": "t_bool"
+    },
+    {
+      "astId": 56,
+      "contract": "src/P2IDVault.sol:P2IDVault",
+      "label": "owner",
+      "offset": 0,
+      "slot": "3",
+      "type": "t_mapping(t_address,t_address)"
+    },
+    {
+      "astId": 61,
+      "contract": "src/P2IDVault.sol:P2IDVault",
+      "label": "latestProofIat",
+      "offset": 0,
+      "slot": "4",
+      "type": "t_mapping(t_address,t_uint64)"
+    },
+    {
+      "astId": 66,
+      "contract": "src/P2IDVault.sol:P2IDVault",
+      "label": "ownerRevision",
+      "offset": 0,
+      "slot": "5",
+      "type": "t_mapping(t_address,t_uint64)"
+    },
+    {
+      "astId": 69,
+      "contract": "src/P2IDVault.sol:P2IDVault",
+      "label": "untrackedProofIat",
+      "offset": 0,
+      "slot": "6",
+      "type": "t_uint64"
+    },
+    {
+      "astId": 74,
+      "contract": "src/P2IDVault.sol:P2IDVault",
+      "label": "deposits",
+      "offset": 0,
+      "slot": "7",
+      "type": "t_array(t_struct(Deposit)16272_storage)dyn_storage"
+    },
+    {
+      "astId": 83,
+      "contract": "src/P2IDVault.sol:P2IDVault",
+      "label": "bucketTotal",
+      "offset": 0,
+      "slot": "8",
+      "type": "t_mapping(t_address,t_mapping(t_bytes32,t_mapping(t_address,t_uint256)))"
+    },
+    {
+      "astId": 88,
+      "contract": "src/P2IDVault.sol:P2IDVault",
+      "label": "trackedTotal",
+      "offset": 0,
+      "slot": "9",
+      "type": "t_mapping(t_address,t_uint256)"
+    },
+    {
+      "astId": 98,
+      "contract": "src/P2IDVault.sol:P2IDVault",
+      "label": "_bucketDeposits",
+      "offset": 0,
+      "slot": "10",
+      "type": "t_mapping(t_address,t_mapping(t_bytes32,t_mapping(t_address,t_array(t_uint256)dyn_storage)))"
+    },
+    {
+      "astId": 107,
+      "contract": "src/P2IDVault.sol:P2IDVault",
+      "label": "bucketCursor",
+      "offset": 0,
+      "slot": "11",
+      "type": "t_mapping(t_address,t_mapping(t_bytes32,t_mapping(t_address,t_uint256)))"
+    },
+    {
+      "astId": 112,
+      "contract": "src/P2IDVault.sol:P2IDVault",
+      "label": "_constraintDeposit",
+      "offset": 0,
+      "slot": "12",
+      "type": "t_mapping(t_bytes32,t_uint256)"
+    },
+    {
+      "astId": 119,
+      "contract": "src/P2IDVault.sol:P2IDVault",
+      "label": "feesOwed",
+      "offset": 0,
+      "slot": "13",
+      "type": "t_mapping(t_address,t_mapping(t_address,t_uint256))"
+    },
+    {
+      "astId": 124,
+      "contract": "src/P2IDVault.sol:P2IDVault",
+      "label": "feesOwedTotal",
+      "offset": 0,
+      "slot": "14",
+      "type": "t_mapping(t_address,t_uint256)"
+    },
+    {
+      "astId": 127,
+      "contract": "src/P2IDVault.sol:P2IDVault",
+      "label": "reentrancyLock",
+      "offset": 0,
+      "slot": "15",
+      "type": "t_uint256"
+    }
+  ],
+  "types": {
+    "t_address": {
+      "encoding": "inplace",
+      "label": "address",
+      "numberOfBytes": "20"
+    },
+    "t_array(t_struct(Deposit)16272_storage)dyn_storage": {
+      "base": "t_struct(Deposit)16272_storage",
+      "encoding": "dynamic_array",
+      "label": "struct IP2IDVault.Deposit[]",
+      "numberOfBytes": "32"
+    },
+    "t_array(t_uint256)dyn_storage": {
+      "base": "t_uint256",
+      "encoding": "dynamic_array",
+      "label": "uint256[]",
+      "numberOfBytes": "32"
+    },
+    "t_bool": {
+      "encoding": "inplace",
+      "label": "bool",
+      "numberOfBytes": "1"
+    },
+    "t_bytes32": {
+      "encoding": "inplace",
+      "label": "bytes32",
+      "numberOfBytes": "32"
+    },
+    "t_mapping(t_address,t_address)": {
+      "encoding": "mapping",
+      "key": "t_address",
+      "label": "mapping(address => address)",
+      "numberOfBytes": "32",
+      "value": "t_address"
+    },
+    "t_mapping(t_address,t_array(t_uint256)dyn_storage)": {
+      "encoding": "mapping",
+      "key": "t_address",
+      "label": "mapping(address => uint256[])",
+      "numberOfBytes": "32",
+      "value": "t_array(t_uint256)dyn_storage"
+    },
+    "t_mapping(t_address,t_mapping(t_address,t_uint256))": {
+      "encoding": "mapping",
+      "key": "t_address",
+      "label": "mapping(address => mapping(address => uint256))",
+      "numberOfBytes": "32",
+      "value": "t_mapping(t_address,t_uint256)"
+    },
+    "t_mapping(t_address,t_mapping(t_bytes32,t_mapping(t_address,t_array(t_uint256)dyn_storage)))": {
+      "encoding": "mapping",
+      "key": "t_address",
+      "label": "mapping(address => mapping(bytes32 => mapping(address => uint256[])))",
+      "numberOfBytes": "32",
+      "value": "t_mapping(t_bytes32,t_mapping(t_address,t_array(t_uint256)dyn_storage))"
+    },
+    "t_mapping(t_address,t_mapping(t_bytes32,t_mapping(t_address,t_uint256)))": {
+      "encoding": "mapping",
+      "key": "t_address",
+      "label": "mapping(address => mapping(bytes32 => mapping(address => uint256)))",
+      "numberOfBytes": "32",
+      "value": "t_mapping(t_bytes32,t_mapping(t_address,t_uint256))"
+    },
+    "t_mapping(t_address,t_uint256)": {
+      "encoding": "mapping",
+      "key": "t_address",
+      "label": "mapping(address => uint256)",
+      "numberOfBytes": "32",
+      "value": "t_uint256"
+    },
+    "t_mapping(t_address,t_uint64)": {
+      "encoding": "mapping",
+      "key": "t_address",
+      "label": "mapping(address => uint64)",
+      "numberOfBytes": "32",
+      "value": "t_uint64"
+    },
+    "t_mapping(t_bytes32,t_mapping(t_address,t_array(t_uint256)dyn_storage))": {
+      "encoding": "mapping",
+      "key": "t_bytes32",
+      "label": "mapping(bytes32 => mapping(address => uint256[]))",
+      "numberOfBytes": "32",
+      "value": "t_mapping(t_address,t_array(t_uint256)dyn_storage)"
+    },
+    "t_mapping(t_bytes32,t_mapping(t_address,t_uint256))": {
+      "encoding": "mapping",
+      "key": "t_bytes32",
+      "label": "mapping(bytes32 => mapping(address => uint256))",
+      "numberOfBytes": "32",
+      "value": "t_mapping(t_address,t_uint256)"
+    },
+    "t_mapping(t_bytes32,t_uint256)": {
+      "encoding": "mapping",
+      "key": "t_bytes32",
+      "label": "mapping(bytes32 => uint256)",
+      "numberOfBytes": "32",
+      "value": "t_uint256"
+    },
+    "t_struct(Deposit)16272_storage": {
+      "encoding": "inplace",
+      "label": "struct IP2IDVault.Deposit",
+      "members": [
+        {
+          "astId": 16254,
+          "contract": "src/P2IDVault.sol:P2IDVault",
+          "label": "funder",
+          "offset": 0,
+          "slot": "0",
+          "type": "t_address"
+        },
+        {
+          "astId": 16256,
+          "contract": "src/P2IDVault.sol:P2IDVault",
+          "label": "fundedAt",
+          "offset": 20,
+          "slot": "0",
+          "type": "t_uint64"
+        },
+        {
+          "astId": 16258,
+          "contract": "src/P2IDVault.sol:P2IDVault",
+          "label": "consumed",
+          "offset": 28,
+          "slot": "0",
+          "type": "t_bool"
+        },
+        {
+          "astId": 16260,
+          "contract": "src/P2IDVault.sol:P2IDVault",
+          "label": "token",
+          "offset": 0,
+          "slot": "1",
+          "type": "t_address"
+        },
+        {
+          "astId": 16262,
+          "contract": "src/P2IDVault.sol:P2IDVault",
+          "label": "refundWindow",
+          "offset": 20,
+          "slot": "1",
+          "type": "t_uint64"
+        },
+        {
+          "astId": 16264,
+          "contract": "src/P2IDVault.sol:P2IDVault",
+          "label": "verifier",
+          "offset": 0,
+          "slot": "2",
+          "type": "t_address"
+        },
+        {
+          "astId": 16267,
+          "contract": "src/P2IDVault.sol:P2IDVault",
+          "label": "feeBps",
+          "offset": 20,
+          "slot": "2",
+          "type": "t_uint16"
+        },
+        {
+          "astId": 16269,
+          "contract": "src/P2IDVault.sol:P2IDVault",
+          "label": "amount",
+          "offset": 0,
+          "slot": "3",
+          "type": "t_uint128"
+        },
+        {
+          "astId": 16271,
+          "contract": "src/P2IDVault.sol:P2IDVault",
+          "label": "constraint",
+          "offset": 0,
+          "slot": "4",
+          "type": "t_bytes32"
+        }
+      ],
+      "numberOfBytes": "160"
+    },
+    "t_uint128": {
+      "encoding": "inplace",
+      "label": "uint128",
+      "numberOfBytes": "16"
+    },
+    "t_uint16": {
+      "encoding": "inplace",
+      "label": "uint16",
+      "numberOfBytes": "2"
+    },
+    "t_uint256": {
+      "encoding": "inplace",
+      "label": "uint256",
+      "numberOfBytes": "32"
+    },
+    "t_uint64": {
+      "encoding": "inplace",
+      "label": "uint64",
+      "numberOfBytes": "8"
+    }
+  }
+}

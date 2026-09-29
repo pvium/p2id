@@ -2,30 +2,57 @@
 pragma solidity ^0.8.27;
 
 /// @title IP2IdVaultFactory
-/// @notice Deploys one P2IDVault per identity at an address anyone can derive offline from the
-///         identity hash, and points every vault at the current policy and default verifier.
+/// @notice Vault proxy deployment, address derivation, funding and shared configuration views.
 interface IP2IdVaultFactory {
     event VaultDeployed(bytes32 indexed identityHash, address indexed vault);
+    event ImplementationProposed(address indexed implementation, uint64 eta);
+    event ImplementationProposalCancelled(address indexed implementation);
+    event ImplementationRegistered(address indexed implementation);
+    event ImplementationDeployed(address indexed implementation, bytes32 creationCodeHash);
+    event ImplementationDefaultProposed(address indexed implementation, bool makeDefault, uint64 eta);
+    event DefaultImplementationActivated(address indexed implementation);
+    event ImplementationRevoked(address indexed implementation);
 
     /// @notice P2ID factory interface version implemented by this contract.
     function p2idVersion() external pure returns (string memory);
 
-    // ---- what vaults consult on every call; both change only through a timelock ----
-    /// @notice The IP2IDPolicy deciding which verifiers are allowed and what (capped) fee applies.
+    // ---- shared configuration ----
+    /// @notice Policy address used for verifier approval, fee quotes and fee distribution.
     function policy() external view returns (address);
     /// @notice Verifier used when a payer does not choose one, and the one bare transfers are claimed through.
     function defaultVerifier() external view returns (address);
 
+    // ---- vault implementations ----
+    /// @notice The implementation every newly deployed vault proxy starts on.
+    function baseImplementation() external view returns (address);
+    /// @notice Whether the implementation is registered as an upgrade target; other upgrade checks also apply.
+    function isRegisteredImplementation(address implementation) external view returns (bool);
+
+    function initialImplementation() external view returns (address);
+    function implementationFor(bytes32 creationCodeHash) external view returns (address);
+    /// @notice Deploy full creation code and propose registration; makeDefault applies after the delay.
+    function deployVaultImplementation(bytes memory creationCode, bool makeDefault) external returns (address);
+    function proposeDefaultImplementation(address implementation) external;
+
+    // ---- address derivation constants ----
+    /// @notice Namespace value supplied to the factory constructor and passed to vault initialization.
+    function nsHash() external view returns (bytes32);
+    /// @notice Proxy creation-code hash used with this factory's address and an identityHash for CREATE2 derivation.
+    function initCodeHash() external pure returns (bytes32);
+    /// @notice Refund-window bounds passed to new vaults during initialization.
+    function minRefundWindow() external view returns (uint64);
+    function maxRefundWindow() external view returns (uint64);
+
     // ---- vaults ----
     /// @notice The vault address for `identityHash`, deployed or not:
-    ///         `keccak256(0xff ‖ factory ‖ identityHash ‖ keccak256(P2IDVault creationCode))`.
+    ///         Low 160 bits of `keccak256(0xff || factory || identityHash || initCodeHash())`.
     function vaultFor(bytes32 identityHash) external view returns (address);
     function isDeployed(bytes32 identityHash) external view returns (bool);
     /// @notice Deploy the vault for `identityHash`; returns the existing one if already deployed.
     function deploy(bytes32 identityHash) external returns (address vault);
     /// @notice Deploy if needed, then fund under the default verifier on the caller's behalf
-    ///         (caller keeps the refund right). ERC-20: approve this factory once to pay any
-    ///         identity. Native coin: token = address(0), send `amount` as msg.value.
+    ///         (caller is recorded as funder). ERC-20: approve this factory for the requested amount.
+    ///         Native coin: token = address(0), send `amount` as msg.value.
     /// @param ref Opaque application reference forwarded to the vault's Funded event; bytes32(0) for none.
     function fund(
         bytes32 identityHash,

@@ -1,5 +1,5 @@
 {
-  "scheme": "p2id.vault.v1",
+  "scheme": "pvium.vault.v1",
   "environment": "sandbox",
   "privyJwks": "https://auth.privy.io/api/v1/apps/cmhc6t92u001tju0cxkxg34on/jwks.json",
   "privyKeys": [
@@ -24,11 +24,12 @@
   },
   "network": "baseSepolia",
   "chainId": 84532,
-  "relationsLib": "0x905d26249c677214a801BaFa4d1F076CE818c970",
-  "transcriptLib": "0x32AF91C59E2A21B608C81cc2759f5ccE8a64C5b1",
-  "zkVerifier": "0x548c561f21DAc415Ef502743B382D73D10A0c027",
-  "pviumIdentity": "0xBD9c08921B64EB25CE8f66e4198B3Ab48c8DBccB",
-  "pviumVerifier": "0x4dF1Be63E7881642092a25bD11B55D4D75E7D3Bf",
-  "policy": "0xaF860b0DA8DA8503b3602000e160A8462d30eE12",
-  "factory": "0x21859137b4979B101079742942c741224529eE6D"
+  "relationsLib": "0x0F21B554fBf7c4f1389Af0607e9a8b2E56730fbE",
+  "transcriptLib": "0x0fF89f21E57B020F50e8F737E2762B33b49f7A5B",
+  "zkVerifier": "0x47a20E941D98874fec77f237136d53FD7A43353F",
+  "pviumIdentity": "0xa6aA09000CD32A3bA7E08cE0e9B0c43C07228Ee4",
+  "pviumVerifier": "0x5f642B4728590257118A2cCa9985ab471591eD7D",
+  "policy": "0x33C5C3045E949Ab3Bf67e00a41Ed6159205553D7",
+  "factory": "0x5d173035d5Ae0b67a521FbFE72bDe43C96a0080A",
+  "baseImplementation": "0x14eA4Ea9BE003F94EAC894C44207e96055005089"
 }

@@ -4,10 +4,8 @@ pragma solidity ^0.8.27;
 import {IP2IDVerifier} from "./IP2IDVerifier.sol";
 
 /// @title IP2IDVault
-/// @notice A vault holding ERC-20 tokens and the native coin for one identity until its owner
-///         proves it and sweeps. The native coin is the token address(0) in every function.
-///         Every deposit names the verifier whose proofs can release it; the factory's policy
-///         decides which verifiers are allowed and what (capped) fee applies.
+/// @notice Deposit funding, claims, refunds and accounting for one identity commitment.
+///         Token address(0) denotes native coin. Each deposit records its verifier and fee rate.
 interface IP2IDVault {
     /// @dev Field order packs into 5 storage slots:
     ///      [funder, fundedAt, consumed] [token, refundWindow] [verifier, feeBps] [amount] [constraint].
@@ -25,8 +23,7 @@ interface IP2IDVault {
     }
 
     // ------------------------------------------------------------------ events
-    // Every deposit is Funded once and then either Refunded (by its funder) or Claimed by a sweep.
-    // Sweeps also emit one aggregate event with the net amount paid and the fee.
+    // Funding emits Funded; consumption emits Refunded or Claimed. Sweeps emit aggregate amounts.
 
     /// @notice A deposit was recorded via fund()/fundWith()/fundFor().
     /// @param ref Opaque application reference; zero means absent. Emitted only, not stored or enforced as unique.
@@ -35,15 +32,15 @@ interface IP2IDVault {
     event Refunded(uint256 indexed depositId, address indexed funder, address indexed token, uint256 amount);
     /// @notice A deposit was paid out by a sweep: `amount` gross, of which `fee` accrued as a fee.
     event Claimed(uint256 indexed depositId, address indexed to, uint256 amount, uint256 fee);
-    /// @notice A proof newer than any seen under `verifier` set that verifier's owner wallet; older proofs are now refused.
+    /// @notice The owner cache was set or revalidated under the verifier's current revision.
     event OwnerRefreshed(address indexed verifier, address indexed owner, uint64 iat);
-    /// @notice Default-bucket funds under `verifier` were paid to its owner wallet (`amount` net of `fee`).
+    /// @notice Default sweep result, including eligible untracked funds; amount is net of fee and may be zero.
     event Swept(address indexed verifier, address indexed token, uint256 amount, uint256 fee, address indexed to, uint256 depositsConsumed);
     /// @notice Funds from a constrained bucket were paid to the wallet the proof resolved to (`amount` net of `fee`).
     event SweptBucket(address indexed verifier, bytes32 indexed constraint, address indexed token, uint256 amount, uint256 fee, address to, uint256 depositsConsumed);
     /// @notice A fee accrued for `verifier`; it stays in the vault until withdrawFees() hands it to the policy.
     event FeeAccrued(address indexed verifier, address indexed token, uint256 amount);
-    /// @notice The policy pulled `amount` of accrued fees to distribute.
+    /// @notice Amount deducted from accrued fees after policy distribution, via token pull or native transfer.
     event FeesDistributed(address indexed verifier, address indexed token, uint256 amount, address policy);
 
     // setup (factory only, once)
@@ -56,7 +53,7 @@ interface IP2IDVault {
     /// @notice Fund under any verifier the factory's policy allows.
     /// @param ref Opaque application reference emitted in Funded; bytes32(0) for none.
     function fundWith(address verifier, address token, uint256 amount, bytes32 constraint, uint64 refundWindow, bytes32 ref) external payable returns (uint256 depositId);
-    /// @notice Factory-only: record a deposit owned by `funder`; tokens are pulled from the factory.
+    /// @notice Factory-only: record a deposit for `funder`; pull ERC-20 from the factory or receive native msg.value.
     /// @param ref Opaque application reference emitted in Funded; bytes32(0) for none.
     function fundFor(address funder, address verifier, address token, uint256 amount, bytes32 constraint, uint64 refundWindow, bytes32 ref) external payable returns (uint256 depositId);
     function refund(uint256 depositId) external;
@@ -66,9 +63,16 @@ interface IP2IDVault {
     ///         if the proof is newer than anything seen under it, and retires older proofs.
     function refreshProof(address verifier, bytes calldata proof) external;
     function refreshProofAndSweep(address verifier, bytes calldata proof, address token, uint256 depositCountLimit) external returns (uint256 amount, uint256 consumed);
+    /// @notice Apply a proof the vault's own proxy has already verified (msg.sender must be this
+    ///         address): the freshness, revision and owner-cache rules of refreshProof without
+    ///         re-verifying. Reverts unless `wallet` is the recorded owner under `verifier` afterwards.
+    ///         Returns its own selector as acknowledgement so the proxy rejects empty fallbacks.
+    ///         The acknowledgement checks compatibility; implementations remain trusted to apply the result.
+    function acceptOwnerProof(address verifier, address wallet, uint64 iat) external returns (bytes4);
 
     // claiming (amounts returned are net of fees)
-    /// @notice Sweep `verifier`'s default bucket to its owner; the default verifier's sweep also takes untracked funds.
+    /// @notice Sweep a page of the verifier's default bucket to its cached owner. Eligible untracked
+    ///         funds are included for the current default verifier when its cache meets the cross-default floor.
     function sweep(address verifier, address token, uint256 depositCountLimit) external returns (uint256 amount, uint256 consumed);
     function sweepUntracked(address token) external returns (uint256 amount);
     function sweepDeposits(address verifier, address token, uint256[] calldata depositIds) external returns (uint256 amount);
@@ -83,9 +87,11 @@ interface IP2IDVault {
     /// @notice P2ID vault interface version implemented by this contract.
     function p2idVersion() external pure returns (string memory);
     function MAX_FEE_BPS() external view returns (uint16);
+    /// @notice Record cap for cursor-based sweeps; a zero or above-cap depositCountLimit uses this value.
+    function MAX_SWEEP_PAGE() external view returns (uint256);
     /// @notice address(0): the token address standing for the native coin.
     function NATIVE() external view returns (address);
-    /// @notice keccak256 of the address scheme this vault was issued under, e.g. keccak256("pvium.vault.v1").
+    /// @notice Namespace value supplied at initialization; not used to recompute this vault's address.
     function nsHash() external view returns (bytes32);
     function factory() external view returns (address);
     function policy() external view returns (address);
@@ -96,17 +102,18 @@ interface IP2IDVault {
     function untrackedProofIat() external view returns (uint64);
     function saltCommitment() external view returns (bytes32);
     function depositCount() external view returns (uint256);
-    function bucketDepositIds(address verifier, bytes32 constraint, address token) external view returns (uint256[] memory);
+    /// @notice A page of the bucket's deposit ids: up to `limit` from `offset` (limit 0 = all from `offset`).
+    function bucketDepositIds(address verifier, bytes32 constraint, address token, uint256 offset, uint256 limit) external view returns (uint256[] memory);
     function bucketDepositCount(address verifier, bytes32 constraint, address token) external view returns (uint256);
-    /// @notice Whether `funder` has funded under `constraint`, and which deposit. A funder can use a
-    ///         constraint once (refunded or claimed, it stays used), so a signature over it releases
-    ///         at most one of their deposits. Funders must make constraints unique, e.g. by salting.
+    /// @notice Deposit recorded for a nonzero constraint and funder in this vault. The record persists
+    ///         after a refund or claim and prevents the same funder from reusing that constraint here.
     function constraintDeposit(bytes32 constraint, address funder) external view returns (bool used, uint256 depositId);
     function bucketTotal(address verifier, bytes32 constraint, address token) external view returns (uint256);
     function trackedTotal(address token) external view returns (uint256);
     function feesOwed(address verifier, address token) external view returns (uint256);
     function feesOwedTotal(address token) external view returns (uint256);
-    /// @notice Gross amount `sweep(verifier, token, 0)` would release now, before fees.
+    /// @notice Total default-bucket amount plus eligible untracked funds, before fees.
+    ///         Does not apply the sweep page limit or validate default-bucket claimability.
     function sweepable(address verifier, address token) external view returns (uint256);
     function untrackedBalance(address token) external view returns (uint256);
 }

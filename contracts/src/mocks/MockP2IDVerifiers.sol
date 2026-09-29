@@ -2,6 +2,7 @@
 pragma solidity ^0.8.27;
 
 import {IP2IDVerifier} from "../interfaces/IP2IDVerifier.sol";
+import {P2IDVault} from "../P2IDVault.sol";
 import {IP2IDPolicy} from "../interfaces/IP2IDPolicy.sol";
 
 /// @dev Test stub: proof = abi.encode(address wallet, bytes32 identityHash, uint64 iat).
@@ -23,10 +24,21 @@ contract MockIdentityVerifier is IP2IDVerifier {
         }
     }
 
-    uint64 public revision;
+    uint64 private _revision;
+    bool public revisionBroken;
 
     function setRevision(uint64 r) external {
-        revision = r;
+        _revision = r;
+    }
+
+    /// @dev Simulate a verifier whose revision() cannot be read.
+    function breakRevision(bool broken) external {
+        revisionBroken = broken;
+    }
+
+    function revision() external view returns (uint64) {
+        require(!revisionBroken, "revision unavailable");
+        return _revision;
     }
 
     function supportsConstraints() external pure virtual returns (bool) {
@@ -34,7 +46,7 @@ contract MockIdentityVerifier is IP2IDVerifier {
     }
 }
 
-/// @dev Same, but declares it cannot satisfy constraints (like a PviumVerifier with no attester).
+/// @dev MockIdentityVerifier variant reporting supportsConstraints() == false.
 contract MockNoConstraintVerifier is MockIdentityVerifier {
     function supportsConstraints() external pure override returns (bool) {
         return false;
@@ -47,8 +59,8 @@ interface IERC20Min {
 }
 
 /// @dev Test policy with adjustable allowlist, fee rate and distribution, and failure modes.
-///      distributeFee pulls `pullBps` of the amount and splits it: `operatorShareBps` to the
-///      operator registered for the verifier, the rest to `recipient` (the protocol).
+///      ERC-20 distribution normally pulls pullBps / 10_000 of amount; native distribution uses
+///      msg.value. Both split the received amount between operatorOf[verifier] and recipient.
 contract MockFeePolicy is IP2IDPolicy {
     mapping(address => bool) public allowed;
     uint16 public bps;
@@ -56,8 +68,8 @@ contract MockFeePolicy is IP2IDPolicy {
     mapping(address verifier => address) public operatorOf;
     uint16 public operatorShareBps;
     uint16 public pullBps = 10_000;
-    /// 0 = normal, 1 = fee calls revert, 2 = fee calls burn all gas, 3 = distributeFee reverts,
-    /// 4 = distributeFee tries to pull more than it was offered
+    /// 0 = normal, 1 = feeBps reverts, 2 = feeBps loops until failure, 3 = distributeFee reverts,
+    /// 4 = ERC-20 distributeFee attempts to pull amount + 1.
     uint8 public mode;
 
     function allow(address verifier, bool ok) external {
@@ -116,7 +128,7 @@ contract MockFeePolicy is IP2IDPolicy {
         if (mode == 1) revert("policy down");
         if (mode == 2) {
             uint256 x;
-            while (true) x++; // runs out of gas, never returns
+            while (true) x++; // intentional gas exhaustion in the query test
         }
     }
 }
@@ -143,9 +155,25 @@ contract MockReentrantWallet {
     }
 }
 
-/// @dev Pays with Solidity's `transfer`, which forwards only a 2300-gas stipend (as many launchpads do).
+/// @dev Uses Solidity transfer to test receipt with a 2300-gas stipend.
 contract MockNativeSender {
     function send(address payable to) external payable {
         to.transfer(msg.value);
     }
+}
+
+/// @dev A second vault implementation for proxy tests: the base vault plus one new function.
+contract MockVaultV2 is P2IDVault {
+    constructor(address _factory) P2IDVault(_factory) {}
+
+    function version2() external pure returns (uint8) {
+        return 2;
+    }
+}
+
+/// @dev A compatible implementation: the base layout untouched, one variable appended.
+contract MockVaultAppends is P2IDVault {
+    uint256 public extra;
+
+    constructor(address _factory) P2IDVault(_factory) {}
 }

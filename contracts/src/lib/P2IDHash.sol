@@ -2,10 +2,10 @@
 pragma solidity ^0.8.27;
 
 /// @title P2IDHash
-/// @notice The identity commitment exactly as circuit/src/main.nr computes it:
+/// @notice Identity commitment:
 ///         sha256("p2id.identity.v1" || identityType || normalize(value)).
-///         `normalize` ASCII-lowercases every type except phone and wallet, and lowercases
-///         `0x…` (EVM, hex) wallet addresses; base58 (Solana) addresses are untouched.
+///         Normalization ASCII-lowercases non-phone, non-wallet values. Wallet values are
+///         lowercased only when they start with lowercase `0x`; other wallet strings are unchanged.
 library P2IDHash {
     bytes internal constant PREFIX = "p2id.identity.v1";
     uint8 internal constant PHONE = 1;
@@ -27,7 +27,7 @@ library P2IDHash {
         return sha256(abi.encodePacked(PREFIX, WALLET, toLowerHex(wallet)));
     }
 
-    /// @notice Commitment for a wallet on any chain, given as Privy stores it (e.g. base58).
+    /// @notice Wallet-string commitment using type 12, with identityHash's normalization and length checks.
     function walletHash(string memory wallet) internal pure returns (bytes32) {
         return identityHash(WALLET, bytes(wallet));
     }
@@ -48,7 +48,7 @@ library P2IDHash {
         return out;
     }
 
-    /// @dev "0x" + 40 lowercase hex chars, the form the circuit hashes an EVM address in.
+    /// @dev Encode an address as "0x" followed by 40 lowercase hexadecimal characters.
     function toLowerHex(address a) internal pure returns (bytes memory out) {
         bytes16 digits = "0123456789abcdef";
         out = new bytes(42);

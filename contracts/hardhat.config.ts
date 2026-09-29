@@ -31,6 +31,9 @@ const config: HardhatUserConfig = {
       // No source-metadata hash in the bytecode: a vault's address depends on keccak256 of its
       // creation code, and that must change only when the code does, not when a comment does.
       metadata: { bytecodeHash: 'none' },
+      // Storage layouts, for scripts/check-storage-layout.ts (vault implementations must stay
+      // layout-compatible with the original vault storage).
+      outputSelection: { '*': { '*': ['storageLayout'] } },
     },
   },
   networks: {

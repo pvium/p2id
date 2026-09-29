@@ -18,7 +18,7 @@
 // Privy JWKS, the first local account as owner, and no attester. Real networks never default.
 // Every chain of one environment must end up with the same addresses; the script refuses to
 // deploy a configuration that differs from an earlier deployment of the same scheme+environment.
-import { ethers, network } from 'hardhat';
+import { artifacts, ethers, network } from 'hardhat';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { envFor, environmentOf, requireEnvFor, type P2IDEnvironment } from '../deploy.config';
@@ -29,6 +29,7 @@ const SANDBOX_JWKS = 'https://auth.privy.io/api/v1/apps/cmhc6t92u001tju0cxkxg34o
 const isLocal = () => network.name === 'hardhat' || network.name === 'localhost';
 const ROOT = join(__dirname, '..', '..');
 const DEPLOYMENTS = join(__dirname, '..', 'deployments');
+const P2ID_JSON = join(ROOT, 'sdks', 'node', 'p2id-core', 'src', 'p2id.json');
 
 interface PrivyKey {
   kid: string;
@@ -124,8 +125,27 @@ async function main() {
   //    first (the only remote input), then the rest of the configuration. A failure here means
   //    nothing was sent.
   const environment = environmentOf(network.name);
-  const p2id = JSON.parse(readFileSync(join(ROOT, 'sdks', 'node', 'p2id-core', 'src', 'p2id.json'), 'utf8'));
+  const p2id = JSON.parse(readFileSync(P2ID_JSON, 'utf8'));
   const scheme: string = process.env.SCHEME ?? p2id.current;
+  // The SDK derives addresses with the vault proxy's creation-code hash, which must be this
+  // build's. While the scheme is unreleased (no production factory) a stale hash is refreshed
+  // here, and a sandbox factory recorded under the old hash is dropped so this run records the
+  // new one. Once released, a different hash means the proxy changed: that is a new scheme.
+  const proxyHash = ethers.keccak256((await artifacts.readArtifact('PviumP2IDVaultProxy')).bytecode);
+  const entry = p2id.schemes[scheme];
+  if (entry && entry.vaultInitCodeHash !== proxyHash) {
+    if (entry.factories.production !== null) {
+      throw new Error(`the vault proxy now hashes to ${proxyHash}, but ${scheme} is released (production factory ${entry.factories.production}) and frozen at ${entry.vaultInitCodeHash}: a proxy change is a new scheme`);
+    }
+    entry.vaultInitCodeHash = proxyHash;
+    entry.factories.sandbox = null;
+    if (process.env.PREDICT) {
+      console.log(`vaultInitCodeHash in sdks/node/p2id-core/src/p2id.json is stale (now ${proxyHash}); a deployment run refreshes it`);
+    } else {
+      writeFileSync(P2ID_JSON, JSON.stringify(p2id, null, 2) + '\n');
+      console.log(`refreshed ${scheme} vaultInitCodeHash to ${proxyHash} in sdks/node/p2id-core/src/p2id.json (sandbox factory will be re-recorded)`);
+    }
+  }
   const circuitVersion = Number(process.env.CIRCUIT_VERSION ?? JSON.parse(readFileSync(join(ROOT, 'circuit', 'version.json'), 'utf8')).circuitVersion);
   const { params, keys, jwks } = await configFor(environment, scheme, circuitVersion);
   console.log(`${environment} on ${network.name}: ${keys.length} Privy keys (${keys.map((k) => k.kid).join(', ')}), owner ${params.owner}`);
@@ -199,6 +219,14 @@ async function main() {
   }
   console.log(JSON.stringify(record, null, 2));
   console.log(`\nwiring checks passed (${environment})`);
+
+  // 4. Record the factory for the SDK. Only when nothing is recorded yet: a recorded address that
+  //    differs was refused above, and one that matches needs nothing. Not for local chains.
+  if (chainId !== 31337 && recorded === null) {
+    p2id.schemes[scheme].factories[environment] = addresses.factory;
+    writeFileSync(P2ID_JSON, JSON.stringify(p2id, null, 2) + '\n');
+    console.log(`recorded ${environment} factory ${addresses.factory} in sdks/node/p2id-core/src/p2id.json: rebuild the SDK and commit it`);
+  }
 }
 
 main().catch((e) => {
