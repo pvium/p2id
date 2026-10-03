@@ -12,7 +12,8 @@ describe('vault implementation storage layout', function () {
   it('the base P2IDVault matches the committed snapshot', () => {
     const base = readContract(root, 'src/P2IDVault.sol:P2IDVault');
     expect(errors(compareLayouts(snapshot, base.layout))).to.deep.equal([]);
-    expect(base.layout.storage.length).to.equal(snapshot.storage.length);
+    expect(base.layout.storage.length).to.equal(snapshot.storage.length + 2);
+    expect(base.layout.storage.at(-1)?.label).to.equal('ownerAlphaRevision');
   });
 
   it('implementations that keep the layout and append pass; the base has no delegatecall or selfdestruct', () => {
@@ -52,5 +53,18 @@ describe('vault implementation storage layout', function () {
     const bad = readContract(root, 'MockVaultV2');
     bad.abi = [...bad.abi, { type: 'function', name: 'upgradeTo', inputs: [{ type: 'bytes32' }, { type: 'address' }, { type: 'bytes' }], outputs: [] }];
     expect(errors(validateImplementation(snapshot, bad)).some((m) => m.includes('answered by the proxy'))).to.equal(true);
+  });
+  it('keeps business alpha methods on the implementation and reserves only proxy management methods', () => {
+    const proxy = readContract(root, 'PviumP2IDVaultProxy');
+    const alpha = readContract(root, 'P2IDVault');
+    expect(errors(validateImplementation(snapshot, alpha))).to.deep.equal([]);
+    for (const name of ['alphaNonceUsed', 'executeWithAttestation', 'refreshProofWithAttestation', 'refreshProofAndSweepWithAttestation', 'sweepBucketWithAttestation', 'sweepBucketDepositsWithAttestation']) {
+      expect(proxy.abi.some((f) => f.type === 'function' && f.name === name), name).to.equal(false);
+      expect(alpha.abi.some((f) => f.type === 'function' && f.name === name), name).to.equal(true);
+    }
+    const candidate = readContract(root, 'MockVaultV2');
+    candidate.abi = [...candidate.abi, proxy.abi.find((f) => f.type === 'function' && f.name === 'upgradeToWithAttestation')];
+    expect(errors(validateImplementation(snapshot, candidate)).some((m) => m.startsWith('upgradeToWithAttestation') && m.includes('answered by the proxy'))).to.equal(true);
+    expect(errors(compareLayouts(alpha.layout, readContract(root, 'MockVaultV2').layout))).to.deep.equal([]);
   });
 });

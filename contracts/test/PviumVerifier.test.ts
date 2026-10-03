@@ -49,7 +49,8 @@ describe('PviumVerifier: real ZK proof + signed constraint commitment', function
   beforeEach(async () => {
     token = await ethers.deployContract('MockERC20');
     const policy = await ethers.deployContract('PviumP2IDPolicy', [admin.address, [await verifier.getAddress(), await verifierNoSigner.getAddress()]]);
-    factory = await ethers.deployContract('PviumP2IdVaultFactory', [admin.address, NS, await policy.getAddress(), await verifier.getAddress(), 7 * DAY, DAY, 30 * DAY]);
+    factory = await ethers.deployContract('PviumP2IdVaultFactory', [admin.address, NS, await policy.getAddress(), await verifier.getAddress(), 7 * DAY, DAY, 30 * DAY, ethers.ZeroAddress]);
+    await factory.connect(admin).setAlpha(await (await ethers.getContractAt('IP2IDVerifier', await factory.defaultVerifier())).vkHash(), false); // this suite exercises the ordinary (post-alpha) paths
     await factory.deploy(EMAIL_COMMITMENT);
     vault = await ethers.getContractAt('P2IDVault', await factory.vaultFor(EMAIL_COMMITMENT));
   });
@@ -75,6 +76,30 @@ describe('PviumVerifier: real ZK proof + signed constraint commitment', function
     await token.mint(await vault.getAddress(), 250n);
     await expect(vault.refreshProofAndSweep(await verifier.getAddress(), proofBytes('email'), await token.getAddress(), 0))
       .to.emit(vault, 'OwnerRefreshed').withArgs(await verifier.getAddress(), LINKED_WALLET, 1789240094n);
+    expect(await token.balanceOf(LINKED_WALLET)).to.equal(250n);
+  });
+
+  it('alpha requires an independent signature even for a real proof and bare token transfers', async () => {
+    await factory.connect(admin).setDefaultAttester(attester.address);
+    await factory.connect(admin).setAlpha(await (await ethers.getContractAt('IP2IDVerifier', await factory.defaultVerifier())).vkHash(), true);
+    const proxy = await ethers.getContractAt('PviumP2IDVaultProxy', await vault.getAddress());
+    const data = vault.interface.encodeFunctionData('refreshProofAndSweep', [await verifier.getAddress(), proofBytes('email'), await token.getAddress(), 0]);
+    await token.mint(await vault.getAddress(), 250n);
+    await expect(vault.refreshProofAndSweep(await verifier.getAddress(), proofBytes('email'), await token.getAddress(), 0))
+      .to.be.revertedWithCustomError(vault, 'AlphaAuthorizationRequired');
+    const deadline = (await ethers.provider.getBlock('latest'))!.timestamp + DAY;
+    const domain = { name: 'PviumAlpha', version: '1', chainId: (await ethers.provider.getNetwork()).chainId, verifyingContract: await factory.getAddress() };
+    const types = { AlphaAuthorization: [
+      { name: 'vault', type: 'address' }, { name: 'caller', type: 'address' },
+      { name: 'callHash', type: 'bytes32' }, { name: 'nonce', type: 'uint256' },
+      { name: 'deadline', type: 'uint256' }, { name: 'epoch', type: 'uint256' },
+    ] };
+    const nonce = BigInt(ethers.hexlify(ethers.randomBytes(32)));
+    const signature = await attester.signTypedData(domain, types, {
+      vault: await vault.getAddress(), caller: payer.address, callHash: ethers.keccak256(data),
+      nonce, deadline, epoch: await factory.alphaEpoch(),
+    });
+    await vault.executeWithAttestation(data, { nonce, deadline, signature });
     expect(await token.balanceOf(LINKED_WALLET)).to.equal(250n);
   });
 

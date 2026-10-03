@@ -6,6 +6,7 @@ pragma solidity ^0.8.27;
 ///         verifyIdentity checks the supplied identity type, identity hash and wallet hash.
 interface IPviumIdentity {
     /// @notice Circuit version this deployment verifies. Attestations state theirs; use the matching deployment.
+    function vkHash() external view returns (bytes32);
     function circuitVersion() external view returns (uint16);
     /// @notice Whether this P-256 key belongs to the deployment's current accepted signer set.
     function isSignerKey(uint256 x, uint256 y) external view returns (bool);

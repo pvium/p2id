@@ -20,6 +20,7 @@ describe('Deterministic deployment: chain-agnostic P2ID addresses', function () 
       owner: '0x00000000000000000000000000000000000A11CE',
       scheme: CURRENT_SCHEME,
       circuitVersion: 1,
+      vkHash: require('../../circuit/version.json').vkSha256,
       signerKeys: [
         { x: BigInt('0x' + Buffer.from(jwk.x!, 'base64url').toString('hex')), y: BigInt('0x' + Buffer.from(jwk.y!, 'base64url').toString('hex')) },
         { x: GX, y: GY },
@@ -79,6 +80,26 @@ describe('Deterministic deployment: chain-agnostic P2ID addresses', function () 
     expect(oneKey.factory).to.not.equal(base.factory);
     expect(other.pviumVerifier).to.not.equal(base.pviumVerifier);
     expect(other.factory).to.not.equal(base.factory);
+  });
+
+  it('configures alpha and constraint attesters independently, with owner as the alpha fallback', async () => {
+    const [deployer, alphaAttester] = await ethers.getSigners();
+    const p = await params();
+    const fallback = await deployStack(p, deployer);
+    const fallbackFactory = await ethers.getContractAt('PviumP2IdVaultFactory', fallback.factory);
+    expect(await fallbackFactory.defaultAttester()).to.equal(ethers.getAddress(p.owner));
+    const configured = await deployStack({ ...p, alphaAttester: alphaAttester.address }, deployer);
+    expect(configured.pviumVerifier).to.equal(fallback.pviumVerifier);
+    expect(configured.factory).not.to.equal(fallback.factory);
+    const factory = await ethers.getContractAt('PviumP2IdVaultFactory', configured.factory);
+    const verifier = await ethers.getContractAt('PviumVerifier', configured.pviumVerifier);
+    expect(await factory.defaultAttester()).to.equal(alphaAttester.address);
+    expect(await verifier.isConstraintSigner(p.attester)).to.equal(true);
+    expect(await verifier.isConstraintSigner(alphaAttester.address)).to.equal(false);
+    await checkStack({ ...p, alphaAttester: alphaAttester.address }, configured);
+    await expect(checkStack({ ...p, alphaAttester: deployer.address }, configured)).to.be.rejectedWith('factory.defaultAttester');
+    const same = await deployStack({ ...p, alphaAttester: p.attester }, deployer);
+    expect(await (await ethers.getContractAt('PviumP2IdVaultFactory', same.factory)).defaultAttester()).to.equal(ethers.getAddress(p.attester));
   });
 
   it('the scheme domain is an input to the addresses: it is the factory namespace and the salt', async () => {

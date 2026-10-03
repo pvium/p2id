@@ -78,7 +78,7 @@
       "label": "deposits",
       "offset": 0,
       "slot": "7",
-      "type": "t_array(t_struct(Deposit)16272_storage)dyn_storage"
+      "type": "t_array(t_struct(Deposit)6199_storage)dyn_storage"
     },
     {
       "astId": 83,
@@ -143,6 +143,14 @@
       "offset": 0,
       "slot": "15",
       "type": "t_uint256"
+    },
+    {
+      "astId": 263,
+      "contract": "src/P2IDVault.sol:P2IDVault",
+      "label": "alphaNonceUsed",
+      "offset": 0,
+      "slot": "16",
+      "type": "t_mapping(t_uint256,t_bool)"
     }
   ],
   "types": {
@@ -151,8 +159,8 @@
       "label": "address",
       "numberOfBytes": "20"
     },
-    "t_array(t_struct(Deposit)16272_storage)dyn_storage": {
-      "base": "t_struct(Deposit)16272_storage",
+    "t_array(t_struct(Deposit)6199_storage)dyn_storage": {
+      "base": "t_struct(Deposit)6199_storage",
       "encoding": "dynamic_array",
       "label": "struct IP2IDVault.Deposit[]",
       "numberOfBytes": "32"
@@ -243,12 +251,19 @@
       "numberOfBytes": "32",
       "value": "t_uint256"
     },
-    "t_struct(Deposit)16272_storage": {
+    "t_mapping(t_uint256,t_bool)": {
+      "encoding": "mapping",
+      "key": "t_uint256",
+      "label": "mapping(uint256 => bool)",
+      "numberOfBytes": "32",
+      "value": "t_bool"
+    },
+    "t_struct(Deposit)6199_storage": {
       "encoding": "inplace",
       "label": "struct IP2IDVault.Deposit",
       "members": [
         {
-          "astId": 16254,
+          "astId": 6181,
           "contract": "src/P2IDVault.sol:P2IDVault",
           "label": "funder",
           "offset": 0,
@@ -256,7 +271,7 @@
           "type": "t_address"
         },
         {
-          "astId": 16256,
+          "astId": 6183,
           "contract": "src/P2IDVault.sol:P2IDVault",
           "label": "fundedAt",
           "offset": 20,
@@ -264,7 +279,7 @@
           "type": "t_uint64"
         },
         {
-          "astId": 16258,
+          "astId": 6185,
           "contract": "src/P2IDVault.sol:P2IDVault",
           "label": "consumed",
           "offset": 28,
@@ -272,7 +287,7 @@
           "type": "t_bool"
         },
         {
-          "astId": 16260,
+          "astId": 6187,
           "contract": "src/P2IDVault.sol:P2IDVault",
           "label": "token",
           "offset": 0,
@@ -280,7 +295,7 @@
           "type": "t_address"
         },
         {
-          "astId": 16262,
+          "astId": 6189,
           "contract": "src/P2IDVault.sol:P2IDVault",
           "label": "refundWindow",
           "offset": 20,
@@ -288,7 +303,7 @@
           "type": "t_uint64"
         },
         {
-          "astId": 16264,
+          "astId": 6191,
           "contract": "src/P2IDVault.sol:P2IDVault",
           "label": "verifier",
           "offset": 0,
@@ -296,7 +311,7 @@
           "type": "t_address"
         },
         {
-          "astId": 16267,
+          "astId": 6194,
           "contract": "src/P2IDVault.sol:P2IDVault",
           "label": "feeBps",
           "offset": 20,
@@ -304,7 +319,7 @@
           "type": "t_uint16"
         },
         {
-          "astId": 16269,
+          "astId": 6196,
           "contract": "src/P2IDVault.sol:P2IDVault",
           "label": "amount",
           "offset": 0,
@@ -312,7 +327,7 @@
           "type": "t_uint128"
         },
         {
-          "astId": 16271,
+          "astId": 6198,
           "contract": "src/P2IDVault.sol:P2IDVault",
           "label": "constraint",
           "offset": 0,

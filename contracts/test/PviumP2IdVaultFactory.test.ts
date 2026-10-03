@@ -44,7 +44,8 @@ describe('PviumP2IdVaultFactory', function () {
       7 * DAY,
       DAY,
       30 * DAY,
-    ]);
+     ethers.ZeroAddress]);
+    await factory.setAlpha(await (await ethers.getContractAt('IP2IDVerifier', await factory.defaultVerifier())).vkHash(), false); // this suite exercises the ordinary (post-alpha) paths
   });
 
   it('the vault address is derivable offline from the factory address and a constant', async () => {
@@ -210,9 +211,9 @@ describe('PviumP2IdVaultFactory', function () {
   it('the constructor requires a policy that allows the default verifier', async () => {
     const F = await ethers.getContractFactory('PviumP2IdVaultFactory');
     const empty = await ethers.deployContract('PviumP2IDPolicy', [deployer.address, []]);
-    await expect(F.deploy(deployer.address, NS, await empty.getAddress(), await idv.getAddress(), 7 * DAY, DAY, 30 * DAY))
+    await expect(F.deploy(deployer.address, NS, await empty.getAddress(), await idv.getAddress(), 7 * DAY, DAY, 30 * DAY, ethers.ZeroAddress))
       .to.be.revertedWithCustomError(F, 'VerifierNotApproved');
-    await expect(F.deploy(deployer.address, NS, payer.address, await idv.getAddress(), 7 * DAY, DAY, 30 * DAY))
+    await expect(F.deploy(deployer.address, NS, payer.address, await idv.getAddress(), 7 * DAY, DAY, 30 * DAY, ethers.ZeroAddress))
       .to.be.revertedWithCustomError(F, 'InvalidPolicy');
   });
 

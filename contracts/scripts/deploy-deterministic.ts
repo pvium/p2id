@@ -9,6 +9,7 @@
 //   PRIVY_JWKS_URL_SANDBOX / _PROD   the Privy app's JWKS (URL, or a path to a saved jwks.json)
 //   OWNER_SANDBOX / _PROD            factory registry owner (a Safe at the same address everywhere)
 //   ATTESTER_SANDBOX / _PROD         constraint attester, or "none"
+//   ALPHA_ATTESTER_SANDBOX / _PROD   alpha attester; omitted uses OWNER
 // Shared, optional: DEPLOYER_KEY (or DEPLOYER_KEY_<SUFFIX>), POLICY_CHANGE_DELAY, MIN_REFUND_WINDOW,
 // MAX_REFUND_WINDOW, SCHEME (default: `current` in sdks/node/p2id-core/src/p2id.json), CIRCUIT_VERSION.
 //
@@ -98,13 +99,18 @@ async function configFor(environment: P2IDEnvironment, scheme: string, circuitVe
   );
   const attesterRaw = await setting('ATTESTER', environment, () => 'none');
   const attester = attesterRaw.toLowerCase() === 'none' ? ethers.ZeroAddress : address(attesterRaw, `ATTESTER for ${environment}`);
+  const alphaAttesterRaw = envFor('ALPHA_ATTESTER', environment);
+  const alphaAttester = alphaAttesterRaw === undefined ? owner : address(alphaAttesterRaw, `ALPHA_ATTESTER for ${environment}`);
+  if (alphaAttester === ethers.ZeroAddress) throw new Error('ALPHA_ATTESTER must be nonzero; omit it to use OWNER');
   const num = (name: string, fallback: number) => Number(envFor(name, environment, { shared: true }) ?? fallback);
   const params: StackParams = {
     owner,
     scheme,
     circuitVersion,
+    vkHash: JSON.parse(readFileSync(join(ROOT, 'circuit', 'version.json'), 'utf8')).vkSha256,
     signerKeys: keys.map(({ x, y }) => ({ x, y })),
     attester,
+    alphaAttester,
     policyChangeDelay: num('POLICY_CHANGE_DELAY', 7 * DAY),
     minRefundWindow: num('MIN_REFUND_WINDOW', DAY),
     maxRefundWindow: num('MAX_REFUND_WINDOW', 90 * DAY),
@@ -159,7 +165,9 @@ async function main() {
     config: {
       owner: params.owner,
       attester: params.attester,
+      alphaAttester: params.alphaAttester,
       circuitVersion: params.circuitVersion,
+      vkHash: params.vkHash,
       policyChangeDelay: params.policyChangeDelay,
       minRefundWindow: params.minRefundWindow,
       maxRefundWindow: params.maxRefundWindow,
@@ -212,7 +220,8 @@ async function main() {
   await checkStack(params, addresses, p2id.schemes[scheme]?.vaultInitCodeHash);
 
   const chainId = Number((await ethers.provider.getNetwork()).chainId);
-  const record = { ...summary, network: network.name, chainId, ...addresses };
+  const record = { ...summary, network: network.name, chainId, ...addresses,
+    baseImplementationContract: 'src/P2IDVault.sol:P2IDVault' };
   if (chainId !== 31337) {
     mkdirSync(DEPLOYMENTS, { recursive: true });
     writeFileSync(join(DEPLOYMENTS, `${scheme}.${environment}.${chainId}.json`), JSON.stringify(record, null, 2) + '\n');

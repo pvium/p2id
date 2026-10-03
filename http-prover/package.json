@@ -13,7 +13,7 @@
     "sync": "sh scripts/sync-circuit.sh"
   },
   "dependencies": {
-    "@noir-lang/noir_js": "1.0.0-beta.22",
+    "@noir-lang/noir_js": "1.0.0-beta.26",
     "express": "^5.1.0"
   },
   "devDependencies": {

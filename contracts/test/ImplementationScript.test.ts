@@ -16,7 +16,8 @@ describe('deploy-implementation script', function () {
     const idv = await ethers.deployContract('MockIdentityVerifier');
     const policy = await ethers.deployContract('MockFeePolicy');
     await policy.allow(await idv.getAddress(), true);
-    factory = await ethers.deployContract('PviumP2IdVaultFactory', [deployer.address, ethers.id('pvium.vault.v1'), await policy.getAddress(), await idv.getAddress(), 7 * DAY, DAY, 30 * DAY]);
+    factory = await ethers.deployContract('PviumP2IdVaultFactory', [deployer.address, ethers.id('pvium.vault.v1'), await policy.getAddress(), await idv.getAddress(), 7 * DAY, DAY, 30 * DAY, ethers.ZeroAddress]);
+    await factory.setAlpha(await (await ethers.getContractAt('IP2IDVerifier', await factory.defaultVerifier())).vkHash(), false); // this suite exercises the ordinary (post-alpha) paths
   });
 
   it('refuses an unsafe candidate before touching the chain', async () => {

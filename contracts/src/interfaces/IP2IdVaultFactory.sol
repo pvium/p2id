@@ -21,6 +21,13 @@ interface IP2IdVaultFactory {
     function policy() external view returns (address);
     /// @notice Verifier used when a payer does not choose one, and the one bare transfers are claimed through.
     function defaultVerifier() external view returns (address);
+    /// @notice Whether proofs under `vkHash` need an alpha attestation: true for every key until released.
+    function isAlpha(bytes32 vkHash) external view returns (bool);
+    function setDefaultAttester(address attester) external;
+    function defaultAttester() external view returns (address);
+    function alphaRevision(bytes32 vkHash) external view returns (uint256);
+    function alphaEpoch() external view returns (uint256);
+    function verifyAlphaAuthorization(address vault, address caller, bytes32 callHash, uint256 nonce, uint256 deadline, bytes calldata signature) external view;
 
     // ---- vault implementations ----
     /// @notice The implementation every newly deployed vault proxy starts on.

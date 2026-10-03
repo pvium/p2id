@@ -4,8 +4,8 @@ Noir circuit proving that a [Privy identity token](https://docs.privy.io) contai
 linked account (email, GitHub handle, wallet, …) whose value hashes to a public commitment,
 without revealing the token or the value.
 
-Toolchain: `nargo 1.0.0-beta.22`, `bb 5.0.0-nightly.20260522` (install with `noirup -v 1.0.0-beta.22`
-and `bbup -v 5.0.0-nightly.20260522`).
+Toolchain: `nargo 1.0.0-beta.26`, `bb 5.0.0` (install with `noirup -v 1.0.0-beta.26`
+and `bbup -v 5.0.0`).
 
 ## Sample token
 

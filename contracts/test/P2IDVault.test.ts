@@ -39,7 +39,8 @@ describe('P2IDVault', function () {
     token = await ethers.deployContract('MockERC20');
     other = await ethers.deployContract('MockERC20');
     policy = await ethers.deployContract('PviumP2IDPolicy', [deployer.address, [V]]);
-    factory = await ethers.deployContract('PviumP2IdVaultFactory', [deployer.address, NS, await policy.getAddress(), V, 7 * DAY, DAY, 30 * DAY]);
+    factory = await ethers.deployContract('PviumP2IdVaultFactory', [deployer.address, NS, await policy.getAddress(), V, 7 * DAY, DAY, 30 * DAY, ethers.ZeroAddress]);
+    await factory.setAlpha(await (await ethers.getContractAt('IP2IDVerifier', await factory.defaultVerifier())).vkHash(), false); // this suite exercises the ordinary (post-alpha) paths
     await factory.deploy(COMMIT);
     vault = await ethers.getContractAt('P2IDVault', await factory.vaultFor(COMMIT));
   });
@@ -62,15 +63,17 @@ describe('P2IDVault', function () {
   });
 
   it('spam deposits in another token do not affect sweeping this token', async () => {
-    for (let i = 0; i < 50; i++) await fundAs(spammer, other, 1n);
     await fundAs(alice, token, 100n);
     await vault.refreshProof(V, proofFor(ownerWallet.address, 1000));
+    const withoutSpam = await vault.sweep.estimateGas(V, await token.getAddress(), 0);
+    for (let i = 0; i < 50; i++) await fundAs(spammer, other, 1n);
 
     const gas = await vault.sweep.estimateGas(V, await token.getAddress(), 0);
     await vault.sweep(V, await token.getAddress(), 0);
     expect(await token.balanceOf(ownerWallet.address)).to.equal(100n);
     expect(await vault.bucketDepositCount(V, Z, await token.getAddress())).to.equal(1n);
-    expect(gas).to.be.lessThan(160_000n); // one proxy delegatecall on top of the sweep itself
+    expect(gas).to.be.at.most(withoutSpam + 500n); // unrelated buckets add no per-deposit work
+    expect(gas).to.be.lessThan(180_000n); // includes proxy and pinned-key/cache revision checks
   });
 
   it('bounded sweep walks the bucket in pages via the cursor', async () => {

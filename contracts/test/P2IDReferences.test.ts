@@ -18,7 +18,8 @@ async function fixture() {
   const factory = await ethers.deployContract('PviumP2IdVaultFactory', [
     admin.address, ethers.id('pvium.vault.v1'), await policy.getAddress(),
     await verifier.getAddress(), 7 * DAY, DAY, 30 * DAY,
-  ]);
+   ethers.ZeroAddress]);
+  await factory.setAlpha(await (await ethers.getContractAt('IP2IDVerifier', await factory.defaultVerifier())).vkHash(), false); // this suite exercises the ordinary (post-alpha) paths
   const vault = await ethers.getContractAt('P2IDVault', await factory.vaultFor(ID));
   const token = await ethers.deployContract('MockERC20');
   return { payer, recipient, verifier, alternate, factory, vault, token };

@@ -13,8 +13,8 @@ Install with `yarn install`, run scripts with `yarn <script>`, run binaries with
 - **Node**: use the nvm install, not the Homebrew one (the Homebrew Node 15 at
   `/usr/local/bin/node` is broken and hangs). Put it first on `PATH` before any node/yarn command:
   `export PATH="$HOME/.nvm/versions/node/v24.15.0/bin:$PATH"`
-- **Noir**: `nargo 1.0.0-beta.22` at `~/.nargo/bin`, paired with **Barretenberg**
-  `bb 5.0.0-nightly.20260522` at `~/.bb`. These versions are pinned to each other; do not bump one
+- **Noir**: `nargo 1.0.0-beta.26` at `~/.nargo/bin`, paired with **Barretenberg**
+  `bb 5.0.0` at `~/.bb`. These versions are pinned to each other; do not bump one
   without the other. `export PATH="$HOME/.nargo/bin:$HOME/.bb:$PATH"`
 - **Go**: `/usr/local/go/bin/go` (1.25) for a future `sdks/go`.
 - **Python 3** is used only for `circuit/scripts/gen_prover.py`.
@@ -44,11 +44,11 @@ Install with `yarn install`, run scripts with `yarn <script>`, run binaries with
   copies them into the npm package at build time (gitignored there). Never edit `sdks/node/p2id-core/contracts/`.
 - `http-prover/src/witness.ts` is a port of `circuit/scripts/gen_prover.py`; `http-prover/test/witness.test.ts`
   diffs their output byte for byte. Change both together. `@noir-lang/noir_js` in `http-prover/` is pinned
-  to the nargo version (`1.0.0-beta.22`).
+  to the nargo version (`1.0.0-beta.26`).
 - Hash/normalisation rules must stay identical in four places: `circuit/src/main.nr` + `identity.nr`,
   `circuit/scripts/gen_prover.py`, `contracts/src/lib/P2IDHash.sol`, `sdks/node/p2id-core/src/identity.ts`.
 - `@aztec/bb.js` in `sdks/node/p2id-verifier` must be pinned to the same version as the installed `bb`
-  (`5.0.0-nightly.20260522`): proofs and vks are not portable across versions.
+  (`5.0.0`): proofs and vks are not portable across versions.
 - `P2ID.md` at the repo root is the protocol spec (address formula, identity type ids). The type
   table is append-only: never reassign or reuse an id; keep identity.nr, P2IDHash.sol, the SDK
   and the prover in step and update P2ID.md with them.
@@ -61,10 +61,37 @@ Install with `yarn install`, run scripts with `yarn <script>`, run binaries with
   code:
   - never reorder, remove, retype or insert state variables in `P2IDVault`; append new ones at the
     end only. Mappings and structs count: a struct field change changes the layout;
-  - a post-deployment change is a new contract (e.g. `src/P2IDVaultV2.sol`), not an edit of the
-    deployed one; it keeps `acceptOwnerProof` (returning its selector), never uses `delegatecall`
+  - **Pre-launch single source of truth:** the user has confirmed this stack is not live.
+    Keep alpha and post-alpha behavior together in `contracts/src/P2IDVault.sol`; do not create
+    a duplicate alpha vault or keep parallel copies of ordinary vault logic. Sandbox deployments
+    do not freeze this source. After a production release, a change is a new contract
+    (e.g. `src/P2IDVaultV2.sol`), not an edit of the deployed one. It keeps
+    `acceptOwnerProof` (returning its selector), never uses `delegatecall`
     or `selfdestruct`, and never defines the proxy's reserved selectors (`implementation()`,
-    `lastUpgrade()`, `upgradeTo(bytes32,address,bytes)`);
+    `lastUpgrade()`, `upgradeTo(bytes32,address,bytes)`, `alphaUpgradeNonceUsed(uint256)`, and
+    `upgradeToWithAttestation(bytes32,address,bytes,(uint256,uint256,bytes))`);
+  - **Keep vault business logic in the implementation, never in the proxy.** Sweeps, proof
+    refreshes, fee withdrawals, their `*WithAttestation` variants, the business authorization
+    wrapper, and its used-nonce mapping belong in `P2IDVault` (or a later storage-compatible implementation).
+    The proxy delegates these calls and must not define or intercept their selectors. Only
+    proxy management, including `upgradeTo` and its own signed authorization, lives in the proxy.
+    Alpha status is keyed by the pinned verifier vkHash, never caller proof metadata.
+    Only proof-verifying methods take alpha attestations; proofless sweeps require a current
+    owner cache. Enabling alpha for a key or changing a verifier key invalidates its old caches.
+    This avoids freezing business APIs into proxy bytecode and changing every P2ID address when
+    a vault behavior changes. `IP2IDVault` is the single business interface for alpha and
+    post-alpha calls; do not create a separate alpha vault interface. `IP2IDVaultProxy` is
+    the proxy-management API. Run the ABI-boundary regression test in `StorageLayout.test.ts`.
+  - New factories start on the single `P2IDVault`, with alpha state appended to the original
+    layout. Compare candidates against the original snapshot and the current implementation
+    before registering. Alpha-capable upgrade targets must preserve the guard and
+    return true from `supportsAlphaGuard()` even if alpha is currently disabled, so it can be
+    safely re-enabled later. That marker is a compatibility claim, not a code audit.
+  - The alpha addition must retain ordinary vault method bodies and internal operations.
+    Run `VaultAlphaParity.test.ts` to check them against the pre-alpha business-body hashes, remaining source hash and ABI
+    fixture and exercise ordinary execution with alpha off. That fixture is a regression
+    baseline, not a second implementation. Intentional changes to ordinary behavior must
+    be reviewed explicitly and update the regression baseline with their own validation.
   - run `CANDIDATE=<Contract> yarn layout` in `contracts/` and fix every error before proposing it;
     `yarn layout` alone checks the base still matches `contracts/storage/P2IDVault.layout.json`.
     `UPDATE=1 yarn layout` rewrites that snapshot and is only legitimate while no factory is deployed;
@@ -75,7 +102,7 @@ Install with `yarn install`, run scripts with `yarn <script>`, run binaries with
 - Tests and their fixtures live in each package's `test/` folder (`circuit/test`, `contracts/test`).
   Sample token/keys are in `circuit/test/fixtures`; `contracts/test/fixtures` is a copy refreshed by
   `yarn fixtures`. Run `sh test/e2e.sh` in `circuit/` after changing the circuit or script.
-- **Gate budget**: the circuit is ~1,147k gates, padded to 2^21 (1,048,576 was crossed on
+- **Gate budget**: the circuit is ~1,323k gates (the JSON nesting tracker added ~176k), padded to 2^21 (1,048,576 was crossed on
   purpose when the wallet slot was added; proofs are generated offline at enrollment, so ~9 s /
   2.5 GB per proof is acceptable). The next ceiling is 2,097,152. Measure with
   `bb gates -b target/pvium_identity.json` after every circuit change.

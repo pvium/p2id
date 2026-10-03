@@ -42,6 +42,8 @@ if (existsSync(artifact)) {
       throw new Error(`vault proxy artifact hashes to ${actual} but ${cfg.current} says ${current.vaultInitCodeHash}; run node scripts/embed-p2id.mjs --update`);
     }
     current.vaultInitCodeHash = actual;
+    // A sandbox factory built with the previous proxy cannot deploy this creation code.
+    current.factories.sandbox = null;
     writeFileSync(jsonPath, JSON.stringify(cfg, null, 2) + '\n');
     console.log(`updated ${cfg.current} vaultInitCodeHash -> ${actual}`);
   }

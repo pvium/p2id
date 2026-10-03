@@ -140,7 +140,7 @@ library and updated test helper already supply the owner argument.
 
 ## Generated verifier checks and validation
 
-- Regenerated into a temporary file with the installed `bb 5.0.0-nightly.20260522`, using
+- Regenerated into a temporary file with the installed `bb 5.0.0`, using
   `circuit/target/proof_email/vk`. After the repository's prescribed contract rename, the
   result is byte-for-byte identical to `src/PviumZKVerifier.sol`.
 - The VK SHA-256 matches `circuit/version.json`:
@@ -394,7 +394,7 @@ bound remains a documented recovery-policy limitation.
 
 Reviewed generated `PviumZKVerifier.sol` SHA-256:
 `d162b3909afe70f12a77fd3fc1b27909a21796452bca718723a4c6245bdb78ab`.
-The verifier was regenerated with the pinned `bb 5.0.0-nightly.20260522` from
+The verifier was regenerated with the pinned `bb 5.0.0` from
 `circuit/target/proof_email/vk`; after the repository's prescribed contract rename, the output
 matched byte-for-byte. The verification-key SHA-256 is
 `1c799113fea7ad5b9814605a3cda138e441cee6778ff29d62940e61ebcef822b`, matching

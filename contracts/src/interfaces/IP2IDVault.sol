@@ -116,4 +116,22 @@ interface IP2IDVault {
     ///         Does not apply the sweep page limit or validate default-bucket claimability.
     function sweepable(address verifier, address token) external view returns (uint256);
     function untrackedBalance(address token) external view returns (uint256);
+
+    struct AlphaAttestation {
+        uint256 nonce;
+        uint256 deadline;
+        bytes signature;
+    }
+
+    // Alpha authorization: same vault API, additional signed entry points.
+    function supportsAlphaGuard() external pure returns (bool);
+    /// @notice Whether a caller-supplied random nonce has been consumed by an alpha business call.
+    function alphaNonceUsed(uint256 nonce) external view returns (bool);
+    function executeWithAttestation(bytes calldata action, AlphaAttestation calldata attestation) external returns (bytes memory);
+    /// @notice Alpha entry points: sign the ABI-encoded ordinary method with its original arguments.
+    ///         Ordinary methods require no signature when factory.isAlpha(verifier.vkHash()) is false.
+    function refreshProofWithAttestation(address verifier, bytes calldata proof, AlphaAttestation calldata attestation) external;
+    function refreshProofAndSweepWithAttestation(address verifier, bytes calldata proof, address token, uint256 depositCountLimit, AlphaAttestation calldata attestation) external returns (uint256 amount, uint256 consumed);
+    function sweepBucketWithAttestation(address verifier, IP2IDVerifier.Constraint calldata constraint, address token, bytes calldata proof, uint256 depositCountLimit, AlphaAttestation calldata attestation) external returns (uint256 amount, uint256 consumed);
+    function sweepBucketDepositsWithAttestation(address verifier, IP2IDVerifier.Constraint calldata constraint, address token, uint256[] calldata depositIds, bytes calldata proof, AlphaAttestation calldata attestation) external returns (uint256 amount);
 }

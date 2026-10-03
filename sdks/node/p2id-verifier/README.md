@@ -196,7 +196,7 @@ an array of hexadecimal fields.
 ## Versioning
 
 Each release includes a verification key for one circuit version (`CIRCUIT_VERSION`).
-`@aztec/bb.js` is pinned to the matching Barretenberg version (`5.0.0-nightly.20260522`).
+`@aztec/bb.js` is pinned to the matching Barretenberg version (`5.0.0`).
 Preserve `circuitVersion` and `vkHash` when passing attestations so mismatches can be reported
 before proof verification. Circuit changes require a new package release; use the release
 matching the attestation's circuit version and verification key.

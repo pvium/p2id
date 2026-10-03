@@ -28,7 +28,7 @@
     "prepublishOnly": "yarn test"
   },
   "dependencies": {
-    "@aztec/bb.js": "5.0.0-nightly.20260522",
+    "@aztec/bb.js": "5.0.0",
     "@pvium/p2id-core": "^0.1.0"
   },
   "devDependencies": {

@@ -4,6 +4,9 @@ pragma solidity ^0.8.27;
 /// @title IP2IDVerifier
 /// @notice Resolve an identity proof to a wallet and issue time, with optional constraint evidence.
 interface IP2IDVerifier {
+    /// @notice Trusted key-artifact SHA-256 pinned by this verifier; never read from caller metadata.
+    function vkHash() external view returns (bytes32);
+
     /// @notice A funding constraint and the evidence that it is satisfied.
     /// @param commitment bytes32(0) = no constraint; otherwise the commitment a deposit was funded with.
     /// @param signature  Evidence for `commitment`; for PviumVerifier, the registered signer's

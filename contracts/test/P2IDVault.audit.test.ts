@@ -18,7 +18,8 @@ describe('P2IDVault audit findings', function () {
     const policy = await ethers.deployContract('PviumP2IDPolicy', [admin.address, [a1, a2]]);
     const factory = await ethers.deployContract('PviumP2IdVaultFactory', [
       admin.address, ethers.id('audit'), await policy.getAddress(), a1, day, day, 30 * day,
-    ]);
+     ethers.ZeroAddress]);
+    await factory.setAlpha(await (await ethers.getContractAt('IP2IDVerifier', await factory.defaultVerifier())).vkHash(), false); // this suite exercises the ordinary (post-alpha) paths
     await factory.deploy(identity);
     const vault = await ethers.getContractAt('P2IDVault', await factory.vaultFor(identity));
     const token = await ethers.deployContract('MockERC20');

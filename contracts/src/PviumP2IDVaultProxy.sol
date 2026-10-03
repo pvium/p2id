@@ -13,6 +13,21 @@ import {IP2IDVerifier} from "./interfaces/IP2IDVerifier.sol";
 ///      Delegated code can write both slots. Proxy-defined selectors take precedence over the
 ///      implementation, and empty-calldata native transfers are handled here without delegation.
 contract PviumP2IDVaultProxy is IP2IDVaultProxy {
+    error AlphaAuthorizationRequired();
+    error AlphaImplementationRequired();
+    bytes32 private constant ALPHA_UPGRADE_SLOT = keccak256("pvium.vault.proxy.alpha.upgrade.nonce.v1");
+
+    function alphaUpgradeNonceUsed(uint256 nonce) public view returns (bool used) {
+        bytes32 slot = keccak256(abi.encode(nonce, ALPHA_UPGRADE_SLOT));
+        assembly { used := sload(slot) }
+    }
+
+    error AlphaNonceAlreadyUsed(uint256 nonce);
+
+    function upgradeToWithAttestation(bytes32 identityHash, address newImplementation, bytes calldata proof, IP2IDVault.AlphaAttestation calldata attestation) external {
+        _upgradeTo(identityHash, newImplementation, proof, attestation);
+    }
+
     /// @dev bytes32(uint256(keccak256("eip1967.proxy.implementation")) - 1)
     bytes32 private constant IMPLEMENTATION_SLOT = 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
     /// @dev bytes32(uint256(keccak256("pvium.vault.proxy.upgrading")) - 1): 1 while upgradeTo runs (a plain slot: the Paris target has no transient storage).
@@ -63,12 +78,27 @@ contract PviumP2IDVaultProxy is IP2IDVaultProxy {
 
     /// @inheritdoc IP2IDVaultProxy
     function upgradeTo(bytes32 identityHash, address newImplementation, bytes calldata proof) external {
+        _upgradeTo(identityHash, newImplementation, proof, IP2IDVault.AlphaAttestation(0, 0, hex""));
+    }
+
+    function _upgradeTo(bytes32 identityHash, address newImplementation, bytes calldata proof, IP2IDVault.AlphaAttestation memory attestation) private {
         _enterUpgrade();
         IP2IdVaultFactory f = IP2IdVaultFactory(factory);
         if (f.vaultFor(identityHash) != address(this)) revert NotVaultOf(identityHash);
         if (!f.isRegisteredImplementation(newImplementation)) revert NotRegisteredImplementation(newImplementation);
+        try IP2IDVault(newImplementation).supportsAlphaGuard() returns (bool supported) {
+            if (!supported) revert AlphaImplementationRequired();
+        } catch { revert AlphaImplementationRequired(); }
         if (newImplementation == implementation()) revert SameImplementation();
         address verifier = f.defaultVerifier();
+        if (f.isAlpha(IP2IDVerifier(verifier).vkHash())) {
+            if (attestation.signature.length == 0) revert AlphaAuthorizationRequired();
+            if (alphaUpgradeNonceUsed(attestation.nonce)) revert AlphaNonceAlreadyUsed(attestation.nonce);
+            f.verifyAlphaAuthorization(address(this), msg.sender,
+                keccak256(abi.encodeCall(IP2IDVaultProxy.upgradeTo, (identityHash, newImplementation, proof))), attestation.nonce, attestation.deadline, attestation.signature);
+            bytes32 slot = keccak256(abi.encode(attestation.nonce, ALPHA_UPGRADE_SLOT));
+            assembly { sstore(slot, 1) }
+        }
         (address wallet, uint64 iat) =
             IP2IDVerifier(verifier).getIdentityWallet(identityHash, proof, IP2IDVerifier.Constraint(bytes32(0), ""));
         if (wallet != msg.sender) revert NotOwner(wallet, msg.sender);

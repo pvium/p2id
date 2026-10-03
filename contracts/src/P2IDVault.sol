@@ -124,6 +124,172 @@ contract P2IDVault is IP2IDVault {
         maxRefundWindow = _maxRefundWindow;
     }
 
+    // ------------------------------------------------------------------ alpha authorization
+
+    /// @notice Alpha authorization nonces already consumed by this vault (caller-chosen, single use).
+    /// @dev Preserve this mapping and append later storage after the cache bindings below.
+    mapping(uint256 => bool) public alphaNonceUsed;
+    mapping(address => bytes32) public ownerVkHash;
+    mapping(address => uint256) public ownerAlphaRevision;
+    error AlphaAuthorizationRequired();
+    error InvalidVkHash();
+    error InvalidAlphaCall();
+    error AlphaNonceAlreadyUsed(uint256 nonce);
+
+    function supportsAlphaGuard() external pure returns (bool) { return true; }
+
+    function executeWithAttestation(bytes calldata action, AlphaAttestation calldata attestation) external validAlphaCall(action) returns (bytes memory) {
+        return _dispatchAlphaCall(action, attestation);
+    }
+
+    function _dispatchAlphaCall(bytes calldata action, AlphaAttestation memory attestation) private returns (bytes memory) {
+        if (action.length < 4) revert InvalidAlphaCall();
+        bytes4 selector = bytes4(action[:4]);
+        if (selector == IP2IDVault.refreshProof.selector) {
+            (address verifier, bytes memory proof) = abi.decode(action[4:], (address, bytes));
+            refreshProofWithAttestation(verifier, proof, attestation);
+            return hex"";
+        }
+        if (selector == IP2IDVault.refreshProofAndSweep.selector) {
+            (address verifier, bytes memory proof, address token, uint256 depositCountLimit) = abi.decode(action[4:], (address, bytes, address, uint256));
+            (uint256 amount, uint256 consumed) = refreshProofAndSweepWithAttestation(verifier, proof, token, depositCountLimit, attestation);
+            return abi.encode(amount, consumed);
+        }
+
+        if (selector == IP2IDVault.sweepBucket.selector) {
+            (address verifier, IP2IDVerifier.Constraint memory constraint, address token, bytes memory proof, uint256 depositCountLimit) = abi.decode(action[4:], (address, IP2IDVerifier.Constraint, address, bytes, uint256));
+            (uint256 amount, uint256 consumed) = sweepBucketWithAttestation(verifier, constraint, token, proof, depositCountLimit, attestation);
+            return abi.encode(amount, consumed);
+        }
+        if (selector == IP2IDVault.sweepBucketDeposits.selector) {
+            (address verifier, IP2IDVerifier.Constraint memory constraint, address token, uint256[] memory depositIds, bytes memory proof) = abi.decode(action[4:], (address, IP2IDVerifier.Constraint, address, uint256[], bytes));
+            return abi.encode(sweepBucketDepositsWithAttestation(verifier, constraint, token, depositIds, proof, attestation));
+        }
+
+        revert InvalidAlphaCall();
+    }
+
+    function refreshProofWithAttestation(address verifier, bytes memory proof, AlphaAttestation memory attestation)
+        public nonReentrant
+        alphaAttestationRequired(verifier, attestation, abi.encodeCall(IP2IDVault.refreshProof, (verifier, proof)))
+    {
+        _refreshProof(verifier, proof);
+    }
+
+    function _refreshProof(address verifier, bytes memory proof) private {
+        _present(verifier, proof, _noConstraint());
+    }
+
+    function refreshProofAndSweepWithAttestation(address verifier, bytes memory proof, address token, uint256 depositCountLimit, AlphaAttestation memory attestation)
+        public nonReentrant
+        alphaAttestationRequired(verifier, attestation, abi.encodeCall(IP2IDVault.refreshProofAndSweep, (verifier, proof, token, depositCountLimit)))
+        returns (uint256 amount, uint256 consumed)
+    {
+        return _refreshProofAndSweep(verifier, proof, token, depositCountLimit);
+    }
+
+    function _refreshProofAndSweep(address verifier, bytes memory proof, address token, uint256 depositCountLimit) private returns (uint256 amount, uint256 consumed) {
+        _present(verifier, proof, _noConstraint());
+        return _sweepDefault(verifier, token, depositCountLimit);
+    }
+
+    function _sweep(address verifier, address token, uint256 depositCountLimit) private returns (uint256 amount, uint256 consumed) {
+        return _sweepDefault(verifier, token, depositCountLimit); // checks the owner is set and current
+    }
+
+    function _sweepUntracked(address token) private returns (uint256 amount) {
+        address verifier = defaultVerifier();
+        address to = _ownerOf(verifier);
+        if (latestProofIat[verifier] < untrackedProofIat) revert ProofTooOld();
+        uint256 gross = _untrackedBalance(token);
+        uint256 fee = (gross * _quoteFeeBps(verifier, token)) / BPS;
+        uint256 charged;
+        (amount, charged) = _payout(verifier, token, to, gross, fee);
+        emit Swept(verifier, token, amount, charged, to, 0);
+    }
+
+    function _sweepDeposits(address verifier, address token, uint256[] memory depositIds) private onlyInitialized(verifier) returns (uint256 amount) {
+        address to = owner[verifier];
+        (uint256 gross, uint256 fee) = _consumeIds(verifier, bytes32(0), token, depositIds, to);
+        uint256 charged;
+        (amount, charged) = _payout(verifier, token, to, gross, fee);
+        emit Swept(verifier, token, amount, charged, to, depositIds.length);
+    }
+
+    function sweepBucketWithAttestation(address verifier, IP2IDVerifier.Constraint memory constraint, address token, bytes memory proof, uint256 depositCountLimit, AlphaAttestation memory attestation)
+        public nonReentrant
+        alphaAttestationRequired(verifier, attestation, abi.encodeCall(IP2IDVault.sweepBucket, (verifier, constraint, token, proof, depositCountLimit)))
+        returns (uint256 amount, uint256 consumed)
+    {
+        return _sweepBucket(verifier, constraint, token, proof, depositCountLimit);
+    }
+
+    function _sweepBucket(address verifier, IP2IDVerifier.Constraint memory constraint, address token, bytes memory proof, uint256 depositCountLimit) private returns (uint256 amount, uint256 consumed) {
+        address to = _verifyForThisVault(verifier, proof, constraint);
+        uint256 gross;
+        uint256 fee;
+        (gross, fee, consumed) = _consumeFromCursor(verifier, constraint.commitment, token, depositCountLimit, to);
+        uint256 charged;
+        (amount, charged) = _payout(verifier, token, to, gross, fee);
+        emit SweptBucket(verifier, constraint.commitment, token, amount, charged, to, consumed);
+    }
+
+    function sweepBucketDepositsWithAttestation(address verifier, IP2IDVerifier.Constraint memory constraint, address token, uint256[] memory depositIds, bytes memory proof, AlphaAttestation memory attestation)
+        public nonReentrant
+        alphaAttestationRequired(verifier, attestation, abi.encodeCall(IP2IDVault.sweepBucketDeposits, (verifier, constraint, token, depositIds, proof)))
+        returns (uint256 amount)
+    {
+        return _sweepBucketDeposits(verifier, constraint, token, depositIds, proof);
+    }
+
+    function _sweepBucketDeposits(address verifier, IP2IDVerifier.Constraint memory constraint, address token, uint256[] memory depositIds, bytes memory proof) private returns (uint256 amount) {
+        address to = _verifyForThisVault(verifier, proof, constraint);
+        (uint256 gross, uint256 fee) = _consumeIds(verifier, constraint.commitment, token, depositIds, to);
+        uint256 charged;
+        (amount, charged) = _payout(verifier, token, to, gross, fee);
+        emit SweptBucket(verifier, constraint.commitment, token, amount, charged, to, depositIds.length);
+    }
+
+    function _withdrawFees(address verifier, address token) private returns (uint256 amount) {
+        uint256 owed = feesOwed[verifier][token];
+        if (owed == 0) return 0;
+        address pol = policy();
+        if (token == NATIVE) {
+            // Native coin cannot be pulled: it is sent along with the call, exactly the amount owed.
+            IP2IDPolicy(pol).distributeFee{value: owed}(verifier, token, owed);
+            amount = owed;
+        } else {
+            uint256 before = _balanceOf(token);
+            _callToken(token, abi.encodeWithSignature("approve(address,uint256)", pol, owed));
+            IP2IDPolicy(pol).distributeFee(verifier, token, owed);
+            _callToken(token, abi.encodeWithSignature("approve(address,uint256)", pol, 0));
+            uint256 afterBalance = _balanceOf(token);
+            amount = before > afterBalance ? before - afterBalance : 0;
+            if (amount > owed) revert FeeOverdrawn();
+        }
+        feesOwed[verifier][token] = owed - amount;
+        feesOwedTotal[token] -= amount;
+        emit FeesDistributed(verifier, token, amount, pol);
+    }
+
+    modifier validAlphaCall(bytes calldata action) {
+        if (action.length < 4) revert InvalidAlphaCall();
+        bytes4 selector = bytes4(action[:4]);
+        if (!(selector == IP2IDVault.refreshProof.selector || selector == IP2IDVault.refreshProofAndSweep.selector || selector == IP2IDVault.sweepBucket.selector || selector == IP2IDVault.sweepBucketDeposits.selector)) revert InvalidAlphaCall();
+        _;
+    }
+
+    /// @dev Empty signatures are allowed only after alpha. Bind approval to the entire ordinary call.
+    modifier alphaAttestationRequired(address verifier, AlphaAttestation memory attestation, bytes memory action) {
+        if (IP2IdVaultFactory(factory).isAlpha(IP2IDVerifier(verifier).vkHash())) {
+            if (attestation.signature.length == 0) revert AlphaAuthorizationRequired();
+            if (alphaNonceUsed[attestation.nonce]) revert AlphaNonceAlreadyUsed(attestation.nonce);
+            IP2IdVaultFactory(factory).verifyAlphaAuthorization(address(this), msg.sender, keccak256(action), attestation.nonce, attestation.deadline, attestation.signature);
+            alphaNonceUsed[attestation.nonce] = true;
+        }
+        _;
+    }
+
     // ------------------------------------------------------------------ funding
 
     /// @notice Fund under the factory's default verifier.
@@ -245,8 +411,8 @@ contract P2IDVault is IP2IDVault {
     // ------------------------------------------------------------------ proofs
 
     /// @notice Verify a proof and update this verifier's owner cache and issue-time floor using _apply.
-    function refreshProof(address verifier, bytes calldata proof) external nonReentrant {
-        _present(verifier, proof, _noConstraint());
+    function refreshProof(address verifier, bytes memory proof) external {
+        refreshProofWithAttestation(verifier, proof, AlphaAttestation(0, 0, hex""));
     }
 
     /// @notice Present a proof, then sweep `verifier`'s default bucket for `token`.
@@ -255,12 +421,11 @@ contract P2IDVault is IP2IDVault {
     /// @dev Includes untracked funds only when _paysUntracked(verifier) is true.
     function refreshProofAndSweep(
         address verifier,
-        bytes calldata proof,
+        bytes memory proof,
         address token,
         uint256 depositCountLimit
-    ) external nonReentrant returns (uint256 amount, uint256 consumed) {
-        _present(verifier, proof, _noConstraint());
-        return _sweepDefault(verifier, token, depositCountLimit);
+    ) external returns (uint256 amount, uint256 consumed) {
+        return refreshProofAndSweepWithAttestation(verifier, proof, token, depositCountLimit, AlphaAttestation(0, 0, hex""));
     }
 
     // ------------------------------------------------------------------ claiming
@@ -269,39 +434,19 @@ contract P2IDVault is IP2IDVault {
     ///         this bucket's list from its cursor; `depositCountLimit` records per call (0 = MAX_SWEEP_PAGE, also the cap).
     ///         Includes untracked funds when the verifier is the current default and its owner cache
     ///         meets the revision and untrackedProofIat checks.
-    function sweep(address verifier, address token, uint256 depositCountLimit)
-        external
-        nonReentrant
-        returns (uint256 amount, uint256 consumed)
-    {
-        return _sweepDefault(verifier, token, depositCountLimit); // checks the owner is set and current
+    function sweep(address verifier, address token, uint256 depositCountLimit) external nonReentrant returns (uint256 amount, uint256 consumed) {
+        return _sweep(verifier, token, depositCountLimit);
     }
 
     /// @notice Sweep only untracked ERC-20 or native funds to
     ///         the default verifier's owner. The fee rate is quoted now.
     function sweepUntracked(address token) external nonReentrant returns (uint256 amount) {
-        address verifier = defaultVerifier();
-        address to = _ownerOf(verifier);
-        if (latestProofIat[verifier] < untrackedProofIat) revert ProofTooOld();
-        uint256 gross = _untrackedBalance(token);
-        uint256 fee = (gross * _quoteFeeBps(verifier, token)) / BPS;
-        uint256 charged;
-        (amount, charged) = _payout(verifier, token, to, gross, fee);
-        emit Swept(verifier, token, amount, charged, to, 0);
+        return _sweepUntracked(token);
     }
 
     /// @notice Sweep specific default-bucket deposits of `verifier` by id (e.g. to skip spam in the same bucket).
-    function sweepDeposits(address verifier, address token, uint256[] calldata depositIds)
-        external
-        nonReentrant
-        onlyInitialized(verifier)
-        returns (uint256 amount)
-    {
-        address to = owner[verifier];
-        (uint256 gross, uint256 fee) = _consumeIds(verifier, bytes32(0), token, depositIds, to);
-        uint256 charged;
-        (amount, charged) = _payout(verifier, token, to, gross, fee);
-        emit Swept(verifier, token, amount, charged, to, depositIds.length);
+    function sweepDeposits(address verifier, address token, uint256[] memory depositIds) external nonReentrant returns (uint256 amount) {
+        return _sweepDeposits(verifier, token, depositIds);
     }
 
     /// @notice Sweep the bucket funded under `verifier` and `constraint.commitment`. The verifier
@@ -309,33 +454,23 @@ contract P2IDVault is IP2IDVault {
     ///         wallet the proof resolves to. This entry point rejects a zero commitment.
     function sweepBucket(
         address verifier,
-        IP2IDVerifier.Constraint calldata constraint,
+        IP2IDVerifier.Constraint memory constraint,
         address token,
-        bytes calldata proof,
+        bytes memory proof,
         uint256 depositCountLimit
-    ) external nonReentrant returns (uint256 amount, uint256 consumed) {
-        address to = _verifyForThisVault(verifier, proof, constraint);
-        uint256 gross;
-        uint256 fee;
-        (gross, fee, consumed) = _consumeFromCursor(verifier, constraint.commitment, token, depositCountLimit, to);
-        uint256 charged;
-        (amount, charged) = _payout(verifier, token, to, gross, fee);
-        emit SweptBucket(verifier, constraint.commitment, token, amount, charged, to, consumed);
+    ) external returns (uint256 amount, uint256 consumed) {
+        return sweepBucketWithAttestation(verifier, constraint, token, proof, depositCountLimit, AlphaAttestation(0, 0, hex""));
     }
 
     /// @notice Sweep specific deposits of a constrained bucket by id.
     function sweepBucketDeposits(
         address verifier,
-        IP2IDVerifier.Constraint calldata constraint,
+        IP2IDVerifier.Constraint memory constraint,
         address token,
-        uint256[] calldata depositIds,
-        bytes calldata proof
-    ) external nonReentrant returns (uint256 amount) {
-        address to = _verifyForThisVault(verifier, proof, constraint);
-        (uint256 gross, uint256 fee) = _consumeIds(verifier, constraint.commitment, token, depositIds, to);
-        uint256 charged;
-        (amount, charged) = _payout(verifier, token, to, gross, fee);
-        emit SweptBucket(verifier, constraint.commitment, token, amount, charged, to, depositIds.length);
+        uint256[] memory depositIds,
+        bytes memory proof
+    ) external returns (uint256 amount) {
+        return sweepBucketDepositsWithAttestation(verifier, constraint, token, depositIds, proof, AlphaAttestation(0, 0, hex""));
     }
 
     // ------------------------------------------------------------------ fees
@@ -344,25 +479,7 @@ contract P2IDVault is IP2IDVault {
     ///         Native fees are sent as msg.value. For ERC-20, approve the accrued amount, reset the
     ///         allowance after the call, and deduct the observed balance decrease; revert if it exceeds fees owed.
     function withdrawFees(address verifier, address token) external nonReentrant returns (uint256 amount) {
-        uint256 owed = feesOwed[verifier][token];
-        if (owed == 0) return 0;
-        address pol = policy();
-        if (token == NATIVE) {
-            // Native coin cannot be pulled: it is sent along with the call, exactly the amount owed.
-            IP2IDPolicy(pol).distributeFee{value: owed}(verifier, token, owed);
-            amount = owed;
-        } else {
-            uint256 before = _balanceOf(token);
-            _callToken(token, abi.encodeWithSignature("approve(address,uint256)", pol, owed));
-            IP2IDPolicy(pol).distributeFee(verifier, token, owed);
-            _callToken(token, abi.encodeWithSignature("approve(address,uint256)", pol, 0));
-            uint256 afterBalance = _balanceOf(token);
-            amount = before > afterBalance ? before - afterBalance : 0;
-            if (amount > owed) revert FeeOverdrawn();
-        }
-        feesOwed[verifier][token] = owed - amount;
-        feesOwedTotal[token] -= amount;
-        emit FeesDistributed(verifier, token, amount, pol);
+        return _withdrawFees(verifier, token);
     }
 
     // ------------------------------------------------------------------ views
@@ -430,7 +547,7 @@ contract P2IDVault is IP2IDVault {
     ///      returned wallet and issue time. Proxy-verified results enter through acceptOwnerProof.
     function _present(
         address verifier,
-        bytes calldata proof,
+        bytes memory proof,
         IP2IDVerifier.Constraint memory constraint
     ) private onlyClaimable(verifier) returns (address wallet) {
         uint64 iat;
@@ -461,7 +578,7 @@ contract P2IDVault is IP2IDVault {
         if (iat > block.timestamp + FUTURE_SLACK) revert ProofFromFuture();
         (bool revOk, uint64 rev) = _revision(verifier);
         if (!revOk) revert RevisionUnavailable(verifier);
-        bool fresh = ownerRevision[verifier] == rev;
+        bool fresh = _ownerFresh(verifier);
         // Revision changes do not reset this verifier's stored issue-time floor.
         uint64 latest = latestProofIat[verifier];
         if (iat < latest) revert ProofTooOld();
@@ -476,6 +593,12 @@ contract P2IDVault is IP2IDVault {
             ownerRevision[verifier] = rev;
             emit OwnerRefreshed(verifier, wallet, iat);
         }
+        if (wallet == owner[verifier] && iat == latestProofIat[verifier]) {
+            bytes32 key = IP2IDVerifier(verifier).vkHash();
+            if (key == bytes32(0)) revert InvalidVkHash();
+            ownerVkHash[verifier] = key;
+            ownerAlphaRevision[verifier] = IP2IdVaultFactory(factory).alphaRevision(key);
+        }
         if (iat > untrackedProofIat && verifier == defaultVerifier()) untrackedProofIat = iat;
         // Otherwise iat == latest with the owner set: a same-age proof (a replayed copy, or another
         // wallet slot of the same token). The owner stays, and constrained paths pay `wallet`.
@@ -484,8 +607,8 @@ contract P2IDVault is IP2IDVault {
     /// @dev Verify a constrained claim; reject zero commitments at this entry point.
     function _verifyForThisVault(
         address verifier,
-        bytes calldata proof,
-        IP2IDVerifier.Constraint calldata constraint
+        bytes memory proof,
+        IP2IDVerifier.Constraint memory constraint
     ) private returns (address wallet) {
         if (constraint.commitment == bytes32(0)) revert ConstraintRequired();
         return _present(verifier, proof, constraint);
@@ -507,7 +630,11 @@ contract P2IDVault is IP2IDVault {
     /// @dev Whether the cached owner was proven under the verifier's current revision.
     function _ownerFresh(address verifier) private view returns (bool) {
         (bool ok, uint64 rev) = _revision(verifier);
-        return ok && ownerRevision[verifier] == rev;
+        if (!ok || ownerRevision[verifier] != rev) return false;
+        try IP2IDVerifier(verifier).vkHash() returns (bytes32 key) {
+            return key != bytes32(0) && ownerVkHash[verifier] == key
+                && ownerAlphaRevision[verifier] == IP2IdVaultFactory(factory).alphaRevision(key);
+        } catch { return false; }
     }
 
     function _noConstraint() private pure returns (IP2IDVerifier.Constraint memory c) {
@@ -568,7 +695,7 @@ contract P2IDVault is IP2IDVault {
         address verifier,
         bytes32 constraint,
         address token,
-        uint256[] calldata depositIds,
+        uint256[] memory depositIds,
         address to
     ) private returns (uint256 amount, uint256 fee) {
         for (uint256 k = 0; k < depositIds.length; k++) {

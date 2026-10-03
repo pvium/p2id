@@ -22,6 +22,8 @@ contract PviumIdentity is IPviumIdentity {
     IVerifier public immutable verifier;
     /// @notice Circuit version identifier supplied at deployment; not checked against the verifier's bytecode.
     uint16 public immutable circuitVersion;
+    /// @notice SHA-256 of the verification-key artifact pinned by this deployment.
+    bytes32 public immutable vkHash;
     /// @notice Notice a key proposal gives before it can be activated.
     uint64 public constant SIGNER_KEY_DELAY = 7 days;
     /// @notice Number of accepted signer keys. When zero, the signer check rejects attestations.
@@ -85,17 +87,20 @@ contract PviumIdentity is IPviumIdentity {
     error TimelockNotElapsed(uint64 eta);
     error UnknownKey(uint256 x, uint256 y);
 
+    /// @param _vkHash Trusted SHA-256 of the pinned verification-key artifact; not derived on-chain.
     /// @param _owner Key-set administrator; address(0) disables owner-only calls.
     /// @param _signerXs X coordinates of the initial accepted P-256 keys.
     /// @param _signerYs Corresponding Y coordinates.
     constructor(
         IVerifier _verifier,
         uint16 _circuitVersion,
+        bytes32 _vkHash,
         address _owner,
         uint256[] memory _signerXs,
         uint256[] memory _signerYs
     ) {
         if (address(_verifier).code.length == 0) revert InvalidVerifier();
+        if (_vkHash == bytes32(0)) revert InvalidVerifier();
         if (_circuitVersion == 0) revert InvalidCircuitVersion();
         if (_signerXs.length == 0 || _signerXs.length != _signerYs.length) revert NoSignerKeys();
         for (uint256 i = 0; i < _signerXs.length; i++) {
@@ -107,6 +112,7 @@ contract PviumIdentity is IPviumIdentity {
         }
         verifier = _verifier;
         circuitVersion = _circuitVersion;
+        vkHash = _vkHash;
         signerKeyCount = _signerXs.length;
         owner = _owner;
         emit OwnershipTransferred(address(0), _owner);

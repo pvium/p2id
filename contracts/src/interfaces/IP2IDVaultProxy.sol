@@ -1,11 +1,15 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.27;
 
+import {IP2IDVault} from "./IP2IDVault.sol";
+
 /// @title IP2IDVaultProxy
 /// @notice A P2ID proxy with creation code fixed for its deployed factory. Its upgradeTo entry
 ///         point requires an identity proof and a registered target. Delegated implementations
 ///         are trusted with all proxy storage, including the implementation slot.
 interface IP2IDVaultProxy {
+    function alphaUpgradeNonceUsed(uint256 nonce) external view returns (bool);
+    function upgradeToWithAttestation(bytes32 identityHash, address newImplementation, bytes calldata proof, IP2IDVault.AlphaAttestation calldata attestation) external;
     /// @notice ERC-1967 upgrade event.
     event Upgraded(address indexed implementation);
 

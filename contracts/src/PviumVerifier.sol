@@ -103,6 +103,8 @@ contract PviumVerifier is IP2IDVerifier {
         return (a.wallet, a.iat);
     }
 
+    function vkHash() external view returns (bytes32) { return pviumIdentity.vkHash(); }
+
     /// @inheritdoc IP2IDVerifier
     /// @dev Forward the identity key-set revision; constraint-signer changes do not increment it.
     function revision() external view returns (uint64) {

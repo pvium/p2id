@@ -18,8 +18,19 @@ export interface ContractInfo {
 }
 
 /** Selectors PviumP2IDVaultProxy answers itself; an implementation function with one is unreachable. */
-export const PROXY_RESERVED = ['implementation()', 'lastUpgrade()', 'upgradeTo(bytes32,address,bytes)'];
+export const PROXY_RESERVED = [
+  'implementation()', 'lastUpgrade()', 'upgradeTo(bytes32,address,bytes)',
+  'alphaUpgradeNonceUsed(uint256)',
+  'upgradeToWithAttestation(bytes32,address,bytes,(uint256,uint256,bytes))',
+];
 export const HOOK = 'acceptOwnerProof(address,address,uint64)';
+
+function abiType(input: any): string {
+  return input.type.startsWith('tuple')
+    ? `(${input.components.map(abiType).join(',')})${input.type.slice(5)}`
+    : input.type;
+}
+const abiSignature = (f: any) => `${f.name}(${f.inputs.map(abiType).join(',')})`;
 
 /** Canonical description of a storage type: its label with nested types expanded, so identical shapes compare equal. */
 export function canonicalType(layout: Layout, id: string): string {
@@ -62,10 +73,10 @@ export function compareLayouts(base: Layout, candidate: Layout): Finding[] {
 /** Off-chain checks for one candidate against a baseline; the registry does not run these. */
 export function validateImplementation(base: Layout, candidate: ContractInfo): Finding[] {
   const out = compareLayouts(base, candidate.layout);
-  const sigs = candidate.abi.filter((f) => f.type === 'function').map((f) => `${f.name}(${f.inputs.map((i: any) => i.type).join(',')})`);
+  const sigs = candidate.abi.filter((f) => f.type === 'function').map(abiSignature);
   if (!sigs.includes(HOOK)) out.push({ level: 'error', message: `missing ${HOOK}: the proxy cannot upgrade to it` });
   else {
-    const hook = candidate.abi.find((f) => f.type === 'function' && `${f.name}(${f.inputs.map((i: any) => i.type).join(',')})` === HOOK);
+    const hook = candidate.abi.find((f) => f.type === 'function' && abiSignature(f) === HOOK);
     if (!(hook.outputs?.length === 1 && hook.outputs[0].type === 'bytes4')) out.push({ level: 'error', message: `${HOOK} must return bytes4 (its selector) as acknowledgement` });
   }
   for (const r of PROXY_RESERVED) if (sigs.includes(r)) out.push({ level: 'error', message: `${r} is answered by the proxy; the implementation's version would be unreachable` });
