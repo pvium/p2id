@@ -8,8 +8,8 @@ import { identityTypeName } from '../src/identityNames.js';
 const EMAIL_COMMITMENT = '0xbcda0f09fa9732b2bfdea38199486b654a84e8e06085d7e364af8137f8d7deaf';
 // Reference vectors produced with ethers.getCreate2Address(factory, salt, initCodeHash).
 const FACTORY = '0x1111111111111111111111111111111111111111';
-const V1_INIT_CODE_HASH = '0x4c76d638c6e156d8a95617576f1dcac6189257696607110346ba4f5fe2932ca6';
-const EXPECTED = '0xA02E9cB3BAcA8a1A3577CAA6b081Eef55C128e7e';
+const V1_INIT_CODE_HASH = '0x23dec57677be79edb9ad208117422435778ee00c12d4c56e2edf226d2a57b18a';
+const EXPECTED = '0x38aB3Aa9ff0624daA1E73fe539A61e8f147F2FF5';
 
 test('IdentityType.X is the same identity as IdentityType.Twitter and the Privy name', async () => {
   assert.equal(IdentityType.X, IdentityType.Twitter);
@@ -34,7 +34,8 @@ test('v1 is the current unreleased scheme', () => {
   assert.equal(v1.identityDomain, 'p2id.identity.v1');
   assert.equal(v1.vaultInitCodeHash, V1_INIT_CODE_HASH);
   assert.equal(v1.factories.production, null); // unreleased: only a production factory freezes the scheme
-  assert.match(v1.factories.sandbox ?? '', /^0x[0-9a-fA-F]{40}$/);
+  // Proxy changes clear the previous sandbox factory until a fresh stack is recorded.
+  if (v1.factories.sandbox !== null) assert.match(v1.factories.sandbox, /^0x[0-9a-fA-F]{40}$/);
   assert.deepEqual(p2idScheme(), v1);
   assert.throws(() => p2idScheme('pvium.vault.v9'), /unknown P2ID scheme "pvium.vault.v9" \(known: pvium.vault.v1\)/);
 });

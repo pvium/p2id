@@ -3,10 +3,10 @@
   "schemes": {
     "pvium.vault.v1": {
       "identityDomain": "p2id.identity.v1",
-      "vaultInitCodeHash": "0x4c76d638c6e156d8a95617576f1dcac6189257696607110346ba4f5fe2932ca6",
+      "vaultInitCodeHash": "0x23dec57677be79edb9ad208117422435778ee00c12d4c56e2edf226d2a57b18a",
       "factories": {
         "production": null,
-        "sandbox": "0x5d173035d5Ae0b67a521FbFE72bDe43C96a0080A"
+        "sandbox": "0x48fD1bc4f982342dCFe2BEAc5fCFd22b4c1Ba4f6"
       },
       "compiler": {
         "solc": "0.8.28",

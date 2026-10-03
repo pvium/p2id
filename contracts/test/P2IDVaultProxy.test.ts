@@ -21,7 +21,8 @@ describe('PviumP2IDVaultProxy', function () {
     V = await idv.getAddress();
     policy = await ethers.deployContract('MockFeePolicy');
     await policy.allow(V, true);
-    factory = await ethers.deployContract('PviumP2IdVaultFactory', [deployer.address, NS, await policy.getAddress(), V, 7 * DAY, DAY, 30 * DAY]);
+    factory = await ethers.deployContract('PviumP2IdVaultFactory', [deployer.address, NS, await policy.getAddress(), V, 7 * DAY, DAY, 30 * DAY, ethers.ZeroAddress]);
+    await factory.setAlpha(await (await ethers.getContractAt('IP2IDVerifier', await factory.defaultVerifier())).vkHash(), false); // this suite exercises the ordinary (post-alpha) paths
     token = await ethers.deployContract('MockERC20');
     await factory.deploy(ID);
     vault = await ethers.getContractAt('P2IDVault', await factory.vaultFor(ID));
@@ -84,6 +85,15 @@ describe('PviumP2IDVaultProxy', function () {
     await expect(factory.revokeImplementation(await factory.baseImplementation())).to.be.revertedWithCustomError(factory, 'InvalidImplementation');
     await expect(factory.revokeImplementation(V2)).to.emit(factory, 'ImplementationRevoked').withArgs(V2);
     expect(await factory.isRegisteredImplementation(V2)).to.equal(false);
+  });
+
+  it('an implementation bound to another factory, or to none, cannot be proposed', async () => {
+    const otherFactory = await ethers.deployContract('PviumP2IdVaultFactory', [deployer.address, NS, await policy.getAddress(), V, 7 * DAY, DAY, 30 * DAY, ethers.ZeroAddress]);
+    await otherFactory.setAlpha(await (await ethers.getContractAt('IP2IDVerifier', await otherFactory.defaultVerifier())).vkHash(), false); // this suite exercises the ordinary (post-alpha) paths
+    const foreign = await ethers.deployContract('MockVaultV2', [await otherFactory.getAddress()]);
+    await expect(factory.proposeImplementation(await foreign.getAddress())).to.be.revertedWithCustomError(factory, 'InvalidImplementation');
+    await expect(factory.proposeImplementation(await idv.getAddress())).to.be.revertedWithCustomError(factory, 'InvalidImplementation'); // no factory() at all
+    await expect(factory.proposeImplementation(await v2.getAddress())).to.emit(factory, 'ImplementationProposed'); // bound to this one
   });
 
   it('only the identity owner, with a fresh proof, can move the vault, and only to a registered implementation', async () => {

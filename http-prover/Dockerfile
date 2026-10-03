@@ -3,7 +3,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certifi
  && rm -rf /var/lib/apt/lists/*
 # Barretenberg prover, pinned to the version the circuit was built with
 RUN curl -fsSL https://raw.githubusercontent.com/AztecProtocol/aztec-packages/master/barretenberg/bbup/install | bash \
- && /root/.bb/bbup -v 5.0.0-nightly.20260522
+ && /root/.bb/bbup -v 5.0.0
 ENV BB_BIN=/root/.bb/bb
 WORKDIR /app
 COPY package.json yarn.lock ./

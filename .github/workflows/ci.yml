@@ -1,11 +1,11 @@
 name: CI
 
-# Runs on pushes to develop and main, and on PRs, but only when something a job tests changed;
+# Runs on pushes to develop, and on PRs, but only when something a job tests changed;
 # docs, the spec and the other workflows skip CI. `changes` then narrows further so each job runs
 # only for its own paths. Keep the two path lists identical.
 on:
   push:
-    branches: [main, develop]
+    branches: [develop]
     paths:
       - 'circuit/**'
       - 'contracts/**'
@@ -25,9 +25,14 @@ permissions:
   contents: read
 
 env:
-  NARGO_VERSION: 1.0.0-beta.22
-  BB_VERSION: 5.0.0-nightly.20260522
+  NARGO_VERSION: 1.0.0-beta.26
+  BB_VERSION: 5.0.0
 
+defaults:
+  run:
+    shell: bash
+
+# Run test stages in order and stop after a failure. Path-filtered skips are allowed.
 jobs:
   changes:
     runs-on: ubuntu-latest
@@ -65,19 +70,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 22, cache: yarn, cache-dependency-path: contracts/yarn.lock }
+        with:
+          {
+            node-version: 22,
+            cache: yarn,
+            cache-dependency-path: contracts/yarn.lock,
+          }
       - run: yarn install --frozen-lockfile
       - run: yarn test
 
   sdk:
-    needs: changes
-    if: needs.changes.outputs.sdk == 'true'
+    needs: [changes, contracts]
+    if: >-
+      ${{ !cancelled() && needs.changes.result == 'success' &&
+          needs.changes.outputs.sdk == 'true' &&
+          (needs.contracts.result == 'success' || needs.contracts.result == 'skipped') }}
     runs-on: ubuntu-latest
     defaults: { run: { working-directory: sdks/node } }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 22, cache: yarn, cache-dependency-path: sdks/node/yarn.lock }
+        with:
+          {
+            node-version: 22,
+            cache: yarn,
+            cache-dependency-path: sdks/node/yarn.lock,
+          }
       - run: yarn install --frozen-lockfile
       - run: yarn test
 
@@ -85,8 +103,12 @@ jobs:
   # suites and the prover's full proving test. Only worth the minutes when the circuit or the
   # prover changed.
   circuit-and-prover:
-    needs: changes
-    if: needs.changes.outputs.circuit == 'true'
+    needs: [changes, contracts, sdk]
+    if: >-
+      ${{ !cancelled() && needs.changes.result == 'success' &&
+          needs.changes.outputs.circuit == 'true' &&
+          (needs.contracts.result == 'success' || needs.contracts.result == 'skipped') &&
+          (needs.sdk.result == 'success' || needs.sdk.result == 'skipped') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

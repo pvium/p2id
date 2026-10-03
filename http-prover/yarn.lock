@@ -2,10 +2,10 @@
 # yarn lockfile v1
 
 
-"@aztec/bb.js@5.0.0-nightly.20260522":
-  version "5.0.0-nightly.20260522"
-  resolved "https://registry.yarnpkg.com/@aztec/bb.js/-/bb.js-5.0.0-nightly.20260522.tgz#2875d62984618fd7899485060be82c961bb83db7"
-  integrity sha512-3QCyPPQrPaFKgXcHw+7Mk+ScGJiMoeOtc6FpQFPTwTVbyFj9FGFdB6bceS6ulyNsmM6JfFmJRcbGerTAjzfbhw==
+"@aztec/bb.js@5.0.0":
+  version "5.0.0"
+  resolved "https://registry.yarnpkg.com/@aztec/bb.js/-/bb.js-5.0.0.tgz#069095e27281efd5e494354c1968421512b92a63"
+  integrity sha512-O4HDjzrjXMvM44+VbgDG1GaDUztWGEVujbBmwZAEVJh6BHpmJfMxBB2/69h1oi4kX2adgaowlJNFhpzcz1MHSA==
   dependencies:
     comlink "^4.4.1"
     commander "^12.1.0"
@@ -179,32 +179,32 @@
   resolved "https://registry.yarnpkg.com/@noble/hashes/-/hashes-1.8.0.tgz#cee43d801fcef9644b11b8194857695acd5f815a"
   integrity sha512-jCs9ldd7NwzpgXDIf6P3+NrHh9/sD6CQdxHyjQI+h/6rDNo88ypBxxz45UDuZHz9r3tNz7N/VInSVoVdtXEI4A==
 
-"@noir-lang/acvm_js@1.0.0-beta.22":
-  version "1.0.0-beta.22"
-  resolved "https://registry.yarnpkg.com/@noir-lang/acvm_js/-/acvm_js-1.0.0-beta.22.tgz#f9ceb29142614a32de9b19c4ccf434f36331e647"
-  integrity sha512-2xXfSKrnskUNmPiG/Kj6yvWi1E6wJBl/1ZsmzVaHEEyJsUBf15xaSRBZR7X1361whUR2vqyG80ck2huLZPb5bA==
+"@noir-lang/acvm_js@1.0.0-beta.26":
+  version "1.0.0-beta.26"
+  resolved "https://registry.yarnpkg.com/@noir-lang/acvm_js/-/acvm_js-1.0.0-beta.26.tgz#1f128de214a44ef098b7b256d5c5af889046a83e"
+  integrity sha512-f9+gLTQrOuZYLjHHdULC9J1ItcLs5237W62Y+CzRBI3MVfD/rhe5trdGoUwuIVvW9ttUObQsR4UkhvN5gcxYnA==
 
-"@noir-lang/noir_js@1.0.0-beta.22":
-  version "1.0.0-beta.22"
-  resolved "https://registry.yarnpkg.com/@noir-lang/noir_js/-/noir_js-1.0.0-beta.22.tgz#094b1782623a0533b40b76bb88773c4843c56683"
-  integrity sha512-Ts+QI2fN2PsrVjx38CszFSR0TyWpip9TgJ6HM17DIK05Jku4TSKtHMIjrE6lRii4Y+JV0rn70v+TrunJmt/X4w==
+"@noir-lang/noir_js@1.0.0-beta.26":
+  version "1.0.0-beta.26"
+  resolved "https://registry.yarnpkg.com/@noir-lang/noir_js/-/noir_js-1.0.0-beta.26.tgz#3551103d85c5f2c6114dd067b44512f7d462a124"
+  integrity sha512-0p3AyhQ+xQDHhE6eNSj79pWXvcPupmpxTsh7zkxf4dJnv3iB6XgzbrJspn6ed0VtSWGuHpFjRJbRY+PZFMeyMg==
   dependencies:
-    "@noir-lang/acvm_js" "1.0.0-beta.22"
-    "@noir-lang/noirc_abi" "1.0.0-beta.22"
-    "@noir-lang/types" "1.0.0-beta.22"
-    pako "^2.1.0"
+    "@noir-lang/acvm_js" "1.0.0-beta.26"
+    "@noir-lang/noirc_abi" "1.0.0-beta.26"
+    "@noir-lang/types" "1.0.0-beta.26"
+    pako "^3.0.1"
 
-"@noir-lang/noirc_abi@1.0.0-beta.22":
-  version "1.0.0-beta.22"
-  resolved "https://registry.yarnpkg.com/@noir-lang/noirc_abi/-/noirc_abi-1.0.0-beta.22.tgz#d05c35c238c573b7bc0baf4f6d2bb77432fee7e2"
-  integrity sha512-vpZtWb946eb4ZxERxY32I4Fv62SAAjhAyJpb2YzWYvnDVTyFVIvr/MSVunrM1osUP35nnRPRGuXVTWy4sBQkIg==
+"@noir-lang/noirc_abi@1.0.0-beta.26":
+  version "1.0.0-beta.26"
+  resolved "https://registry.yarnpkg.com/@noir-lang/noirc_abi/-/noirc_abi-1.0.0-beta.26.tgz#32e57e97f08195b91f4e383e12d6a57b3dd8989f"
+  integrity sha512-w/KjhJx095dAKECPlLb7QY6FovZ8dJboCXzgcZ9k0yZfhawhN4/8SEcC7JCer+GKxKZEBSY3VtlZmW3ch4J83A==
   dependencies:
-    "@noir-lang/types" "1.0.0-beta.22"
+    "@noir-lang/types" "1.0.0-beta.26"
 
-"@noir-lang/types@1.0.0-beta.22":
-  version "1.0.0-beta.22"
-  resolved "https://registry.yarnpkg.com/@noir-lang/types/-/types-1.0.0-beta.22.tgz#4da1e4e209a3dce8051f9d96158be465f521bb31"
-  integrity sha512-PXD8cmvMT4wybDe1pUPwv2Uz1FYh9B/hdXrY5eOMf1elNVxomj2tHDDYoKI/zNDrJ1JzTL0xhbAX1vBTMMFvBw==
+"@noir-lang/types@1.0.0-beta.26":
+  version "1.0.0-beta.26"
+  resolved "https://registry.yarnpkg.com/@noir-lang/types/-/types-1.0.0-beta.26.tgz#57fd08f9838e5d1a6f51217e8d6f7c0d9955bbd8"
+  integrity sha512-TFJMafp32koXf3TFVAfPBirwkVdlRHzSTM1nVAkRJDTQQNnI7qoAjvzXWXjgpE65kwjukQyzcmaucOegruawPw==
 
 "@pvium/p2id-core@^0.1.0":
   version "0.0.0"
@@ -698,6 +698,11 @@ pako@^2.1.0:
   version "2.2.0"
   resolved "https://registry.yarnpkg.com/pako/-/pako-2.2.0.tgz#246b9d4c841a8d308e484c0d03786651b143e63a"
   integrity sha512-zJq6RP/5q+TO2OpFV3FHzlPnFjmkb7Nc99a5SNjJE+uu/PkpChs+NIZSSzbBoD+6kjiISXjfYdwj1ZRQ81dz/w==
+
+pako@^3.0.1:
+  version "3.0.2"
+  resolved "https://registry.yarnpkg.com/pako/-/pako-3.0.2.tgz#b983206a36914f169ca9ea0f6bf702fc5ba1ac71"
+  integrity sha512-uBv6IT2aT1A78iU6dpNEbf6+CyhlV/6g9JlJs9kpgjFGFhruIICVRysF/W0SLzXg5+hCl+KroH7e4YUyfEmgLg==
 
 parseurl@^1.3.3:
   version "1.3.3"

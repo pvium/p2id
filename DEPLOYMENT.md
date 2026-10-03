@@ -37,7 +37,7 @@ Three facts to keep in mind throughout:
 
 ## 0. Prerequisites
 
-- Node 22.13+ and yarn; `nargo 1.0.0-beta.22` and `bb 5.0.0-nightly.20260522` only if you rebuild
+- Node 22.13+ and yarn; `nargo 1.0.0-beta.26` and `bb 5.0.0` only if you rebuild
   the circuit (not needed to deploy what is committed).
 - All suites green on the commit you deploy: `contracts` (`yarn test`), `sdks/node` (both packages)
   (`yarn test`), `http-prover` (`yarn test`), `circuit` (`sh test/e2e.sh && sh test/adversarial.sh`).
@@ -69,7 +69,11 @@ cp .env.example .env      # git-ignored
 
 Fill in, per environment, `OWNER_SANDBOX` / `OWNER_PROD` (the Safe), `ATTESTER_SANDBOX` /
 `ATTESTER_PROD` (the address whose EIP-712 signatures satisfy screening constraints, or `none`),
-and the deployer key. The JWKS URLs are prefilled. Change the delays only if the defaults (7-day
+optional `ALPHA_ATTESTER_SANDBOX` / `ALPHA_ATTESTER_PROD` (the factory alpha signer;
+omitted or blank uses that environment's owner), and the deployer key. Set both attester
+variables to the same address if the roles should share a key. The factory alpha signer
+is a single address; constraint signers remain a verifier-managed set. Signer changes
+are immediate. The JWKS URLs are prefilled. Change the delays only if the defaults (7-day
 policy-change notice, 1–90 day refund windows) are not what you want. A default-verifier change
 always needs 14 days' notice; that is fixed in the factory.
 
@@ -123,7 +127,7 @@ The script
    `PviumP2IdVaultFactory`, skipping any that already exist, so it is safe to re-run after an
    interruption,
 3. reads everything back and checks the wiring: code at every address, every Privy key, the
-   circuit version and the owner in `PviumIdentity`, the attester in `PviumVerifier`, the policy's owner and
+   circuit version, pinned vkHash from circuit/version.json and the owner in `PviumIdentity`, the attester in `PviumVerifier`, the policy's owner and
    allowlist, and the factory's owner, policy, default verifier, namespace, delays, refund bounds,
    base implementation address/code/factory binding/registration, and vault init-code hash against `p2id.json`,
 4. writes `contracts/deployments/<scheme>.<environment>.<chainId>.json`, including the Privy keys

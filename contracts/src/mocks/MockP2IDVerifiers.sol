@@ -8,6 +8,8 @@ import {IP2IDPolicy} from "../interfaces/IP2IDPolicy.sol";
 /// @dev Test stub: proof = abi.encode(address wallet, bytes32 identityHash, uint64 iat).
 ///      A constraint is "satisfied" when its signature equals the bytes "ok".
 contract MockIdentityVerifier is IP2IDVerifier {
+    bytes32 public vkHash = keccak256("mock.vk.v1");
+    function setVkHash(bytes32 hash) external { vkHash = hash; }
     error MockIdentityMismatch();
     error MockConstraintFailed();
 
@@ -176,4 +178,11 @@ contract MockVaultAppends is P2IDVault {
     uint256 public extra;
 
     constructor(address _factory) P2IDVault(_factory) {}
+}
+
+/// @dev An old target that cannot retain alpha protection; proxy upgrades must reject it.
+contract MockNoAlphaVault {
+    address public immutable factory;
+    constructor(address factory_) { factory = factory_; }
+    function supportsAlphaGuard() external pure returns (bool) { return false; }
 }

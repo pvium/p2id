@@ -272,9 +272,9 @@ describe('PviumIdentity', function () {
     expect((await gate.verifyAttestation(proof, publicInputs)).iat).to.equal(1789240094n);
     const factory = await ethers.getContractFactory('PviumIdentity');
     const [deployer] = await ethers.getSigners();
-    await expect(factory.deploy(verifierAddress, 2, deployer.address, [], [])).to.be.revertedWithCustomError(factory, 'NoSignerKeys');
-    await expect(factory.deploy(verifierAddress, 2, deployer.address, [x], [])).to.be.revertedWithCustomError(factory, 'NoSignerKeys');
-    await expect(factory.deploy(verifierAddress, 2, deployer.address, [x, x], [y, y])).to.be.revertedWithCustomError(factory, 'DuplicateSignerKey');
+    await expect(factory.deploy(verifierAddress, 2, ethers.id('test.vk'), deployer.address, [], [])).to.be.revertedWithCustomError(factory, 'NoSignerKeys');
+    await expect(factory.deploy(verifierAddress, 2, ethers.id('test.vk'), deployer.address, [x], [])).to.be.revertedWithCustomError(factory, 'NoSignerKeys');
+    await expect(factory.deploy(verifierAddress, 2, ethers.id('test.vk'), deployer.address, [x, x], [y, y])).to.be.revertedWithCustomError(factory, 'DuplicateSignerKey');
   });
 
   it('refuses circuit version 0', async () => {

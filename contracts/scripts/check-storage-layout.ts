@@ -4,7 +4,7 @@
 //   UPDATE=1 yarn layout                 # rewrite that snapshot from the current build (before the base is deployed)
 //   CANDIDATE=MyVaultV2 yarn layout      # check layout, hook ABI and selected source-level hazards
 //
-// The snapshot is the original P2IDVault storage layout. Once a factory is
+// The snapshot is the storage layout of the base P2IDVault every proxy starts on. Once a factory is
 // deployed it must never change, and candidates must preserve it. Also compare candidates against any later layouts
 // users may upgrade from; passing these checks does not establish behavioral safety.
 import { readFileSync, writeFileSync } from 'fs';
@@ -32,7 +32,11 @@ function main() {
     if (errors) failed = true;
   };
   report('P2IDVault vs snapshot', compareLayouts(snapshot, base.layout));
-  if (candidate) report(`${candidate} vs snapshot`, validateImplementation(snapshot, readContract(root, candidate)));
+  if (candidate) {
+    const contract = readContract(root, candidate);
+    report(`${candidate} vs snapshot`, validateImplementation(snapshot, contract));
+    report(`${candidate} vs current P2IDVault`, compareLayouts(base.layout, contract.layout));
+  }
   if (failed) process.exit(1);
 }
 main();

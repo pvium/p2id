@@ -38,7 +38,7 @@ export function targetsOf(r: any): Target[] {
     },
     {
       name: 'PviumIdentity', contract: 'src/PviumIdentity.sol:PviumIdentity', address: r.pviumIdentity,
-      args: [r.zkVerifier, r.config.circuitVersion, r.config.owner, keys.map((k) => k.x), keys.map((k) => k.y)],
+      args: [r.zkVerifier, r.config.circuitVersion, ...(r.config.vkHash === undefined ? [] : [r.config.vkHash]), r.config.owner, keys.map((k) => k.x), keys.map((k) => k.y)],
     },
     {
       name: 'PviumVerifier', contract: 'src/PviumVerifier.sol:PviumVerifier', address: r.pviumVerifier,
@@ -47,10 +47,10 @@ export function targetsOf(r: any): Target[] {
     { name: 'PviumP2IDPolicy', contract: 'src/PviumP2IDPolicy.sol:PviumP2IDPolicy', address: r.policy, args: [r.config.owner, [r.pviumVerifier]] },
     {
       name: 'PviumP2IdVaultFactory', contract: 'src/PviumP2IdVaultFactory.sol:PviumP2IdVaultFactory', address: r.factory,
-      args: [r.config.owner, ethers.id(r.scheme), r.policy, r.pviumVerifier, r.config.policyChangeDelay, r.config.minRefundWindow, r.config.maxRefundWindow],
+      args: [r.config.owner, ethers.id(r.scheme), r.policy, r.pviumVerifier, r.config.policyChangeDelay, r.config.minRefundWindow, r.config.maxRefundWindow, ...(r.config.alphaAttester === undefined ? [] : [r.config.alphaAttester])],
     },
     {
-      name: 'P2IDVault', contract: 'src/P2IDVault.sol:P2IDVault',
+      name: 'P2IDVault', contract: r.baseImplementationContract ?? 'src/P2IDVault.sol:P2IDVault',
       // The factory creates its base implementation as its first CREATE in the constructor.
       address: r.baseImplementation ?? ethers.getCreateAddress({ from: r.factory, nonce: 1 }), args: [r.factory],
     },

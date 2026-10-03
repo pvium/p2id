@@ -4,7 +4,7 @@ import { artifacts, ethers } from 'hardhat';
 import type { Signer } from 'ethers';
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { readContract, validateImplementation, type Layout } from './storageLayout';
+import { readContract, validateImplementation, compareLayouts, type Layout } from './storageLayout';
 
 const root = join(__dirname, '..', '..');
 
@@ -18,7 +18,9 @@ export async function implementationCreationCode(contractName: string, factory: 
 /** The pre-registration checks: storage layout against the base snapshot, hook, no delegatecall/selfdestruct. */
 export function validateCandidate(contractName: string): { errors: string[]; warnings: string[] } {
   const snapshot: Layout = JSON.parse(readFileSync(join(root, 'storage', 'P2IDVault.layout.json'), 'utf8'));
-  const findings = validateImplementation(snapshot, readContract(root, contractName));
+  const candidate = readContract(root, contractName);
+  const current = readContract(root, 'src/P2IDVault.sol:P2IDVault');
+  const findings = [...validateImplementation(snapshot, candidate), ...compareLayouts(current.layout, candidate.layout)];
   return {
     errors: findings.filter((f) => f.level === 'error').map((f) => f.message),
     warnings: findings.filter((f) => f.level === 'warning').map((f) => f.message),

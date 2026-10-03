@@ -28,7 +28,8 @@ describe('P2IDVault native coin (BNB on BNB Chain, ETH on Base)', function () {
     V = await idv.getAddress();
     policy = await ethers.deployContract('MockFeePolicy');
     await policy.allow(V, true);
-    factory = await ethers.deployContract('PviumP2IdVaultFactory', [deployer.address, NS, await policy.getAddress(), V, 7 * DAY, DAY, 30 * DAY]);
+    factory = await ethers.deployContract('PviumP2IdVaultFactory', [deployer.address, NS, await policy.getAddress(), V, 7 * DAY, DAY, 30 * DAY, ethers.ZeroAddress]);
+    await factory.setAlpha(await (await ethers.getContractAt('IP2IDVerifier', await factory.defaultVerifier())).vkHash(), false); // this suite exercises the ordinary (post-alpha) paths
   });
 
   async function deployVault() {

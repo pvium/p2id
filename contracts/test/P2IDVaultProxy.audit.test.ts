@@ -19,7 +19,8 @@ describe('PviumP2IDVaultProxy audit', function () {
     await policy.allow(await verifier.getAddress(), true);
     factory = await ethers.deployContract('PviumP2IdVaultFactory', [admin.address,
       ethers.id('pvium.vault.v1'), await policy.getAddress(), await verifier.getAddress(),
-      7 * DAY, DAY, 30 * DAY]);
+      7 * DAY, DAY, 30 * DAY, ethers.ZeroAddress]);
+    await factory.setAlpha(await (await ethers.getContractAt('IP2IDVerifier', await factory.defaultVerifier())).vkHash(), false); // this suite exercises the ordinary (post-alpha) paths
     await factory.deploy(ID);
     const address = await factory.vaultFor(ID);
     proxy = await ethers.getContractAt('PviumP2IDVaultProxy', address);
@@ -79,15 +80,11 @@ describe('PviumP2IDVaultProxy audit', function () {
     expect(await proxy.implementation()).to.equal(former.address);
   });
 
-  it('a target that reverts on the owner-proof selector cannot be upgraded to', async () => {
-    // The verifier has no hook or permissive fallback. Registration itself does not check compatibility.
-    const incompatible = await verifier.getAddress();
-    await factory.proposeImplementation(incompatible);
-    await time.increase(14 * DAY);
-    await factory.registerImplementation();
-    await expect(proxy.connect(current).upgradeTo(ID, incompatible, proof(current.address, 2000))).to.be.reverted;
-    expect(await proxy.implementation()).to.equal(await factory.baseImplementation());
-    expect(await proxy.lastUpgrade()).to.deep.equal([ethers.ZeroAddress, 0n]);
+  it('a contract that is not bound to this factory cannot even be proposed', async () => {
+    // The verifier has code but no factory(): registration refuses it before any vault could pick it.
+    await expect(factory.proposeImplementation(await verifier.getAddress()))
+      .to.be.revertedWithCustomError(factory, 'InvalidImplementation');
+    expect(await factory.proposedImplementationEta()).to.equal(0);
   });
 
   it('the verified-result hook cannot be called directly, even by a proven owner', async () => {
@@ -119,7 +116,7 @@ describe('PviumP2IDVaultProxy audit', function () {
   });
 
   it('an implementation whose fallback silently accepts the hook is refused: the acknowledgement is missing', async () => {
-    const target = await ethers.deployContract('MockProxyNoopFallback');
+    const target = await ethers.deployContract('MockProxyNoopFallback', [await factory.getAddress()]);
     await vault.refreshProof(await verifier.getAddress(), proof(former.address, 1000));
     await factory.proposeImplementation(await target.getAddress());
     await time.increase(14 * DAY);
@@ -140,7 +137,7 @@ describe('PviumP2IDVaultProxy audit', function () {
       const word = kind === 'wrong selector' ? ethers.ZeroHash
         : ethers.concat([selector, '0x' + '00'.repeat(27) + (kind === 'dirty padding' ? '01' : '00')]);
       const length = kind === 'short' ? 4 : kind === 'long' ? 64 : 32;
-      const target = await ethers.deployContract('MockProxyHookResponse', [word, length]);
+      const target = await ethers.deployContract('MockProxyHookResponse', [word, length, await factory.getAddress()]);
       await factory.proposeImplementation(await target.getAddress());
       await time.increase(14 * DAY);
       await factory.registerImplementation();
@@ -156,7 +153,7 @@ describe('PviumP2IDVaultProxy audit', function () {
 
   it('a hook that exhausts its gas rolls back an already-written upgrade and preserves the prior record', async () => {
     await proxy.connect(current).upgradeTo(ID, await v2.getAddress(), proof(current.address, 1000));
-    const target = await ethers.deployContract('MockProxyFailingHook');
+    const target = await ethers.deployContract('MockProxyFailingHook', [await factory.getAddress()]);
     await factory.proposeImplementation(await target.getAddress());
     await time.increase(14 * DAY);
     await factory.registerImplementation();
@@ -212,7 +209,7 @@ describe('PviumP2IDVaultProxy audit', function () {
   });
 
   it('an implementation reporting an impossible freshness floor cannot block recovery', async () => {
-    const incompatible = await ethers.deployContract('MockProxyImpossibleFloor');
+    const incompatible = await ethers.deployContract('MockProxyImpossibleFloor', [await factory.getAddress()]);
     await factory.proposeImplementation(await incompatible.getAddress());
     await time.increase(14 * DAY);
     await factory.registerImplementation();
@@ -249,7 +246,7 @@ describe('PviumP2IDVaultProxy audit', function () {
         : scenario === 'unreadable owner' ? 3 : scenario === 'unreadable floor' ? 4 : 0;
       const target = await ethers.deployContract('MockProxyPostconditions', [
         mode, scenario === 'wrong owner' ? former.address : current.address,
-        scenario === 'stale floor' ? 1999 : 2000, await factory.initialImplementation(),
+        scenario === 'stale floor' ? 1999 : 2000, await factory.initialImplementation(), await factory.getAddress(),
       ]);
       await factory.proposeImplementation(await target.getAddress());
       await time.increase(14 * DAY);
@@ -269,7 +266,7 @@ describe('PviumP2IDVaultProxy audit', function () {
 
   it('blocks a nested hook upgrade and clears the guard after a successful outer upgrade', async () => {
     const target = await ethers.deployContract('MockProxyPostconditions', [
-      2, current.address, 2000, await factory.initialImplementation(),
+      2, current.address, 2000, await factory.initialImplementation(), await factory.getAddress(),
     ]);
     await factory.proposeImplementation(await target.getAddress());
     await time.increase(14 * DAY);

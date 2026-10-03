@@ -23,9 +23,16 @@ contract MockProxySlotWriter is P2IDVault {
 
 /// @dev Returns uint64.max as a proof floor for future-time filtering tests.
 contract MockProxyImpossibleFloor {
+    // Test-only registry trust claim; these intentionally hostile mocks are not production targets.
+    function supportsAlphaGuard() external pure returns (bool) { return true; }
     /// @dev Conforming enough to be upgraded to (it records the owner and acknowledges the hook),
     ///      then reports a freshness floor no vault could hold, to try to jam later upgrades.
     mapping(address => address) private _owner;
+    address public immutable factory;
+
+    constructor(address factory_) {
+        factory = factory_;
+    }
 
     function acceptOwnerProof(address verifier, address wallet, uint64) external returns (bytes4) {
         _owner[verifier] = wallet;
@@ -47,6 +54,14 @@ contract MockProxyImpossibleFloor {
 
 /// @dev Accepts any call and returns nothing: an accidentally incompatible implementation.
 contract MockProxyNoopFallback {
+    // Test-only registry trust claim; these intentionally hostile mocks are not production targets.
+    function supportsAlphaGuard() external pure returns (bool) { return true; }
+    address public immutable factory;
+
+    constructor(address factory_) {
+        factory = factory_;
+    }
+
     fallback() external payable {}
     receive() external payable {}
 }
@@ -54,12 +69,16 @@ contract MockProxyNoopFallback {
 /// @dev A hook that scribbles on vault storage, then answers with `length` raw bytes of `word`:
 ///      lets tests check that a bad acknowledgement rolls every write back.
 contract MockProxyHookResponse {
+    // Test-only registry trust claim; these intentionally hostile mocks are not production targets.
+    function supportsAlphaGuard() external pure returns (bool) { return true; }
     bytes32 private immutable _word;
     uint256 private immutable _length;
+    address public immutable factory;
 
-    constructor(bytes32 word, uint256 length) {
+    constructor(bytes32 word, uint256 length, address factory_) {
         _word = word;
         _length = length;
+        factory = factory_;
     }
 
     fallback() external payable {
@@ -75,6 +94,14 @@ contract MockProxyHookResponse {
 
 /// @dev A hook that never finishes: burns all the gas it is given.
 contract MockProxyFailingHook {
+    // Test-only registry trust claim; these intentionally hostile mocks are not production targets.
+    function supportsAlphaGuard() external pure returns (bool) { return true; }
+    address public immutable factory;
+
+    constructor(address factory_) {
+        factory = factory_;
+    }
+
     fallback() external payable {
         assembly {
             for {} 1 {} { sstore(add(0x1000, gas()), gas()) }

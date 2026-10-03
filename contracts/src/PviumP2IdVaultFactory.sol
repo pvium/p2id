@@ -5,6 +5,7 @@ import {IP2IdVaultFactory} from "./interfaces/IP2IdVaultFactory.sol";
 import {IP2IDPolicy} from "./interfaces/IP2IDPolicy.sol";
 import {P2IDVault} from "./P2IDVault.sol";
 import {PviumP2IDVaultProxy} from "./PviumP2IDVaultProxy.sol";
+import {IP2IDVerifier} from "./interfaces/IP2IDVerifier.sol";
 import {IP2IDVault} from "./interfaces/IP2IDVault.sol";
 
 /// @title PviumP2IdVaultFactory
@@ -18,12 +19,122 @@ import {IP2IDVault} from "./interfaces/IP2IDVault.sol";
 ///      Manual registration checks code presence; deterministic deployment also checks factory binding.
 ///      Neither path verifies storage compatibility or implementation behavior.
 contract PviumP2IdVaultFactory is IP2IdVaultFactory {
+    /// @notice Alpha proof-acceptance status by pinned verification-key SHA-256.
+    /// @dev Inverted storage: a key is in alpha unless it has been released, so a verification key
+    ///      nobody has configured (a new circuit) requires attestation from its first proof.
+    mapping(bytes32 => bool) public alphaReleased;
+    mapping(bytes32 => uint256) public alphaRevision;
+    address public defaultAttester;
+    uint256 public alphaEpoch;
+    bytes32 public constant ALPHA_AUTHORIZATION_TYPEHASH =
+        keccak256(
+            "AlphaAuthorization(address vault,address caller,bytes32 callHash,uint256 nonce,uint256 deadline,uint256 epoch)"
+        );
+    event AlphaModeSet(bytes32 indexed vkHash, bool enabled, uint256 epoch);
+    event DefaultAttesterSet(address attester, uint256 epoch);
+    error InvalidAlphaAuthorization();
+    error AlphaAuthorizationExpired();
+    error InvalidVkHash();
+
+    /// @notice Whether proofs under `vkHash` need an alpha attestation. True for every key until
+    ///         the owner releases it with setAlpha(vkHash, false).
+    function isAlpha(bytes32 vkHash) public view returns (bool) {
+        return !alphaReleased[vkHash];
+    }
+
+    function setAlpha(bytes32 vkHash, bool enabled) external onlyOwner {
+        if (vkHash == bytes32(0)) revert InvalidVkHash();
+        if (enabled && alphaReleased[vkHash]) ++alphaRevision[vkHash]; // back into alpha: voids owners cached while released
+        alphaReleased[vkHash] = !enabled;
+        ++alphaEpoch;
+        emit AlphaModeSet(vkHash, enabled, alphaEpoch);
+    }
+
+    /// @notice Replace the alpha attester immediately; invalidates outstanding alpha approvals.
+    function setDefaultAttester(address attester) external onlyOwner {
+        if (attester == address(0)) revert InvalidAlphaAuthorization();
+        defaultAttester = attester;
+        ++alphaEpoch;
+        emit DefaultAttesterSet(attester, alphaEpoch);
+    }
+
+    function alphaAuthorizationDigest(
+        address vault,
+        address caller,
+        bytes32 callHash,
+        uint256 nonce,
+        uint256 deadline
+    ) public view returns (bytes32) {
+        bytes32 domain = keccak256(
+            abi.encode(
+                keccak256(
+                    "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
+                ),
+                keccak256("PviumAlpha"),
+                keccak256("1"),
+                block.chainid,
+                address(this)
+            )
+        );
+        return
+            keccak256(
+                abi.encodePacked(
+                    "\x19\x01",
+                    domain,
+                    keccak256(
+                        abi.encode(
+                            ALPHA_AUTHORIZATION_TYPEHASH,
+                            vault,
+                            caller,
+                            callHash,
+                            nonce,
+                            deadline,
+                            alphaEpoch
+                        )
+                    )
+                )
+            );
+    }
+
+    function verifyAlphaAuthorization(
+        address vault,
+        address caller,
+        bytes32 callHash,
+        uint256 nonce,
+        uint256 deadline,
+        bytes calldata signature
+    ) external view {
+        if (block.timestamp > deadline) revert AlphaAuthorizationExpired();
+        if (signature.length != 65) revert InvalidAlphaAuthorization();
+        bytes32 r;
+        bytes32 s;
+        uint8 v;
+        assembly {
+            r := calldataload(signature.offset)
+            s := calldataload(add(signature.offset, 32))
+            v := byte(0, calldataload(add(signature.offset, 64)))
+        }
+        if (
+            (v != 27 && v != 28) ||
+            uint256(s) >
+            0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0
+        ) revert InvalidAlphaAuthorization();
+        address signer = ecrecover(
+            alphaAuthorizationDigest(vault, caller, callHash, nonce, deadline),
+            v,
+            r,
+            s
+        );
+        if (signer == address(0) || signer != defaultAttester)
+            revert InvalidAlphaAuthorization();
+    }
     bytes32 public immutable nsHash;
     /// @notice Starting implementation for new proxies, changed only by a delayed default proposal.
     address public baseImplementation;
     /// @notice Original implementation, kept registered as a fallback.
     address public immutable initialImplementation;
-    bytes32 public constant IMPLEMENTATION_SALT = keccak256("pvium.vault.implementation.v1");
+    bytes32 public constant IMPLEMENTATION_SALT =
+        keccak256("pvium.vault.implementation.v1");
     bool public proposedImplementationMakeDefault;
     /// @notice Target allowlist checked by PviumP2IDVaultProxy.upgradeTo.
     mapping(address implementation => bool) public isRegisteredImplementation;
@@ -84,13 +195,19 @@ contract PviumP2IdVaultFactory is IP2IdVaultFactory {
         address _defaultVerifier,
         uint64 _policyChangeDelay,
         uint64 _minRefundWindow,
-        uint64 _maxRefundWindow
+        uint64 _maxRefundWindow,
+        address _alphaAttester
     ) {
         if (_owner == address(0)) revert InvalidOwner();
         if (_minRefundWindow > _maxRefundWindow) revert InvalidRefundWindow();
         if (_policy.code.length == 0) revert InvalidPolicy();
-        if (!IP2IDPolicy(_policy).isVerifierAllowed(_defaultVerifier)) revert VerifierNotApproved(_defaultVerifier);
+        if (!IP2IDPolicy(_policy).isVerifierAllowed(_defaultVerifier))
+            revert VerifierNotApproved(_defaultVerifier);
         owner = _owner;
+        defaultAttester = _alphaAttester == address(0)
+            ? _owner
+            : _alphaAttester;
+        emit DefaultAttesterSet(defaultAttester, alphaEpoch);
         emit OwnershipTransferred(address(0), _owner);
         nsHash = _nsHash;
         policyChangeDelay = _policyChangeDelay;
@@ -104,43 +221,76 @@ contract PviumP2IdVaultFactory is IP2IdVaultFactory {
         baseImplementation = base;
         initialImplementation = base;
         isRegisteredImplementation[base] = true;
+        bytes32 initialVkHash = IP2IDVerifier(_defaultVerifier).vkHash();
+        if (initialVkHash == bytes32(0)) revert InvalidVkHash();
+        alphaRevision[initialVkHash] = 1; // in alpha by default, like every key
         emit ImplementationRegistered(base);
     }
 
     // ------------------------------------------------------------------ vault implementations (timelocked)
 
     /// @notice Predict the CREATE2 address from full creation code, including constructor arguments.
-    function implementationFor(bytes32 creationCodeHash) public view returns (address) {
-        return address(uint160(uint256(keccak256(abi.encodePacked(
-            bytes1(0xff), address(this), IMPLEMENTATION_SALT, creationCodeHash
-        )))));
+    function implementationFor(
+        bytes32 creationCodeHash
+    ) public view returns (address) {
+        return
+            address(
+                uint160(
+                    uint256(
+                        keccak256(
+                            abi.encodePacked(
+                                bytes1(0xff),
+                                address(this),
+                                IMPLEMENTATION_SALT,
+                                creationCodeHash
+                            )
+                        )
+                    )
+                )
+            );
     }
 
     /// @notice Deploy full creation code with CREATE2 and propose registration in the same transaction.
     /// @dev Reuses existing code. An identical pending proposal keeps its ETA; a different proposal
     ///      must first be cancelled. makeDefault affects new proxies only, after registration.
-    function deployVaultImplementation(bytes memory creationCode, bool makeDefault)
-        external onlyOwner returns (address implementation)
-    {
+    function deployVaultImplementation(
+        bytes memory creationCode,
+        bool makeDefault
+    ) external onlyOwner returns (address implementation) {
         if (creationCode.length == 0) revert InvalidImplementation();
         implementation = implementationFor(keccak256(creationCode));
         if (implementation.code.length == 0) {
             bytes32 salt = IMPLEMENTATION_SALT;
             address deployed;
             assembly {
-                deployed := create2(0, add(creationCode, 32), mload(creationCode), salt)
+                deployed := create2(
+                    0,
+                    add(creationCode, 32),
+                    mload(creationCode),
+                    salt
+                )
             }
-            if (deployed != implementation || deployed.code.length == 0) revert InvalidImplementation();
-            emit ImplementationDeployed(implementation, keccak256(creationCode));
+            if (deployed != implementation || deployed.code.length == 0)
+                revert InvalidImplementation();
+            emit ImplementationDeployed(
+                implementation,
+                keccak256(creationCode)
+            );
         }
         _checkFactoryBinding(implementation);
         if (proposedImplementationEta != 0) {
-            if (proposedImplementation != implementation || proposedImplementationMakeDefault != makeDefault) {
+            if (
+                proposedImplementation != implementation ||
+                proposedImplementationMakeDefault != makeDefault
+            ) {
                 revert ImplementationProposalPending();
             }
             return implementation;
         }
-        if (isRegisteredImplementation[implementation] && (!makeDefault || baseImplementation == implementation)) {
+        if (
+            isRegisteredImplementation[implementation] &&
+            (!makeDefault || baseImplementation == implementation)
+        ) {
             return implementation;
         }
         _proposeImplementation(implementation, makeDefault);
@@ -148,28 +298,53 @@ contract PviumP2IdVaultFactory is IP2IdVaultFactory {
 
     /// @notice Propose an opt-in upgrade target. Replaces a pending proposal and resets its delay.
     function proposeImplementation(address implementation) external onlyOwner {
-        if (implementation.code.length == 0 || isRegisteredImplementation[implementation]) revert InvalidImplementation();
+        if (
+            implementation.code.length == 0 ||
+            isRegisteredImplementation[implementation]
+        ) revert InvalidImplementation();
+        _checkFactoryBinding(implementation); // bound to this factory, however it was deployed
         _proposeImplementation(implementation, false);
     }
 
     /// @notice Propose a registered target as the starting implementation for future proxies.
-    function proposeDefaultImplementation(address implementation) external onlyOwner {
-        if (!isRegisteredImplementation[implementation] || implementation == baseImplementation) revert InvalidImplementation();
+    function proposeDefaultImplementation(
+        address implementation
+    ) external onlyOwner {
+        if (
+            !isRegisteredImplementation[implementation] ||
+            implementation == baseImplementation
+        ) revert InvalidImplementation();
         _checkFactoryBinding(implementation);
         _proposeImplementation(implementation, true);
     }
 
-    function _proposeImplementation(address implementation, bool makeDefault) private {
+    function _proposeImplementation(
+        address implementation,
+        bool makeDefault
+    ) private {
         proposedImplementation = implementation;
         proposedImplementationMakeDefault = makeDefault;
-        proposedImplementationEta = uint64(block.timestamp) + DEFAULT_VERIFIER_DELAY;
+        proposedImplementationEta =
+            uint64(block.timestamp) +
+            DEFAULT_VERIFIER_DELAY;
         emit ImplementationProposed(implementation, proposedImplementationEta);
-        emit ImplementationDefaultProposed(implementation, makeDefault, proposedImplementationEta);
+        emit ImplementationDefaultProposed(
+            implementation,
+            makeDefault,
+            proposedImplementationEta
+        );
     }
 
     function _checkFactoryBinding(address implementation) private view {
-        (bool ok, bytes memory result) = implementation.staticcall(abi.encodeWithSignature("factory()"));
-        if (!ok || result.length != 32 || abi.decode(result, (bytes32)) != bytes32(uint256(uint160(address(this))))) {
+        (bool ok, bytes memory result) = implementation.staticcall(
+            abi.encodeWithSignature("factory()")
+        );
+        if (
+            !ok ||
+            result.length != 32 ||
+            abi.decode(result, (bytes32)) !=
+            bytes32(uint256(uint160(address(this))))
+        ) {
             revert InvalidImplementation();
         }
     }
@@ -189,7 +364,7 @@ contract PviumP2IdVaultFactory is IP2IdVaultFactory {
         address implementation = proposedImplementation;
         bool makeDefault = proposedImplementationMakeDefault;
         if (implementation.code.length == 0) revert InvalidImplementation();
-        if (makeDefault) _checkFactoryBinding(implementation);
+        _checkFactoryBinding(implementation); // re-checked at registration: the code could not change, but the rule is one
         delete proposedImplementation;
         delete proposedImplementationEta;
         delete proposedImplementationMakeDefault;
@@ -204,7 +379,11 @@ contract PviumP2IdVaultFactory is IP2IdVaultFactory {
     /// @notice Remove a registered target immediately, except the current default and original implementation.
     ///         This changes the registry, not the implementation stored in existing proxies.
     function revokeImplementation(address implementation) external onlyOwner {
-        if (implementation == baseImplementation || implementation == initialImplementation || !isRegisteredImplementation[implementation]) revert InvalidImplementation();
+        if (
+            implementation == baseImplementation ||
+            implementation == initialImplementation ||
+            !isRegisteredImplementation[implementation]
+        ) revert InvalidImplementation();
         isRegisteredImplementation[implementation] = false;
         emit ImplementationRevoked(implementation);
     }
@@ -233,7 +412,8 @@ contract PviumP2IdVaultFactory is IP2IdVaultFactory {
         if (eta == 0) revert NothingProposed();
         if (block.timestamp < eta) revert TimelockNotElapsed(eta);
         address newPolicy = proposedPolicy;
-        if (!IP2IDPolicy(newPolicy).isVerifierAllowed(defaultVerifier)) revert VerifierNotApproved(defaultVerifier);
+        if (!IP2IDPolicy(newPolicy).isVerifierAllowed(defaultVerifier))
+            revert VerifierNotApproved(defaultVerifier);
         delete proposedPolicy;
         delete proposedPolicyEta;
         policy = newPolicy;
@@ -246,7 +426,8 @@ contract PviumP2IdVaultFactory is IP2IdVaultFactory {
     ///         after DEFAULT_VERIFIER_DELAY (14 days), via activateDefaultVerifier(). Replaces any
     ///         pending proposal.
     function proposeDefaultVerifier(address verifier) external onlyOwner {
-        if (!IP2IDPolicy(policy).isVerifierAllowed(verifier)) revert VerifierNotApproved(verifier);
+        if (!IP2IDPolicy(policy).isVerifierAllowed(verifier))
+            revert VerifierNotApproved(verifier);
         proposedDefaultVerifier = verifier;
         proposedDefaultEta = uint64(block.timestamp) + DEFAULT_VERIFIER_DELAY;
         emit DefaultVerifierProposed(verifier, proposedDefaultEta);
@@ -266,7 +447,8 @@ contract PviumP2IdVaultFactory is IP2IdVaultFactory {
         if (eta == 0) revert NothingProposed();
         if (block.timestamp < eta) revert TimelockNotElapsed(eta);
         address verifier = proposedDefaultVerifier;
-        if (!IP2IDPolicy(policy).isVerifierAllowed(verifier)) revert VerifierNotApproved(verifier);
+        if (!IP2IDPolicy(policy).isVerifierAllowed(verifier))
+            revert VerifierNotApproved(verifier);
         delete proposedDefaultVerifier;
         delete proposedDefaultEta;
         defaultVerifier = verifier;
@@ -326,7 +508,12 @@ contract PviumP2IdVaultFactory is IP2IdVaultFactory {
         vault = vaultFor(identityHash);
         if (vault.code.length != 0) return vault;
         vault = address(new PviumP2IDVaultProxy{salt: identityHash}());
-        IP2IDVault(vault).initialize(nsHash, identityHash, minRefundWindow, maxRefundWindow);
+        IP2IDVault(vault).initialize(
+            nsHash,
+            identityHash,
+            minRefundWindow,
+            maxRefundWindow
+        );
         emit VaultDeployed(identityHash, vault);
     }
 
@@ -385,7 +572,18 @@ contract PviumP2IdVaultFactory is IP2IdVaultFactory {
         vault = deploy(identityHash);
         if (token == address(0)) {
             // Native coin: forward exactly the value sent; the vault checks it equals `amount`.
-            return (vault, P2IDVault(payable(vault)).fundFor{value: msg.value}(msg.sender, verifier, token, amount, constraint, refundWindow, ref));
+            return (
+                vault,
+                P2IDVault(payable(vault)).fundFor{value: msg.value}(
+                    msg.sender,
+                    verifier,
+                    token,
+                    amount,
+                    constraint,
+                    refundWindow,
+                    ref
+                )
+            );
         }
         if (msg.value != 0) revert UnexpectedValue();
         // Measure the factory's balance increase, approve that amount to the vault, and record

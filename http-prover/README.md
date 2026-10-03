@@ -103,7 +103,7 @@ yarn build && yarn start        # node --env-file=.env dist/server.js
 
 The Linux `bb` binary requires a 64-bit system with glibc 2.34 or newer, such as Ubuntu 22.04+
 or Debian 12+. Use Node 22.13+ for `node:sqlite` and the pinned `bb` version
-`5.0.0-nightly.20260522`. The service uses `~/.bb/bb` when present, otherwise `bb` on `PATH`;
+`5.0.0`. The service uses `~/.bb/bb` when present, otherwise `bb` on `PATH`;
 `BB_BIN` overrides this location.
 
 Configuration uses environment variables; see `.env.example`. `PRIVY_JWKS_URL` accepts

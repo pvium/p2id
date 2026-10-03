@@ -139,10 +139,79 @@ def main():
     expect_fail("attack G: wallet value runs past its closing quote", execute(attack, "G"),
                 ["identity value not terminated", "identity value contains a backslash"])
 
+    # 10. Structural decoys: real JSON objects (not stringified) nested in the payload, so their
+    #     keys are outside every string yet not at the top level; and an account-shaped object
+    #     nested inside a real array element, so it is flat and inside linked_accounts but not a
+    #     direct member of the account array.
+    la = json.loads(payload["linked_accounts"])
+    la.append({"type": "wallet", "address": "0x0000000000000000000000000000000000000001", "chain_type": "ethereum",
+               "meta": {"type": "email", "address": "victim@example.com"}})
+    payload2 = dict(payload)
+    payload2["linked_accounts"] = json.dumps(la, separators=(",", ":"))
+    payload2["nested"] = {"iat": 9999999999, "linked_accounts": json.dumps(
+        [{"type": "email", "address": "victim@example.com"}], separators=(",", ":"))}
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as tf:
+        json.dump(payload2, tf)
+    r = run([NODE, os.path.join(HERE, "sign_token.mjs"), tf.name, os.path.join(FIX, "test_es256_private.pem")])
+    os.remove(tf.name)
+    if r.returncode != 0:
+        print(r.stderr); sys.exit(1)
+    token2 = r.stdout.strip()
+    r = run([sys.executable, os.path.join(ROOT, "scripts/gen_prover.py"), "--jwt", token2,
+             "--pubkey", os.path.join(FIX, "test_es256_public.pem"),
+             "--type", "email", "--value", "test-9988@privy.io",
+             "--wallet", "0xA01b6E60D51eDB3fEB9f86a62b846f4F90070f98", "-o", os.path.join(ROOT, "ProverAdvBase2.toml")])
+    if r.returncode != 0:
+        print(r.stderr); sys.exit(1)
+    with open(os.path.join(ROOT, "ProverAdvBase2.toml")) as f:
+        base2 = f.read()
+    os.remove(os.path.join(ROOT, "ProverAdvBase2.toml"))
+    decoded2 = b64url_decode(token2.split(".")[1].encode())
+    print("adversarial token 2: nested object claims and a nested account object present")
+    out = execute(base2, "Control2")
+    if "successfully solved" not in out:
+        print("  FAIL control 2: honest witness did not solve"); print(out[-600:]); sys.exit(1)
+    print("  ok   control 2: honest witness still proves")
+
+    nested = decoded2.find(b'"nested":{')
+    assert nested != -1
+    # Attack H: iat inside a nested (unstringified) object: outside strings, at a member boundary, depth 2.
+    h_idx = decoded2.find(b'"iat":', nested)
+    attack = set_field(base2, "iat_idx", h_idx)
+    expect_fail("attack H: iat decoy in a nested object", execute(attack, "H"), "iat is not a top-level claim")
+
+    # Attack I: linked_accounts inside the nested object, with its own fake email account.
+    i_idx = decoded2.find(b'"linked_accounts":"', nested)
+    i_start = decoded2.find(b"{", i_idx)
+    i_end = decoded2.find(b"}", i_start)
+    it_idx = decoded2.find(b'\\"type\\":\\"email\\"', i_start, i_end)
+    iv_idx = decoded2.find(b'\\"address\\":\\"', i_start, i_end)
+    assert -1 not in (i_idx, i_start, i_end, it_idx, iv_idx)
+    attack = base2
+    for k, v in (("linked_accounts_idx", i_idx), ("acct_start", i_start), ("acct_end", i_end), ("type_idx", it_idx),
+                 ("value_idx", iv_idx), ("value_len", len(b"victim@example.com"))):
+        attack = set_field(attack, k, v)
+    expect_fail("attack I: linked_accounts decoy in a nested object", execute(attack, "I"), "linked_accounts is not a top-level claim")
+
+    # Attack J: the email-shaped object nested inside a real array element (flat, inside
+    # linked_accounts, but a member of an element, not of the array).
+    j_meta = decoded2.find(b'\\"meta\\":{')
+    j_start = decoded2.find(b"{", j_meta)
+    j_end = decoded2.find(b"}", j_start)
+    jt_idx = decoded2.find(b'\\"type\\":\\"email\\"', j_start, j_end)
+    jv_idx = decoded2.find(b'\\"address\\":\\"', j_start, j_end)
+    assert -1 not in (j_meta, j_start, j_end, jt_idx, jv_idx)
+    attack = base2
+    for k, v in (("acct_start", j_start), ("acct_end", j_end), ("type_idx", jt_idx), ("value_idx", jv_idx),
+                 ("value_len", len(b"victim@example.com"))):
+        attack = set_field(attack, k, v)
+    expect_fail("attack J: account object nested inside an array element", execute(attack, "J"),
+                "account object is not a direct member of the account array")
+
     # 10. Attack H: identity value truncated (same trick on the identity slot).
     id_len = int(re.search(r'^value_len = "(\d+)"', base, re.M).group(1))
     attack = set_field(base, "value_len", id_len - 1)
-    expect_fail("attack H: identity value truncated", execute(attack, "H"), "identity value not terminated")
+    expect_fail("attack K: identity value truncated", execute(attack, "H"), "identity value not terminated")
 
     # 11. The witness generator must refuse wallets that are not linked, including substrings /
     #     prefixes of real ones and case variants of a case-sensitive (Solana) address.

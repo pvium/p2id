@@ -32,7 +32,7 @@ mod identity;
 use base64::BASE64_URL_DECODER;
 use bytes::{
     bytes_at_eq, bytes_at_var_eq, is_member_start,
-    BACKSLASH, COMMA, DOT, LBRACE, QUOTE, RBRACE, assert_bytes_at, 
+    BACKSLASH, COMMA, DOT, LBRACE, LBRACKET, QUOTE, RBRACE, RBRACKET, assert_bytes_at, 
     assert_is_member_start, pack_hash, parse_decimal, read_at, to_lower,
 };
 use sha256::sha256_var;
@@ -159,22 +159,35 @@ fn main(
     // only ever appears inside strings (`linked_accounts`, `custom_metadata` are stringified
     // JSON), so this is enough to anchor the account object to the `linked_accounts` string
     // and to keep the timestamp keys out of any string.
+    // The same pass also tracks JSON nesting outside strings (`{`/`[` open, `}`/`]` close),
+    // so a claim can be required to sit at the top level: a decoy `"iat":` or
+    // `"linked_accounts":` inside a nested object is outside every string, but not at depth 1.
     let mut in_string: [bool; MAX_PAYLOAD_LEN] = [false; MAX_PAYLOAD_LEN];
+    let mut depth_at: [Field; MAX_PAYLOAD_LEN] = [0; MAX_PAYLOAD_LEN];
     let mut active = true; // i < payload_len, maintained with one equality test per byte
     let mut inside = false;
     let mut escaped = false;
+    let mut depth: Field = 0;
+    assert(payload[0] == LBRACE, "payload is not a JSON object");
     for i in 0..MAX_PAYLOAD_LEN {
         active = active & (i != payload_len);
         let b = payload[i];
         in_string[i] = inside;
+        depth_at[i] = depth;
+        let structural = active & !inside;
+        let open = structural & ((b == LBRACE) | (b == LBRACKET));
+        let close = structural & ((b == RBRACE) | (b == RBRACKET));
+        depth = depth + (open as Field) - (close as Field);
         let toggle = active & !escaped & (b == QUOTE);
         escaped = active & inside & !escaped & (b == BACKSLASH);
         inside = inside ^ toggle;
     }
     assert(!inside, "payload ends inside a string");
+    assert(depth == 0, "payload nesting is unbalanced");
 
     // ---- 3. Top-level claim: iat --------------------------------------------------------
     assert(!in_string[iat_idx], "iat must not be inside a string");
+    assert(depth_at[iat_idx] == 1, "iat is not a top-level claim");
     let iat = read_timestamp_claim(payload, payload_len, iat_idx, IAT_KEY);
 
     // ---- 4. The linked-account object ---------------------------------------------
@@ -185,9 +198,11 @@ fn main(
     // that key is at top level, and every byte from the start of its value through the end
     // of the object is inside one string (a string boundary in between would mean we left it).
     assert(!in_string[linked_accounts_idx], "linked_accounts key must not be inside a string");
+    assert(depth_at[linked_accounts_idx] == 1, "linked_accounts is not a top-level claim");
     assert_is_member_start(payload, linked_accounts_idx);
     assert_bytes_at(payload, linked_accounts_idx, LINKED_ACCOUNTS_KEY);
     let la_value_start = linked_accounts_idx + LINKED_ACCOUNTS_KEY.len();
+    assert(payload[la_value_start] == LBRACKET, "linked_accounts is not an array");
 
     let identity_hash = prove_account(
         payload,
@@ -289,18 +304,30 @@ fn prove_account<let N: u32>(
     assert(off | (payload[acct_start] == LBRACE), "account must start with '{'");
     assert(off | (payload[acct_end] == RBRACE), "account must end with '}'");
     // Range flags flipped by equality tests at the boundaries: in_obj covers
-    // (acct_start, acct_end), in_la covers [la_value_start, acct_end].
+    // (acct_start, acct_end), in_la covers [la_value_start, acct_end], before_acct covers
+    // [la_value_start, acct_start). Braces between the array's `[` and the object must balance:
+    // the object is then a direct element of the array, not something nested in another element.
     let mut in_obj = false;
     let mut in_la = false;
+    let mut before_acct = true;
+    let mut brace_depth: Field = 0;
     for i in 0..N {
         let b = payload[i];
         in_la = in_la | (enabled & (i == la_value_start));
         let check_obj = in_obj & (i != acct_end);
         assert(!(check_obj & ((b == LBRACE) | (b == RBRACE))), "nested braces in account object");
         assert(!in_la | in_string[i], "account object is not inside linked_accounts");
+        before_acct = before_acct & (i != acct_start); // excludes the object's own `{`
+        let counting = in_la & before_acct;
+        brace_depth = brace_depth + ((counting & (b == LBRACE)) as Field) - ((counting & (b == RBRACE)) as Field);
         in_obj = check_obj | (enabled & (i == acct_start));
         in_la = in_la & (i != acct_end);
     }
+    assert(off | (brace_depth == 0), "account object is not a direct member of the account array");
+    let before_obj = read_at(payload, if enabled { acct_start - 1 } else { 0 }, enabled);
+    assert(off | ((before_obj == LBRACKET) | (before_obj == COMMA)), "account object is not a direct member of the account array");
+    let after_obj = read_at(payload, acct_end + 1, enabled);
+    assert(off | ((after_obj == COMMA) | (after_obj == RBRACKET)), "account object is not a direct member of the account array");
 
     let spec = identity::spec(identity_type);
 

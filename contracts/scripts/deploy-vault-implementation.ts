@@ -2,12 +2,14 @@
 import { ethers } from 'hardhat';
 import { readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import { readContract, validateImplementation, Layout } from './lib/storageLayout';
+import { readContract, validateImplementation, compareLayouts, Layout } from './lib/storageLayout';
 
 export async function implementationPlan(factoryAddress: string, candidate: string, makeDefault = false) {
   const root = join(__dirname, '..');
   const baseline: Layout = JSON.parse(readFileSync(join(root, 'storage/P2IDVault.layout.json'), 'utf8'));
-  const findings = validateImplementation(baseline, readContract(root, candidate));
+  const contract = readContract(root, candidate);
+  const current = readContract(root, 'src/P2IDVault.sol:P2IDVault');
+  const findings = [...validateImplementation(baseline, contract), ...compareLayouts(current.layout, contract.layout)];
   for (const finding of findings) {
     if (finding.level === 'warning') console.warn(finding.message);
   }

@@ -142,7 +142,10 @@ npx hardhat run scripts/deploy-deterministic.ts --network base          # produc
 
 The network decides the Pvium environment (`deploy.config.ts`), and the script reads only that
 environment's settings from `contracts/.env`: `PRIVY_JWKS_URL_SANDBOX` / `_PROD`, `OWNER_…`,
-`ATTESTER_…`. The Privy key set comes from the JWKS, so `PviumIdentity` accepts every key the app
+`ATTESTER_…` (constraint signer), and optional `ALPHA_ATTESTER_…` (factory alpha signer;
+defaults to `OWNER_…`). Set both attester variables to the same address to share a key.
+The factory stores one alpha signer; constraint signer membership remains in the verifier.
+The Privy key set comes from the JWKS, so `PviumIdentity` accepts every key the app
 may sign with.
 
 The full runbook, including configuration, prediction, verification and what to do afterwards, is

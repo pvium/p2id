@@ -6,12 +6,16 @@ import {IP2IDVaultProxy} from "../interfaces/IP2IDVaultProxy.sol";
 
 /// @dev Deliberately incompatible hook implementations for proxy post-condition tests.
 contract MockProxyPostconditions {
+    // Test-only registry trust claim; these intentionally hostile mocks are not production targets.
+    function supportsAlphaGuard() external pure returns (bool) { return true; }
+    address public immutable factory;
     uint256 private immutable mode;
     address private immutable reportedOwner;
     uint64 private immutable reportedIat;
     address private immutable replacement;
 
-    constructor(uint256 mode_, address owner_, uint64 iat_, address replacement_) {
+    constructor(uint256 mode_, address owner_, uint64 iat_, address replacement_, address factory_) {
+        factory = factory_;
         mode = mode_;
         reportedOwner = owner_;
         reportedIat = iat_;

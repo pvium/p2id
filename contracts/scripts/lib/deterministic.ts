@@ -24,6 +24,7 @@ export interface StackParams {
    */
   scheme: string;
   circuitVersion: number;
+  vkHash: string;
   /**
    * Every key in the Privy app's JWKS, raw P-256 coordinates. Order does not matter: the stack
    * sorts them, so the same set always gives the same addresses.
@@ -31,6 +32,8 @@ export interface StackParams {
   signerKeys: { x: bigint; y: bigint }[];
   /** Initial constraint attester; ZeroAddress deploys with none (the owner can add signers later). */
   attester: string;
+  /** Initial alpha attester; omitted or ZeroAddress uses the factory owner. */
+  alphaAttester?: string;
   policyChangeDelay: number;
   minRefundWindow: number;
   maxRefundWindow: number;
@@ -198,6 +201,7 @@ export async function deployStack(
     await initCodeOf('PviumIdentity', [
       zkVerifier,
       p.circuitVersion,
+      p.vkHash,
       p.owner,
       keys.map((k) => k.x),
       keys.map((k) => k.y),
@@ -227,6 +231,7 @@ export async function deployStack(
       p.policyChangeDelay,
       p.minRefundWindow,
       p.maxRefundWindow,
+      !p.alphaAttester || p.alphaAttester === ethers.ZeroAddress ? p.owner : p.alphaAttester,
     ]),
     salt,
     signer,
@@ -269,6 +274,7 @@ export async function checkStack(p: StackParams, a: StackAddresses, expectedVaul
   }
   const identity = await ethers.getContractAt('PviumIdentity', a.pviumIdentity);
   if (!same(await identity.verifier(), a.zkVerifier)) fail('PviumIdentity.verifier', await identity.verifier(), a.zkVerifier);
+  if ((await identity.vkHash()).toLowerCase() !== p.vkHash.toLowerCase()) fail('vkHash', await identity.vkHash(), p.vkHash);
   if (Number(await identity.circuitVersion()) !== p.circuitVersion) fail('circuitVersion', await identity.circuitVersion(), p.circuitVersion);
   if (!same(await identity.owner(), p.owner)) fail('PviumIdentity.owner', await identity.owner(), p.owner);
   if (Number(await identity.signerKeyCount()) !== p.signerKeys.length) fail('signerKeyCount', await identity.signerKeyCount(), p.signerKeys.length);
@@ -280,6 +286,9 @@ export async function checkStack(p: StackParams, a: StackAddresses, expectedVaul
   if ((await verifier.supportsConstraints()) !== expectSigner) fail('PviumVerifier.supportsConstraints', await verifier.supportsConstraints(), expectSigner);
   if (expectSigner && !(await verifier.isConstraintSigner(p.attester))) fail('constraintSigner', 'not registered', p.attester);
   const factory = await ethers.getContractAt('PviumP2IdVaultFactory', a.factory);
+  const expectedAlphaAttester = !p.alphaAttester || p.alphaAttester === ethers.ZeroAddress ? p.owner : p.alphaAttester;
+  if (!(await factory.isAlpha(p.vkHash))) fail('factory.isAlpha', false, true);
+  if (!same(await factory.defaultAttester(), expectedAlphaAttester)) fail('factory.defaultAttester', await factory.defaultAttester(), expectedAlphaAttester);
   if (!same(await factory.owner(), p.owner)) fail('factory.owner', await factory.owner(), p.owner);
   if (!same(await factory.defaultVerifier(), a.pviumVerifier)) fail('factory.defaultVerifier', await factory.defaultVerifier(), a.pviumVerifier);
   if (!same(await factory.policy(), a.policy)) fail('factory.policy', await factory.policy(), a.policy);

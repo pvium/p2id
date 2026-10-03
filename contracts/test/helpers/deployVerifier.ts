@@ -30,7 +30,7 @@ export async function deployIdentityProof(
 ) {
   const keys = [{ x: signerX, y: signerY }, ...extraKeys];
   owner ??= (await ethers.getSigners())[0].address;
-  const proof = await ethers.deployContract('PviumIdentity', [verifierAddress, circuitVersion, owner, keys.map((k) => k.x), keys.map((k) => k.y)]);
+  const proof = await ethers.deployContract('PviumIdentity', [verifierAddress, circuitVersion, require('../../../circuit/version.json').vkSha256, owner, keys.map((k) => k.x), keys.map((k) => k.y)]);
   await proof.waitForDeployment();
   return proof;
 }

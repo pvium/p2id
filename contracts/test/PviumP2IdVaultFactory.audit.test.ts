@@ -19,7 +19,8 @@ describe('PviumP2IdVaultFactory proxy deployment and maintenance audit', functio
     policy = await ethers.deployContract('PviumP2IDPolicy', [admin.address, [await verifier.getAddress()]]);
     token = await ethers.deployContract('MockERC20');
     factory = await ethers.deployContract('PviumP2IdVaultFactory', [admin.address, NS,
-      await policy.getAddress(), await verifier.getAddress(), 7 * DAY, DAY, 30 * DAY]);
+      await policy.getAddress(), await verifier.getAddress(), 7 * DAY, DAY, 30 * DAY, ethers.ZeroAddress]);
+    await factory.setAlpha(await (await ethers.getContractAt('IP2IDVerifier', await factory.defaultVerifier())).vkHash(), false); // this suite exercises the ordinary (post-alpha) paths
   });
 
   async function register(target: string) {
@@ -87,23 +88,19 @@ describe('PviumP2IdVaultFactory proxy deployment and maintenance audit', functio
     expect(await token.balanceOf(payer.address)).to.equal(100n);
   });
 
-  it('configuration finding: a registered implementation for another factory can be selected', async () => {
+  it('an implementation bound to another factory cannot be registered, so no vault can be pointed at a foreign policy', async () => {
     const otherPolicy = await ethers.deployContract('PviumP2IDPolicy', [nextAdmin.address, [await verifier.getAddress()]]);
     const otherFactory = await ethers.deployContract('PviumP2IdVaultFactory', [nextAdmin.address, NS,
-      await otherPolicy.getAddress(), await verifier.getAddress(), 7 * DAY, DAY, 30 * DAY]);
+      await otherPolicy.getAddress(), await verifier.getAddress(), 7 * DAY, DAY, 30 * DAY, ethers.ZeroAddress]);
+    await otherFactory.connect(nextAdmin).setAlpha(await (await ethers.getContractAt('IP2IDVerifier', await otherFactory.defaultVerifier())).vkHash(), false); // this suite exercises the ordinary (post-alpha) paths
     await factory.deploy(ID);
-    const address = await factory.vaultFor(ID);
-    const proxy = await ethers.getContractAt('PviumP2IDVaultProxy', address);
-    const vault = await ethers.getContractAt('P2IDVault', address);
-    await register(await otherFactory.baseImplementation());
-    await proxy.connect(wallet).upgradeTo(ID, await otherFactory.baseImplementation(), proof(wallet.address));
-    // The proxy getter masks the implementation's different immutable factory.
-    expect(await proxy.factory()).to.equal(await factory.getAddress());
-    expect(await vault.policy()).to.equal(await otherPolicy.getAddress());
-    await expect(factory.connect(payer).fund(ID, ethers.ZeroAddress, 1n, Z, DAY, Z, { value: 1n }))
-      .to.be.revertedWithCustomError(vault, 'NotFactory');
-    await proxy.connect(wallet).upgradeTo(ID, await factory.baseImplementation(), proof(wallet.address));
+    const vault = await ethers.getContractAt('P2IDVault', await factory.vaultFor(ID));
+    // Its base implementation is a real vault, but its factory() is the other factory.
+    await expect(factory.proposeImplementation(await otherFactory.baseImplementation()))
+      .to.be.revertedWithCustomError(factory, 'InvalidImplementation');
+    expect(await factory.isRegisteredImplementation(await otherFactory.baseImplementation())).to.equal(false);
     expect(await vault.policy()).to.equal(await policy.getAddress());
+    await factory.connect(payer).fund(ID, ethers.ZeroAddress, 1n, Z, DAY, Z, { value: 1n }); // still this factory's vault
   });
 
   it('restricts maintenance to the accepted owner and preserves pending proposal delays across handover', async () => {

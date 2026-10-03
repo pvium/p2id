@@ -21,7 +21,7 @@ async function fixture() {
   const merge = (i: number) => (BigInt(inputs[i]) << 128n) | BigInt(inputs[i + 1]);
   const x = merge(2), y = merge(4);
   const gate = await ethers.deployContract('PviumIdentity', [
-    await verifier.getAddress(), 1, admin.address, [x, GX], [y, GY],
+    await verifier.getAddress(), 1, ethers.id('test.vk'), admin.address, [x, GX], [y, GY],
   ]);
   return { admin, payer, verifier, proof, inputs, x, y, gate, identity: ethers.toBeHex(merge(7), 32) };
 }
@@ -50,7 +50,8 @@ describe('PviumIdentity audit: signer revocation', function () {
     const policy = await ethers.deployContract('PviumP2IDPolicy', [admin.address, [v]]);
     const factory = await ethers.deployContract('PviumP2IdVaultFactory', [
       admin.address, ethers.id('audit.revocation'), await policy.getAddress(), v, DAY, DAY, 90 * DAY,
-    ]);
+     ethers.ZeroAddress]);
+    await factory.setAlpha(await (await ethers.getContractAt('IP2IDVerifier', await factory.defaultVerifier())).vkHash(), false); // this suite exercises the ordinary (post-alpha) paths
     await factory.deploy(identity);
     const vault = await ethers.getContractAt('P2IDVault', await factory.vaultFor(identity));
     const encoded = ethers.AbiCoder.defaultAbiCoder().encode(['bytes', 'bytes32[]'], [proof, inputs]);
@@ -141,7 +142,8 @@ describe('Signer revision recovery: follow-up audit', function () {
     const policy = await ethers.deployContract('PviumP2IDPolicy', [admin.address, [v]]);
     const factory = await ethers.deployContract('PviumP2IdVaultFactory', [
       admin.address, ethers.id('audit.revision'), await policy.getAddress(), v, DAY, DAY, 90 * DAY,
-    ]);
+     ethers.ZeroAddress]);
+    await factory.setAlpha(await (await ethers.getContractAt('IP2IDVerifier', await factory.defaultVerifier())).vkHash(), false); // this suite exercises the ordinary (post-alpha) paths
     const identity = ethers.id('revision-recipient');
     await factory.deploy(identity);
     const vault = await ethers.getContractAt('P2IDVault', await factory.vaultFor(identity));
