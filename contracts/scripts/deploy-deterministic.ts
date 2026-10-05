@@ -220,8 +220,13 @@ async function main() {
   await checkStack(params, addresses, p2id.schemes[scheme]?.vaultInitCodeHash);
 
   const chainId = Number((await ethers.provider.getNetwork()).chainId);
+  // The second constant of the address formula, read back from the deployed factory: the hash of
+  // the vault *proxy's* creation code (not the vault implementation's).
+  const deployedFactory = await ethers.getContractAt('PviumP2IdVaultFactory', addresses.factory);
   const record = { ...summary, network: network.name, chainId, ...addresses,
-    baseImplementationContract: 'src/P2IDVault.sol:P2IDVault' };
+    baseImplementationContract: 'src/P2IDVault.sol:P2IDVault',
+    vaultInitCodeHash: await deployedFactory.initCodeHash(),
+    vaultProxyContract: 'src/PviumP2IDVaultProxy.sol:PviumP2IDVaultProxy' };
   if (chainId !== 31337) {
     mkdirSync(DEPLOYMENTS, { recursive: true });
     writeFileSync(join(DEPLOYMENTS, `${scheme}.${environment}.${chainId}.json`), JSON.stringify(record, null, 2) + '\n');
