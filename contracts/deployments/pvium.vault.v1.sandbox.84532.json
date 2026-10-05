@@ -17,19 +17,24 @@
   "config": {
     "owner": "0x59fD8f94dDd1Fe6066d300F74afD5E3a01970e43",
     "attester": "0x59fD8f94dDd1Fe6066d300F74afD5E3a01970e43",
+    "alphaAttester": "0x59fD8f94dDd1Fe6066d300F74afD5E3a01970e43",
     "circuitVersion": 1,
+    "vkHash": "0x778f89fcdc8b42ebfdd63e6383ba0d2f7753d4e36dee86e711b55d0db7c0e7c3",
     "policyChangeDelay": 604800,
     "minRefundWindow": 86400,
     "maxRefundWindow": 7776000
   },
   "network": "baseSepolia",
   "chainId": 84532,
-  "relationsLib": "0x0F21B554fBf7c4f1389Af0607e9a8b2E56730fbE",
+  "relationsLib": "0x8339dBA6607687A1810BF2C7f50C36977317D0a6",
   "transcriptLib": "0x0fF89f21E57B020F50e8F737E2762B33b49f7A5B",
-  "zkVerifier": "0x47a20E941D98874fec77f237136d53FD7A43353F",
-  "pviumIdentity": "0xa6aA09000CD32A3bA7E08cE0e9B0c43C07228Ee4",
-  "pviumVerifier": "0x5f642B4728590257118A2cCa9985ab471591eD7D",
-  "policy": "0x33C5C3045E949Ab3Bf67e00a41Ed6159205553D7",
-  "factory": "0x5d173035d5Ae0b67a521FbFE72bDe43C96a0080A",
-  "baseImplementation": "0x14eA4Ea9BE003F94EAC894C44207e96055005089"
+  "zkVerifier": "0x5321ece7135E26401CDfcf070a19DcbE82Bb60A8",
+  "pviumIdentity": "0x8BBe0B15deD83EcD0925D0B61F2D8455d56Aae8B",
+  "pviumVerifier": "0x2BF1c5Addbf202dB65779829Bb9deC183409ec48",
+  "policy": "0x53bc85751E53B05FA77471d43dFe9864FF905C6b",
+  "factory": "0x48fD1bc4f982342dCFe2BEAc5fCFd22b4c1Ba4f6",
+  "baseImplementation": "0x48538155f2D75D18a18c7fB8D4efDE3B0eA76179",
+  "baseImplementationContract": "src/P2IDVault.sol:P2IDVault",
+  "vaultInitCodeHash": "0x23dec57677be79edb9ad208117422435778ee00c12d4c56e2edf226d2a57b18a",
+  "vaultProxyContract": "src/PviumP2IDVaultProxy.sol:PviumP2IDVaultProxy"
 }
