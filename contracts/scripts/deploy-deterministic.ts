@@ -219,6 +219,21 @@ async function main() {
   const addresses = await deployStack(params, signer, (m) => console.log(m));
   await checkStack(params, addresses, p2id.schemes[scheme]?.vaultInitCodeHash);
 
+  // 3b. Tell the launch policy which factory's vaults may hand it fees (owner-only, once). Until it
+  // is set the policy refuses every fee and recipients are paid in full, so a missing step is safe.
+  const policyContract = await ethers.getContractAt('PviumP2IDPolicy', addresses.policy);
+  if ((await policyContract.factory()) === ethers.ZeroAddress) {
+    if (signer.address.toLowerCase() === params.owner.toLowerCase()) {
+      await (await policyContract.setFactory(addresses.factory)).wait();
+      console.log(`policy.setFactory(${addresses.factory}) done`);
+    } else {
+      console.log(
+        `owner action needed: PviumP2IDPolicy(${addresses.policy}).setFactory(${addresses.factory}) from ${params.owner}\n` +
+          `  calldata: ${policyContract.interface.encodeFunctionData('setFactory', [addresses.factory])}`,
+      );
+    }
+  }
+
   const chainId = Number((await ethers.provider.getNetwork()).chainId);
   // The second constant of the address formula, read back from the deployed factory: the hash of
   // the vault *proxy's* creation code (not the vault implementation's).

@@ -56,11 +56,13 @@ yarn fixtures   # after re-proving in ../circuit: refresh test fixtures + regene
   wallet is cached together with the verifier's `revision()`: if the verifier revokes something
   it trusted, the cache is void and nothing is paid until the owner proves again. The vault holds
   mechanics only and consults the factory's **policy** on every call, within limits written into
-  its own bytecode: fees are capped at `MAX_FEE_BPS` (1%), fixed per deposit when it is made, and
-  accrue in the vault per verifier and token without the payout ever calling the policy about
-  fees; `withdrawFees(verifier, token)`, callable by anyone, approves the current policy for exactly
-  the owed amount and calls its `distributeFee`, which pulls and splits it (e.g. between a
-  verifier's operator and the protocol); refunds never pay a fee or consult the policy; a policy can disallow a verifier (freezing claims under it) but can
+  its own bytecode: fees are quoted by the policy, clamped to the factory's fixed `MAX_FEE_BPS` (1%, no
+  setter; the rate itself changes only with the policy, through the factory's timelock), fixed per deposit when it is made, and
+  handed to the current policy at claim time: the vault transfers the fee to the policy and calls
+  `collectFee(verifier, token, claimer, amount)`, naming the claim's `msg.sender`, as one atomic
+  self-call under a gas stipend (native fees travel as call value). No allowance is ever granted.
+  The vault keeps no fees: if the policy reverts, the transfer is undone with it and the whole fee
+  is paid to the recipient, so a policy can never block a claim. Refunds never pay a fee or consult the policy; a policy can disallow a verifier (freezing claims under it) but can
   never redirect a payout, nor block claims through the current default verifier (it can still
   stop new deposits under it). Constrained deposits are refused under a verifier whose
   `supportsConstraints()` is false. Each claimed deposit emits `Claimed`.
@@ -128,6 +130,43 @@ uint64 issuedAt = IPviumIdentity(PVIUM_IDENTITY).verifyIdentity(
 require(block.timestamp - issuedAt < 30 days, "attestation too old");
 ```
 
+## Bringing your own verifier
+
+A verifier decides which wallet a proof binds an identity to. Pvium's `PviumVerifier` is one
+implementation (ZK proofs over Privy identity tokens); any contract implementing
+[`IP2IDVerifier`](src/interfaces/IP2IDVerifier.sol) can release deposits the same way, under
+the same vaults and the same P2ID addresses. A verifier never changes an address.
+
+**Implement** the four functions:
+
+- `getIdentityWallet(identityHash, proof, constraint)` — authenticate `identityHash` against
+  `proof` and return `(wallet, iat)`; revert on an invalid proof, a different identity, or an
+  unsatisfied nonzero constraint. Never return `address(0)`. The vault pays the returned wallet
+  and nothing else.
+- `revision()` — a counter the vault stores next to the wallet it caches for a verifier.
+  Increment it whenever something you previously trusted can no longer be trusted (a rotated or
+  compromised signing key, a revoked issuer); cached owners under the old revision are then
+  void until the owner proves again. Return a constant if trust can never be revoked. The vault
+  refuses proofs and cached claims from a verifier whose `revision()` cannot be read.
+- `supportsConstraints()` — `true` if your proofs can carry constraint evidence (screening,
+  policy commitments). Constrained deposits are refused under a verifier that answers `false`.
+- `vkHash()` — the hash of the key material your proofs are checked against, as an immutable.
+
+**Get approved.** Every deposit names its verifier, and the vault asks the factory's policy
+`isVerifierAllowed(verifier)` both when the deposit is made (`fundWith` reverts with
+`VerifierNotApproved` otherwise) and again at claim time. So a payer cannot point a deposit at an
+arbitrary contract: the verifier has to be on the policy's list first. Under the launch policy
+that is an owner decision (`approveVerifier`); a later policy can make it a protocol rule, for
+example a stake. Revocation freezes claims under that verifier; refunds never consult the policy
+or the verifier, so a revoked or broken verifier strands nothing: the funder takes the deposit
+back after its refund window.
+
+**Then payers opt in** with `fundWith(yourVerifier, token, amount, constraint, refundWindow, ref)`
+on the vault or the factory. Buckets, cached owner and proof-freshness floor are kept per
+verifier, so deposits under your verifier are released only by your proofs and are untouched by
+any other verifier's state. Bare transfers to a P2ID address are always claimed through the
+factory's default verifier.
+
 ## Deployment: one address on every chain
 
 A P2ID address is meant to work like a wallet address: the same on every EVM chain. That holds
@@ -174,7 +213,9 @@ deployment salt, so a later stack under another salt name is a separate stack at
   and sweeps, refunds and fee distribution pay it out. Payouts forward all gas under the
   reentrancy lock, so smart-contract wallets can receive them.
 - Fee-on-transfer tokens work: a deposit records what actually arrived, and the payee bears the
-  outbound fee.
+  outbound fee. Amounts in `Claimed` and `Swept` are nominal (what the vault sent, not what
+  arrived); `FeeCollected` and the policy's books record what the policy actually received, which
+  is less than the nominal fee under a transfer tax.
 - Tokens that return no data, `true`, or revert on failure all work; a `false` return reverts.
 - **A supported token's vault balance must never decrease except through the vault's own
   transfers.** Negative rebases, confiscation or blacklist burns, and any other balance

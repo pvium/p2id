@@ -12,12 +12,11 @@ import {IP2IDVault} from "./interfaces/IP2IDVault.sol";
 /// @notice Deploys one PviumP2IDVaultProxy per identity with CREATE2 (salt = identityHash) and
 ///         supplies policy and default-verifier settings. The proxy takes no constructor arguments;
 ///         its address is the low 160 bits of keccak256(0xff || factory || identityHash || initCodeHash()).
-/// @dev The policy and the default verifier change only through a timelock (propose, wait,
-///      activate): the policy after `policyChangeDelay`, the default verifier after the fixed
-///      DEFAULT_VERIFIER_DELAY. Implementation registration also has a timelock; revocation is
-///      immediate and does not change existing proxies. Vault upgrades preserve their addresses.
-///      Manual registration checks code presence; deterministic deployment also checks factory binding.
-///      Neither path verifies storage compatibility or implementation behavior.
+/// @dev Policy-address changes wait policyChangeDelay, which may be zero. Default-verifier
+///      changes and implementation registration wait DEFAULT_VERIFIER_DELAY. Implementation
+///      revocation changes registry membership without changing installed proxy code. Proposal
+///      and registration check code presence and reported factory, alpha support and vault version;
+///      they do not validate storage layout or implementation behavior.
 contract PviumP2IdVaultFactory is IP2IdVaultFactory {
     /// @notice Alpha proof-acceptance status by pinned verification-key SHA-256.
     /// @dev Inverted storage: a key is in alpha unless it has been released, so a verification key
@@ -164,6 +163,11 @@ contract PviumP2IdVaultFactory is IP2IdVaultFactory {
     /// @notice Earliest time the proposed policy can be activated; 0 when nothing is proposed.
     uint64 public proposedPolicyEta;
 
+    /// @notice Fixed 100-basis-point ceiling used by P2IDVault to clamp policy fee quotes.
+    uint16 public constant MAX_FEE_BPS = 100;
+    /// @dev Vault interface version every registered implementation must report from p2idVersion().
+    string private constant VAULT_VERSION = "p2id.vault.v1";
+
     event OwnershipTransferStarted(address indexed from, address indexed to);
     event OwnershipTransferred(address indexed from, address indexed to);
     event DefaultVerifierProposed(address indexed verifier, uint64 eta);
@@ -277,7 +281,7 @@ contract PviumP2IdVaultFactory is IP2IdVaultFactory {
                 keccak256(creationCode)
             );
         }
-        _checkFactoryBinding(implementation);
+        _checkImplementation(implementation);
         if (proposedImplementationEta != 0) {
             if (
                 proposedImplementation != implementation ||
@@ -302,7 +306,7 @@ contract PviumP2IdVaultFactory is IP2IdVaultFactory {
             implementation.code.length == 0 ||
             isRegisteredImplementation[implementation]
         ) revert InvalidImplementation();
-        _checkFactoryBinding(implementation); // bound to this factory, however it was deployed
+        _checkImplementation(implementation);
         _proposeImplementation(implementation, false);
     }
 
@@ -314,7 +318,7 @@ contract PviumP2IdVaultFactory is IP2IdVaultFactory {
             !isRegisteredImplementation[implementation] ||
             implementation == baseImplementation
         ) revert InvalidImplementation();
-        _checkFactoryBinding(implementation);
+        _checkImplementation(implementation);
         _proposeImplementation(implementation, true);
     }
 
@@ -335,18 +339,26 @@ contract PviumP2IdVaultFactory is IP2IdVaultFactory {
         );
     }
 
-    function _checkFactoryBinding(address implementation) private view {
-        (bool ok, bytes memory result) = implementation.staticcall(
-            abi.encodeWithSignature("factory()")
-        );
-        if (
-            !ok ||
-            result.length != 32 ||
-            abi.decode(result, (bytes32)) !=
-            bytes32(uint256(uint160(address(this))))
-        ) {
+    /// @dev Require reported factory(), supportsAlphaGuard() and p2idVersion() values to
+    ///      match this factory, true and VAULT_VERSION. These getters do not establish
+    ///      storage compatibility or implementation behavior.
+    function _checkImplementation(address implementation) private view {
+        if (!_viewMatches(implementation, abi.encodeWithSignature("factory()"), bytes32(uint256(uint160(address(this)))))) {
             revert InvalidImplementation();
         }
+        if (!_viewMatches(implementation, abi.encodeCall(IP2IDVault.supportsAlphaGuard, ()), bytes32(uint256(1)))) {
+            revert InvalidImplementation();
+        }
+        (bool ok, bytes memory result) = implementation.staticcall(abi.encodeCall(IP2IDVault.p2idVersion, ()));
+        if (!ok || result.length < 64 || keccak256(abi.decode(result, (bytes))) != keccak256(bytes(VAULT_VERSION))) {
+            revert InvalidImplementation();
+        }
+    }
+
+    /// @dev staticcall `data` on `target` and require exactly one word equal to `expected`.
+    function _viewMatches(address target, bytes memory data, bytes32 expected) private view returns (bool) {
+        (bool ok, bytes memory result) = target.staticcall(data);
+        return ok && result.length == 32 && abi.decode(result, (bytes32)) == expected;
     }
 
     function cancelImplementationProposal() external onlyOwner {
@@ -364,7 +376,7 @@ contract PviumP2IdVaultFactory is IP2IdVaultFactory {
         address implementation = proposedImplementation;
         bool makeDefault = proposedImplementationMakeDefault;
         if (implementation.code.length == 0) revert InvalidImplementation();
-        _checkFactoryBinding(implementation); // re-checked at registration: the code could not change, but the rule is one
+        _checkImplementation(implementation);
         delete proposedImplementation;
         delete proposedImplementationEta;
         delete proposedImplementationMakeDefault;

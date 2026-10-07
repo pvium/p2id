@@ -292,6 +292,8 @@ export async function checkStack(p: StackParams, a: StackAddresses, expectedVaul
   if (!same(await factory.owner(), p.owner)) fail('factory.owner', await factory.owner(), p.owner);
   if (!same(await factory.defaultVerifier(), a.pviumVerifier)) fail('factory.defaultVerifier', await factory.defaultVerifier(), a.pviumVerifier);
   if (!same(await factory.policy(), a.policy)) fail('factory.policy', await factory.policy(), a.policy);
+  const policyFactory: string = await (await ethers.getContractAt('PviumP2IDPolicy', a.policy)).factory();
+  if (policyFactory !== ethers.ZeroAddress && !same(policyFactory, a.factory)) fail('policy.factory', policyFactory, a.factory);
   const baseAddress = await factory.initialImplementation();
   const expectedBase = a.baseImplementation ?? ethers.getCreateAddress({ from: a.factory, nonce: 1 });
   if (!same(baseAddress, expectedBase)) fail('factory.initialImplementation', baseAddress, expectedBase);

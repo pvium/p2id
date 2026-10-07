@@ -17,8 +17,12 @@ interface IP2IdVaultFactory {
     function p2idVersion() external pure returns (string memory);
 
     // ---- shared configuration ----
-    /// @notice Policy address used for verifier approval, fee quotes and fee distribution.
+    /// @notice Policy address used for verifier approval, fee quotes and fee collection.
     function policy() external view returns (address);
+    /// @notice Policy awaiting activation after its notice period; address(0) when none.
+    function proposedPolicy() external view returns (address);
+    /// @notice Ceiling on policy fee quotes in basis points; vaults clamp every quote to it. Fixed, no setter.
+    function MAX_FEE_BPS() external view returns (uint16);
     /// @notice Verifier used when a payer does not choose one, and the one bare transfers are claimed through.
     function defaultVerifier() external view returns (address);
     /// @notice Whether proofs under `vkHash` need an alpha attestation: true for every key until released.

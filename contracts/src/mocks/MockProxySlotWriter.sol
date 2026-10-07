@@ -25,6 +25,7 @@ contract MockProxySlotWriter is P2IDVault {
 contract MockProxyImpossibleFloor {
     // Test-only registry trust claim; these intentionally hostile mocks are not production targets.
     function supportsAlphaGuard() external pure returns (bool) { return true; }
+    function p2idVersion() external pure returns (string memory) { return "p2id.vault.v1"; } // claims compatibility: registration is a claim, the proxy still defends
     /// @dev Conforming enough to be upgraded to (it records the owner and acknowledges the hook),
     ///      then reports a freshness floor no vault could hold, to try to jam later upgrades.
     mapping(address => address) private _owner;
@@ -56,6 +57,7 @@ contract MockProxyImpossibleFloor {
 contract MockProxyNoopFallback {
     // Test-only registry trust claim; these intentionally hostile mocks are not production targets.
     function supportsAlphaGuard() external pure returns (bool) { return true; }
+    function p2idVersion() external pure returns (string memory) { return "p2id.vault.v1"; } // claims compatibility: registration is a claim, the proxy still defends
     address public immutable factory;
 
     constructor(address factory_) {
@@ -71,6 +73,7 @@ contract MockProxyNoopFallback {
 contract MockProxyHookResponse {
     // Test-only registry trust claim; these intentionally hostile mocks are not production targets.
     function supportsAlphaGuard() external pure returns (bool) { return true; }
+    function p2idVersion() external pure returns (string memory) { return "p2id.vault.v1"; } // claims compatibility: registration is a claim, the proxy still defends
     bytes32 private immutable _word;
     uint256 private immutable _length;
     address public immutable factory;
@@ -96,6 +99,7 @@ contract MockProxyHookResponse {
 contract MockProxyFailingHook {
     // Test-only registry trust claim; these intentionally hostile mocks are not production targets.
     function supportsAlphaGuard() external pure returns (bool) { return true; }
+    function p2idVersion() external pure returns (string memory) { return "p2id.vault.v1"; } // claims compatibility: registration is a claim, the proxy still defends
     address public immutable factory;
 
     constructor(address factory_) {

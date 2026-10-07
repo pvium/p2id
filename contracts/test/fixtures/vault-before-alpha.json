@@ -1,5 +1,5 @@
 {
-  "sourceSha256": "44766fee17582d1389e6e3cc9dea736225179830a0ff0f26c35b8bd5506c935d",
+  "sourceSha256": "17b516957ba573acbe06636d4c5eed7dc82b211d98988a892634fc25fe30b746",
   "abi": [
     "constructor(address _factory)",
     "error AlreadyInitialized()",
@@ -9,7 +9,6 @@
     "error ConstraintsUnsupported(address verifier)",
     "error DepositConsumed()",
     "error DepositNotInBucket(uint256 depositId)",
-    "error FeeOverdrawn()",
     "error InvalidRefundAmount()",
     "error InvalidRefundWindow()",
     "error InvalidToken()",
@@ -31,14 +30,11 @@
     "error TokenCallFailed()",
     "error VerifierNotApproved(address verifier)",
     "event Claimed(uint256 indexed depositId, address indexed to, uint256 amount, uint256 fee)",
-    "event FeeAccrued(address indexed verifier, address indexed token, uint256 amount)",
-    "event FeesDistributed(address indexed verifier, address indexed token, uint256 amount, address policy)",
     "event Funded(uint256 indexed depositId, address indexed funder, address indexed token, uint256 amount, address verifier, bytes32 constraint, uint64 refundWindow, uint16 feeBps, bytes32 ref)",
     "event OwnerRefreshed(address indexed verifier, address indexed owner, uint64 iat)",
     "event Refunded(uint256 indexed depositId, address indexed funder, address indexed token, uint256 amount)",
     "event Swept(address indexed verifier, address indexed token, uint256 amount, uint256 fee, address indexed to, uint256 depositsConsumed)",
     "event SweptBucket(address indexed verifier, bytes32 indexed constraint, address indexed token, uint256 amount, uint256 fee, address to, uint256 depositsConsumed)",
-    "function MAX_FEE_BPS() view returns (uint16)",
     "function MAX_SWEEP_PAGE() view returns (uint256)",
     "function NATIVE() view returns (address)",
     "function acceptOwnerProof(address verifier, address wallet, uint64 iat) returns (bytes4)",
@@ -51,8 +47,6 @@
     "function depositCount() view returns (uint256)",
     "function deposits(uint256) view returns (address funder, uint64 fundedAt, bool consumed, address token, uint64 refundWindow, address verifier, uint16 feeBps, uint128 amount, bytes32 constraint)",
     "function factory() view returns (address)",
-    "function feesOwed(address verifier, address token) view returns (uint256)",
-    "function feesOwedTotal(address token) view returns (uint256)",
     "function fund(address token, uint256 amount, bytes32 constraint, uint64 refundWindow, bytes32 ref) payable returns (uint256 depositId)",
     "function fundFor(address funder, address verifier, address token, uint256 amount, bytes32 constraint, uint64 refundWindow, bytes32 ref) payable returns (uint256 depositId)",
     "function fundWith(address verifier, address token, uint256 amount, bytes32 constraint, uint64 refundWindow, bytes32 ref) payable returns (uint256 depositId)",
@@ -78,7 +72,6 @@
     "function trackedTotal(address token) view returns (uint256)",
     "function untrackedBalance(address token) view returns (uint256)",
     "function untrackedProofIat() view returns (uint64)",
-    "function withdrawFees(address verifier, address token) returns (uint256 amount)",
     "receive() payable"
   ],
   "businessBodySha256": {
@@ -88,8 +81,7 @@
     "sweepUntracked": "02bbffb50c7cb6f01539dd0cab1299085dbff55e594073f9fc8d4a56ce13a519",
     "sweepDeposits": "9031788116f025cb042e22955fbd11f1880487ef79c403eb289e35fdf6dddfc6",
     "sweepBucket": "761c8e9c6f0bcdf188a32e74b168997509f78deda88205239d4aa80e902d236a",
-    "sweepBucketDeposits": "711dcd4dd5446c5a47c8b24c0bf4dcd5be774ff429d7aaff83c2b4c068036d14",
-    "withdrawFees": "9eeb65407aca8f839f0f328cb2206fcc1f4f035e8cd67d5143a7d837ee0f7acc"
+    "sweepBucketDeposits": "711dcd4dd5446c5a47c8b24c0bf4dcd5be774ff429d7aaff83c2b4c068036d14"
   },
-  "otherSourceSha256": "bb6b71afe85863d2b658d4446c3abd456b7f194bb06757f5045cf3d25f162f86"
+  "otherSourceSha256": "ecbc0f4cc91294b1371ea529680a14682f9d270c557e6afb0b0d6b8cdcc00e47"
 }

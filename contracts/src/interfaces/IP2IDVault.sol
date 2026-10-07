@@ -16,7 +16,7 @@ interface IP2IDVault {
         address token;
         uint64 refundWindow;
         address verifier;
-        /// Fee rate fixed when the deposit was made (<= MAX_FEE_BPS); charged only on a claim.
+        /// Fee rate fixed when the deposit was made (<= the factory's MAX_FEE_BPS); charged only on a claim.
         uint16 feeBps;
         uint128 amount;
         bytes32 constraint;
@@ -38,10 +38,10 @@ interface IP2IDVault {
     event Swept(address indexed verifier, address indexed token, uint256 amount, uint256 fee, address indexed to, uint256 depositsConsumed);
     /// @notice Funds from a constrained bucket were paid to the wallet the proof resolved to (`amount` net of `fee`).
     event SweptBucket(address indexed verifier, bytes32 indexed constraint, address indexed token, uint256 amount, uint256 fee, address to, uint256 depositsConsumed);
-    /// @notice A fee accrued for `verifier`; it stays in the vault until withdrawFees() hands it to the policy.
-    event FeeAccrued(address indexed verifier, address indexed token, uint256 amount);
-    /// @notice Amount deducted from accrued fees after policy distribution, via token pull or native transfer.
-    event FeesDistributed(address indexed verifier, address indexed token, uint256 amount, address policy);
+    /// @notice What the policy received at claim time (collectFee) in `claimer`'s transaction:
+    ///         the nominal fee, or less under a transfer-tax token. The vault keeps no fees: when
+    ///         the policy refuses, the fee goes to the recipient.
+    event FeeCollected(address indexed verifier, address indexed token, address indexed claimer, uint256 amount, address policy);
 
     // setup (factory only, once)
     function initialize(bytes32 nsHash, bytes32 saltCommitment, uint64 minRefundWindow, uint64 maxRefundWindow) external;
@@ -69,6 +69,11 @@ interface IP2IDVault {
     ///         Returns its own selector as acknowledgement so the proxy rejects empty fallbacks.
     ///         The acknowledgement checks compatibility; implementations remain trusted to apply the result.
     function acceptOwnerProof(address verifier, address wallet, uint64 iat) external returns (bytes4);
+    /// @notice Self-call used at claim time: transfer `fee` of `token` to policy `pol`, measure
+    ///         what arrived and announce that amount with collectFee, as one atomic step, so a
+    ///         reverting policy receives nothing. Only this vault may call it (NotSelf otherwise).
+    /// @return received What the policy's balance grew by (at most `fee`).
+    function pushFeeToPolicy(address pol, address verifier, address token, address claimer, uint256 fee) external returns (uint256 received);
 
     // claiming (amounts returned are net of fees)
     /// @notice Sweep a page of the verifier's default bucket to its cached owner. Eligible untracked
@@ -79,14 +84,9 @@ interface IP2IDVault {
     function sweepBucket(address verifier, IP2IDVerifier.Constraint calldata constraint, address token, bytes calldata proof, uint256 depositCountLimit) external returns (uint256 amount, uint256 consumed);
     function sweepBucketDeposits(address verifier, IP2IDVerifier.Constraint calldata constraint, address token, uint256[] calldata depositIds, bytes calldata proof) external returns (uint256 amount);
 
-    // fees
-    /// @notice Hand the fees earned through `verifier` in `token` to the current policy to distribute. Anyone may call it.
-    function withdrawFees(address verifier, address token) external returns (uint256 amount);
-
     // views
     /// @notice P2ID vault interface version implemented by this contract.
     function p2idVersion() external pure returns (string memory);
-    function MAX_FEE_BPS() external view returns (uint16);
     /// @notice Record cap for cursor-based sweeps; a zero or above-cap depositCountLimit uses this value.
     function MAX_SWEEP_PAGE() external view returns (uint256);
     /// @notice address(0): the token address standing for the native coin.
@@ -110,8 +110,6 @@ interface IP2IDVault {
     function constraintDeposit(bytes32 constraint, address funder) external view returns (bool used, uint256 depositId);
     function bucketTotal(address verifier, bytes32 constraint, address token) external view returns (uint256);
     function trackedTotal(address token) external view returns (uint256);
-    function feesOwed(address verifier, address token) external view returns (uint256);
-    function feesOwedTotal(address token) external view returns (uint256);
     /// @notice Total default-bucket amount plus eligible untracked funds, before fees.
     ///         Does not apply the sweep page limit or validate default-bucket claimability.
     function sweepable(address verifier, address token) external view returns (uint256);

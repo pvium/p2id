@@ -60,19 +60,21 @@ interface IERC20Min {
     function transfer(address to, uint256 amount) external returns (bool);
 }
 
-/// @dev Test policy with adjustable allowlist, fee rate and distribution, and failure modes.
-///      ERC-20 distribution normally pulls pullBps / 10_000 of amount; native distribution uses
-///      msg.value. Both split the received amount between operatorOf[verifier] and recipient.
+/// @dev Test policy with adjustable allowlist, fee rate and collection, and failure modes.
+///      Fees arrive before collectFee (ERC-20 transferred, native as msg.value); the mock splits
+///      them between operatorOf[verifier] and recipient.
 contract MockFeePolicy is IP2IDPolicy {
     mapping(address => bool) public allowed;
     uint16 public bps;
     address public recipient;
     mapping(address verifier => address) public operatorOf;
     uint16 public operatorShareBps;
-    uint16 public pullBps = 10_000;
-    /// 0 = normal, 1 = feeBps reverts, 2 = feeBps loops until failure, 3 = distributeFee reverts,
-    /// 4 = ERC-20 distributeFee attempts to pull amount + 1.
+    /// 0 = normal, 1 = feeBps reverts, 2 = feeBps loops until failure, 5 = collectFee reverts,
+    /// 6 = collectFee loops until failure.
     uint8 public mode;
+    /// What collectFee recorded: fee per verifier/token and per claimer/token, as a real policy would.
+    mapping(address verifier => mapping(address token => uint256)) public collected;
+    mapping(address claimer => mapping(address token => uint256)) public claimerFees;
 
     function allow(address verifier, bool ok) external {
         allowed[verifier] = ok;
@@ -101,24 +103,23 @@ contract MockFeePolicy is IP2IDPolicy {
         operatorShareBps = shareBps;
     }
 
-    function setPullBps(uint16 _pullBps) external {
-        pullBps = _pullBps;
-    }
-
-    function distributeFee(address verifier, address token, uint256 amount) external payable {
-        if (mode == 3) revert("distribution down");
-        if (token == address(0)) {
-            // native: the vault sent it along; split msg.value
-            uint256 op = operatorOf[verifier] == address(0) ? 0 : (msg.value * operatorShareBps) / 10_000;
-            if (op != 0) _send(operatorOf[verifier], op);
-            _send(recipient, msg.value - op);
-            return;
+    function collectFee(address verifier, address token, address claimer, uint256 amount) external payable {
+        if (mode == 5) revert("collection down");
+        if (mode == 6) {
+            uint256 x;
+            while (true) x++; // intentional gas exhaustion: the vault's stipend must bound this
         }
-        uint256 pull = mode == 4 ? amount + 1 : (amount * pullBps) / 10_000;
-        IERC20Min(token).transferFrom(msg.sender, address(this), pull);
-        uint256 toOperator = operatorOf[verifier] == address(0) ? 0 : (pull * operatorShareBps) / 10_000;
-        if (toOperator != 0) IERC20Min(token).transfer(operatorOf[verifier], toOperator);
-        IERC20Min(token).transfer(recipient, pull - toOperator);
+        // the tokens (or msg.value) are already here: book and forward them
+        collected[verifier][token] += amount;
+        claimerFees[claimer][token] += amount;
+        uint256 toOperator = operatorOf[verifier] == address(0) ? 0 : (amount * operatorShareBps) / 10_000;
+        if (token == address(0)) {
+            if (toOperator != 0) _send(operatorOf[verifier], toOperator);
+            _send(recipient, amount - toOperator);
+        } else {
+            if (toOperator != 0) IERC20Min(token).transfer(operatorOf[verifier], toOperator);
+            IERC20Min(token).transfer(recipient, amount - toOperator);
+        }
     }
 
     function _send(address to, uint256 value) private {

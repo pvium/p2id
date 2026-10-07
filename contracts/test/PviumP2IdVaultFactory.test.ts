@@ -183,7 +183,7 @@ describe('PviumP2IdVaultFactory', function () {
     await expect(policy.approveVerifier(payer.address, true)).to.be.revertedWithCustomError(policy, 'InvalidVerifier');
     await expect(policy.approveVerifier(V2, true)).to.emit(policy, 'VerifierApprovalSet').withArgs(V2, true);
     expect(await policy.feeBps(V2, await token.getAddress())).to.equal(0n);
-    await expect(policy.distributeFee(V2, await token.getAddress(), 1n)).to.be.revertedWithCustomError(policy, 'NoFees');
+    await expect(policy.collectFee(V2, await token.getAddress(), deployer.address, 1n)).to.be.revertedWithCustomError(policy, 'NotVault'); // only the factory's vaults hand over fees
     expect(factory.setDefaultVerifier).to.equal(undefined); // no instant setter: only the timelocked proposal
     expect(factory.approveVerifier).to.equal(undefined); // the allowlist lives in the policy
     expect(await factory.defaultVerifier()).to.equal(await idv.getAddress());

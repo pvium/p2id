@@ -96,6 +96,22 @@ describe('PviumP2IDVaultProxy', function () {
     await expect(factory.proposeImplementation(await v2.getAddress())).to.emit(factory, 'ImplementationProposed'); // bound to this one
   });
 
+  it('an implementation without the alpha guard or the vault interface version cannot be proposed, so it can never become the default (audit)', async () => {
+    const noAlpha = await ethers.deployContract('MockNoAlphaVault', [await factory.getAddress()]); // bound here, but supportsAlphaGuard() is false and no p2idVersion()
+    await expect(factory.proposeImplementation(await noAlpha.getAddress())).to.be.revertedWithCustomError(factory, 'InvalidImplementation');
+    await expect(factory.deployVaultImplementation((await ethers.getContractFactory('MockNoAlphaVault')).bytecode + ethers.AbiCoder.defaultAbiCoder().encode(['address'], [await factory.getAddress()]).slice(2), true))
+      .to.be.revertedWithCustomError(factory, 'InvalidImplementation');
+    expect(await factory.isRegisteredImplementation(await noAlpha.getAddress())).to.equal(false);
+    // a compliant implementation still passes and can be made the default
+    await factory.proposeImplementation(await v2.getAddress());
+    await time.increase(14 * DAY + 1);
+    await factory.registerImplementation();
+    await factory.proposeDefaultImplementation(await v2.getAddress());
+    await time.increase(14 * DAY + 1);
+    await expect(factory.registerImplementation()).to.emit(factory, 'DefaultImplementationActivated').withArgs(await v2.getAddress());
+    await factory.deploy(ethers.id('after default change')); // new vaults still deploy and initialize
+  });
+
   it('only the identity owner, with a fresh proof, can move the vault, and only to a registered implementation', async () => {
     const V2 = await v2.getAddress();
     const T = await token.getAddress();

@@ -21,7 +21,7 @@ describe('single vault: pre-alpha behavior regression', () => {
     for (const [name, expected] of Object.entries(baseline.businessBodySha256)) {
       expect(hash(extract(alpha, '_' + name).body), name).to.equal(expected);
       const wrapper = extract(alpha, name).body.trim();
-      if (['sweep', 'sweepUntracked', 'sweepDeposits', 'withdrawFees'].includes(name)) {
+      if (['sweep', 'sweepUntracked', 'sweepDeposits'].includes(name)) {
         expect(wrapper).to.match(new RegExp('^return _' + name + '\\('));
       } else {
         expect(wrapper).to.match(new RegExp('^(return )?' + name + 'WithAttestation\\('));

@@ -15,14 +15,14 @@ import {IP2IdVaultFactory} from "./interfaces/IP2IdVaultFactory.sol";
 ///      Direct transfers create no deposit record and have no refund entry point. Token accounting
 ///      relies on the token's reported balances and transfer behavior.
 contract P2IDVault is IP2IDVault {
-    /// @notice Maximum fee rate recorded or quoted by this implementation: 100 basis points (1%).
-    uint16 public constant MAX_FEE_BPS = 100;
     /// @notice Token identifier used for the native coin.
     address public constant NATIVE = address(0);
     uint256 private constant BPS = 10_000;
     /// @dev Gas cap for _query calls. Failed fee/support queries return zero/false; failed revision
     ///      queries invalidate cached-owner reads and prevent proof updates.
     uint256 private constant QUERY_GAS = 50_000;
+    /// @dev Gas limit for the native policy call or the ERC-20 transfer-and-notify self-call.
+    uint256 private constant COLLECT_GAS = 200_000;
     /// @notice Record limit for cursor-based sweeps; a zero or larger requested limit uses this value.
     uint256 public constant MAX_SWEEP_PAGE = 100;
     /// @dev Maximum accepted issue time ahead of block.timestamp.
@@ -60,10 +60,6 @@ contract P2IDVault is IP2IDVault {
     /// @dev keccak256(abi.encode(constraint, funder)) => depositId + 1 for nonzero constraints.
     ///      Entries persist after claims and refunds, preventing reuse by the same funder in this vault.
     mapping(bytes32 => uint256) private _constraintDeposit;
-    /// @notice Fees accrued and not yet distributed, per verifier they were earned through and token.
-    mapping(address verifier => mapping(address token => uint256)) public feesOwed;
-    /// @notice Sum of feesOwed per token: held for distribution, never part of a payout.
-    mapping(address token => uint256) public feesOwedTotal;
 
     /// @dev 2 while a guarded call runs; any other value (including the 0 a fresh proxy starts with) is idle.
     uint256 private reentrancyLock;
@@ -93,7 +89,6 @@ contract P2IDVault is IP2IDVault {
     error TokenBalanceQueryFailed();
     error AmountTooLarge();
     error Reentrancy();
-    error FeeOverdrawn();
     error NativeValueMismatch();
     error NativeTransferFailed();
 
@@ -127,7 +122,7 @@ contract P2IDVault is IP2IDVault {
     // ------------------------------------------------------------------ alpha authorization
 
     /// @notice Alpha authorization nonces already consumed by this vault (caller-chosen, single use).
-    /// @dev Preserve this mapping and append later storage after the cache bindings below.
+    /// @dev Storage after this mapping includes the cached verification-key and alpha-revision bindings.
     mapping(uint256 => bool) public alphaNonceUsed;
     mapping(address => bytes32) public ownerVkHash;
     mapping(address => uint256) public ownerAlphaRevision;
@@ -250,28 +245,6 @@ contract P2IDVault is IP2IDVault {
         emit SweptBucket(verifier, constraint.commitment, token, amount, charged, to, depositIds.length);
     }
 
-    function _withdrawFees(address verifier, address token) private returns (uint256 amount) {
-        uint256 owed = feesOwed[verifier][token];
-        if (owed == 0) return 0;
-        address pol = policy();
-        if (token == NATIVE) {
-            // Native coin cannot be pulled: it is sent along with the call, exactly the amount owed.
-            IP2IDPolicy(pol).distributeFee{value: owed}(verifier, token, owed);
-            amount = owed;
-        } else {
-            uint256 before = _balanceOf(token);
-            _callToken(token, abi.encodeWithSignature("approve(address,uint256)", pol, owed));
-            IP2IDPolicy(pol).distributeFee(verifier, token, owed);
-            _callToken(token, abi.encodeWithSignature("approve(address,uint256)", pol, 0));
-            uint256 afterBalance = _balanceOf(token);
-            amount = before > afterBalance ? before - afterBalance : 0;
-            if (amount > owed) revert FeeOverdrawn();
-        }
-        feesOwed[verifier][token] = owed - amount;
-        feesOwedTotal[token] -= amount;
-        emit FeesDistributed(verifier, token, amount, pol);
-    }
-
     modifier validAlphaCall(bytes calldata action) {
         if (action.length < 4) revert InvalidAlphaCall();
         bytes4 selector = bytes4(action[:4]);
@@ -279,7 +252,8 @@ contract P2IDVault is IP2IDVault {
         _;
     }
 
-    /// @dev Empty signatures are allowed only after alpha. Bind approval to the entire ordinary call.
+    /// @dev Require a signed authorization when the verifier's reported key is in alpha;
+    ///      bind it to the caller and encoded ordinary call.
     modifier alphaAttestationRequired(address verifier, AlphaAttestation memory attestation, bytes memory action) {
         if (IP2IdVaultFactory(factory).isAlpha(IP2IDVerifier(verifier).vkHash())) {
             if (attestation.signature.length == 0) revert AlphaAuthorizationRequired();
@@ -433,7 +407,7 @@ contract P2IDVault is IP2IDVault {
     /// @notice Sweep `verifier`'s default bucket for `token` to that verifier's owner. Walks only
     ///         this bucket's list from its cursor; `depositCountLimit` records per call (0 = MAX_SWEEP_PAGE, also the cap).
     ///         Includes untracked funds when the verifier is the current default and its owner cache
-    ///         meets the revision and untrackedProofIat checks.
+    ///         passes _ownerFresh and the untrackedProofIat check.
     function sweep(address verifier, address token, uint256 depositCountLimit) external nonReentrant returns (uint256 amount, uint256 consumed) {
         return _sweep(verifier, token, depositCountLimit);
     }
@@ -471,15 +445,6 @@ contract P2IDVault is IP2IDVault {
         bytes memory proof
     ) external returns (uint256 amount) {
         return sweepBucketDepositsWithAttestation(verifier, constraint, token, depositIds, proof, AlphaAttestation(0, 0, hex""));
-    }
-
-    // ------------------------------------------------------------------ fees
-
-    /// @notice Call the current policy to distribute accrued fees; callable by any address.
-    ///         Native fees are sent as msg.value. For ERC-20, approve the accrued amount, reset the
-    ///         allowance after the call, and deduct the observed balance decrease; revert if it exceeds fees owed.
-    function withdrawFees(address verifier, address token) external nonReentrant returns (uint256 amount) {
-        return _withdrawFees(verifier, token);
     }
 
     // ------------------------------------------------------------------ views
@@ -536,7 +501,7 @@ contract P2IDVault is IP2IDVault {
         return amount;
     }
 
-    /// @notice Reported balance minus tracked deposits and accrued fees, floored at zero; supports native coin.
+    /// @notice Reported balance minus tracked deposits, floored at zero; supports native coin.
     function untrackedBalance(address token) external view returns (uint256) {
         return _untrackedBalance(token);
     }
@@ -614,20 +579,21 @@ contract P2IDVault is IP2IDVault {
         return _present(verifier, proof, constraint);
     }
 
-    /// @dev Whether verifier is the current default, its revision matches the cache, and its
+    /// @dev Whether verifier is the current default, its cache passes _ownerFresh, and its
     ///      stored proof time meets untrackedProofIat. Does not check for a nonzero owner.
     function _paysUntracked(address verifier) private view returns (bool) {
         return verifier == defaultVerifier() && _ownerFresh(verifier) && latestProofIat[verifier] >= untrackedProofIat;
     }
 
-    /// @dev Require a claimable verifier, nonzero cached owner and matching readable revision.
+    /// @dev Require a claimable verifier, nonzero cached owner and a cache passing _ownerFresh.
     function _ownerOf(address verifier) private view onlyClaimable(verifier) returns (address to) {
         to = owner[verifier];
         if (to == address(0)) revert OwnerNotInitialized();
         if (!_ownerFresh(verifier)) revert OwnerRevoked();
     }
 
-    /// @dev Whether the cached owner was proven under the verifier's current revision.
+    /// @dev Check cached revision, reported verification key and factory alpha revision
+    ///      against their current values.
     function _ownerFresh(address verifier) private view returns (bool) {
         (bool ok, uint64 rev) = _revision(verifier);
         if (!ok || ownerRevision[verifier] != rev) return false;
@@ -720,25 +686,55 @@ contract P2IDVault is IP2IDVault {
         emit Claimed(id, to, amount, fee);
     }
 
-    /// @dev Pay `gross - fee` to `to` and keep `fee` accrued for `verifier`. No policy call.
-    ///      Returns (net paid, fee charged).
+    /// @dev Deduct the nominal fee from gross when _collectFee reports a nonzero receipt;
+    ///      otherwise transfer gross to `to`. Returns the payout amount and nominal fee charged.
     function _payout(address verifier, address token, address to, uint256 gross, uint256 fee)
         private
         returns (uint256 net, uint256 charged)
     {
-        if (fee != 0) {
-            charged = fee;
-            feesOwed[verifier][token] += fee;
-            feesOwedTotal[token] += fee;
-            emit FeeAccrued(verifier, token, fee);
-        }
+        if (fee != 0 && _collectFee(verifier, token, fee) != 0) charged = fee;
         net = gross - charged;
         if (net != 0) _transfer(token, to, net);
     }
 
+    /// @dev Send native value to collectFee, or transfer ERC-20 and notify the policy in a
+    ///      gas-limited self-call. A failed call returns zero; a failed ERC-20 self-call also
+    ///      rolls back its transfer. This helper grants no allowance. Returns native value sent
+    ///      or the reported ERC-20 balance increase, capped at fee, before the policy callback.
+    function _collectFee(address verifier, address token, uint256 fee) private returns (uint256 received) {
+        address pol = policy();
+        if (token == NATIVE) {
+            (bool ok, ) = pol.call{value: fee, gas: COLLECT_GAS}(abi.encodeCall(IP2IDPolicy.collectFee, (verifier, token, msg.sender, fee)));
+            if (!ok) return 0;
+            received = fee;
+        } else {
+            try this.pushFeeToPolicy{gas: COLLECT_GAS}(pol, verifier, token, msg.sender, fee) returns (uint256 got) {
+                received = got;
+            } catch {
+                return 0;
+            }
+        }
+        emit FeeCollected(verifier, token, msg.sender, received, pol);
+    }
+
+    /// @inheritdoc IP2IDVault
+    function pushFeeToPolicy(address pol, address verifier, address token, address claimer, uint256 fee)
+        external
+        returns (uint256 received)
+    {
+        if (msg.sender != address(this)) revert NotSelf();
+        uint256 before = _balanceOf(token, pol);
+        _callToken(token, abi.encodeWithSignature("transfer(address,uint256)", pol, fee));
+        uint256 afterBalance = _balanceOf(token, pol);
+        if (afterBalance <= before) revert TokenCallFailed(); // nothing arrived: refuse rather than book zero
+        received = afterBalance - before;
+        if (received > fee) received = fee;
+        IP2IDPolicy(pol).collectFee(verifier, token, claimer, received);
+    }
+
     function _untrackedBalance(address token) private view returns (uint256) {
         uint256 balance = _balanceOf(token);
-        uint256 held = trackedTotal[token] + feesOwedTotal[token];
+        uint256 held = trackedTotal[token];
         return balance > held ? balance - held : 0;
     }
 
@@ -754,11 +750,13 @@ contract P2IDVault is IP2IDVault {
         return IP2IDPolicy(IP2IdVaultFactory(factory).policy());
     }
 
-    /// @dev The policy's fee rate for (verifier, token), capped at MAX_FEE_BPS; 0 if the query fails.
+    /// @dev The policy's fee rate for (verifier, token), capped at the factory's fixed MAX_FEE_BPS;
+    ///      0 if the query fails. The policy supplies the rate on each query.
     function _quoteFeeBps(address verifier, address token) private view returns (uint16) {
         (bool ok, uint256 v) = _query(address(_policy()), abi.encodeCall(IP2IDPolicy.feeBps, (verifier, token)));
         if (!ok) return 0;
-        return v > MAX_FEE_BPS ? MAX_FEE_BPS : uint16(v);
+        uint16 cap = IP2IdVaultFactory(factory).MAX_FEE_BPS();
+        return v > cap ? cap : uint16(v);
     }
 
     /// @dev Query revision() with QUERY_GAS; ok is false on call failure, wrong length or uint64 overflow.
@@ -796,9 +794,13 @@ contract P2IDVault is IP2IDVault {
         }
     }
 
-    function _balanceOf(address token) private view returns (uint256 balance) {
-        if (token == NATIVE) return address(this).balance;
-        (bool ok, bytes memory data) = token.staticcall(abi.encodeWithSignature("balanceOf(address)", address(this)));
+    function _balanceOf(address token) private view returns (uint256) {
+        return _balanceOf(token, address(this));
+    }
+
+    function _balanceOf(address token, address account) private view returns (uint256 balance) {
+        if (token == NATIVE) return account.balance;
+        (bool ok, bytes memory data) = token.staticcall(abi.encodeWithSignature("balanceOf(address)", account));
         if (!ok || data.length != 32) revert TokenBalanceQueryFailed();
         balance = abi.decode(data, (uint256));
     }

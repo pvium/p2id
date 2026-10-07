@@ -180,12 +180,25 @@ function getIdentityWallet(
 ) external view returns (address wallet, uint64 iat);
 
 function supportsConstraints() external view returns (bool);
+
+function revision() external view returns (uint64);
+
+function vkHash() external view returns (bytes32);
 ```
 
 For a successful verification, `getIdentityWallet` MUST authenticate the supplied
 `identityHash`, return a nonzero wallet address, and return the attestation issue time as Unix
 seconds. It MUST revert when the proof is invalid, the proof authenticates a different identity,
 or a nonzero constraint is not satisfied.
+
+`revision()` MUST change whenever proofs the verifier previously accepted may no longer be
+trusted, and MAY be constant if trust is never revoked. A vault MUST record the revision together
+with any payout wallet it caches for a verifier and MUST NOT pay from that cache when the current
+revision differs. A vault MUST NOT accept proofs from a verifier whose revision cannot be read.
+
+A vault MAY restrict the verifiers deposits can be made under and claimed through. The reference
+implementation requires the factory policy's approval for both, except for claims through the
+factory's default verifier. Restricting a verifier MUST NOT affect refunds.
 
 The vault MUST supply its own identity commitment to the verifier. It MUST use the wallet
 returned by the verifier as the payout address and MUST NOT accept a caller-provided replacement
