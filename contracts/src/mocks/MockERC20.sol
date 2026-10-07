@@ -31,3 +31,32 @@ contract MockERC20 {
         return true;
     }
 }
+
+/// @dev ERC-20 that burns `taxBps` of every transfer on the receiving side (transfer-tax token).
+contract MockTaxERC20 {
+    uint16 public taxBps = 1_000; // 10%
+    mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+
+    function mint(address to, uint256 amount) external {
+        balanceOf[to] += amount;
+    }
+
+    function approve(address spender, uint256 amount) external returns (bool) {
+        allowance[msg.sender][spender] = amount;
+        return true;
+    }
+
+    function transfer(address to, uint256 amount) external returns (bool) {
+        balanceOf[msg.sender] -= amount;
+        balanceOf[to] += amount - (amount * taxBps) / 10_000;
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
+        allowance[from][msg.sender] -= amount;
+        balanceOf[from] -= amount;
+        balanceOf[to] += amount - (amount * taxBps) / 10_000;
+        return true;
+    }
+}

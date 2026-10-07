@@ -45,7 +45,7 @@ describe('alpha proof acceptance by verification key', () => {
     for (const [name, args] of cases) {
       await expect(vault[name](...args)).to.be.revertedWithCustomError(vault, 'AlphaAuthorizationRequired');
       await expect(vault[name + 'WithAttestation'](...args, { nonce: 0, deadline: 0, signature: '0x' })).to.be.revertedWithCustomError(vault, 'AlphaAuthorizationRequired');
-      const wrong = await authorization(action('withdrawFees', [V, T]));
+      const wrong = await authorization(action('sweepUntracked', [T]));
       await expect(vault[name + 'WithAttestation'](...args, wrong)).to.be.revertedWithCustomError(factory, 'InvalidAlphaAuthorization');
     }
   });
@@ -57,8 +57,8 @@ describe('alpha proof acceptance by verification key', () => {
     await token.mint(vault.target, 10n); await vault.sweepUntracked(T);
     await admin.sendTransaction({ to: vault.target, value: 7n }); await vault.sweepUntracked(ethers.ZeroAddress);
     expect(await token.balanceOf(recipient.address)).to.equal(135n);
-    expect(await vault.withdrawFees(V, T)).not.to.equal(undefined);
-    for (const name of ['sweepWithAttestation', 'sweepUntrackedWithAttestation', 'sweepDepositsWithAttestation', 'withdrawFeesWithAttestation']) {
+    expect(await vault.sweepUntracked(T)).not.to.equal(undefined);
+    for (const name of ['sweepWithAttestation', 'sweepUntrackedWithAttestation', 'sweepDepositsWithAttestation']) {
       expect(vault.interface.fragments.some((f: any) => f.name === name)).to.equal(false);
     }
   });
@@ -212,7 +212,7 @@ describe('alpha proof acceptance by verification key', () => {
     expect(await vault.alphaNonceUsed(a.nonce)).to.equal(false);
   });
   it('rejects generic wrappers around proofless methods, funding, refunds, hooks and nested wrappers', async () => {
-    for (const data of [action('sweep', [V, T, 0]), action('withdrawFees', [V, T]), action('refund', [0]), action('acceptOwnerProof', [V, recipient.address, 0]), vault.interface.encodeFunctionData('executeWithAttestation', ['0x', { nonce: 0, deadline: 0, signature: '0x' }])]) {
+    for (const data of [action('sweep', [V, T, 0]), action('sweepUntracked', [T]), action('refund', [0]), action('acceptOwnerProof', [V, recipient.address, 0]), vault.interface.encodeFunctionData('executeWithAttestation', ['0x', { nonce: 0, deadline: 0, signature: '0x' }])]) {
       await expect(vault.executeWithAttestation(data, { nonce: 0, deadline: 0, signature: '0x' })).to.be.revertedWithCustomError(vault, 'InvalidAlphaCall');
     }
   });

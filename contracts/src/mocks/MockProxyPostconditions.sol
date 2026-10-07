@@ -8,6 +8,7 @@ import {IP2IDVaultProxy} from "../interfaces/IP2IDVaultProxy.sol";
 contract MockProxyPostconditions {
     // Test-only registry trust claim; these intentionally hostile mocks are not production targets.
     function supportsAlphaGuard() external pure returns (bool) { return true; }
+    function p2idVersion() external pure returns (string memory) { return "p2id.vault.v1"; } // claims compatibility: registration is a claim, the proxy still defends
     address public immutable factory;
     uint256 private immutable mode;
     address private immutable reportedOwner;

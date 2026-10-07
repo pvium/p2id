@@ -84,9 +84,12 @@ Install with `yarn install`, run scripts with `yarn <script>`, run binaries with
     the proxy-management API. Run the ABI-boundary regression test in `StorageLayout.test.ts`.
   - New factories start on the single `P2IDVault`, with alpha state appended to the original
     layout. Compare candidates against the original snapshot and the current implementation
-    before registering. Alpha-capable upgrade targets must preserve the guard and
-    return true from `supportsAlphaGuard()` even if alpha is currently disabled, so it can be
-    safely re-enabled later. That marker is a compatibility claim, not a code audit.
+    before registering. The factory refuses to propose, register or default to an implementation
+    unless `factory()` is this factory, `supportsAlphaGuard()` is true and `p2idVersion()` is
+    `p2id.vault.v1`; the proxy re-checks the alpha guard at upgrade time. Alpha-capable upgrade
+    targets must preserve the guard and return true from `supportsAlphaGuard()` even if alpha is
+    currently disabled, so it can be safely re-enabled later. Those markers are compatibility
+    claims, not a code audit.
   - The alpha addition must retain ordinary vault method bodies and internal operations.
     Run `VaultAlphaParity.test.ts` to check them against the pre-alpha business-body hashes, remaining source hash and ABI
     fixture and exercise ordinary execution with alpha off. That fixture is a regression
@@ -99,6 +102,17 @@ Install with `yarn install`, run scripts with `yarn <script>`, run binaries with
     propose; `REGISTER=1` after the 14-day notice). The scheme name, salt and factory never change
     for a vault change; `pvium.vault.vN` bumps only if the *proxy or factory* code changes after a
     mainnet release.
+- **Fees: the rate lives in the policy, the ceiling in the factory, and the timelock is the
+  policy switch.** `PviumP2IdVaultFactory.MAX_FEE_BPS` (1%) is a constant with no setter; vaults
+  clamp every quote to it. The rate is `IP2IDPolicy.feeBps(verifier, token)`, frozen into each
+  deposit at funding and handed to the policy at claim time through `collectFee`: the vault
+  transfers the fee and announces it in one atomic self-call (`pushFeeToPolicy`) under a gas
+  stipend, so a reverting policy receives nothing and the fee goes to the recipient. The vault
+  never grants an allowance, never accrues and never holds fees. A policy must verify receipt
+  before booking (any contract can call `collectFee`). A policy must never expose an instant
+  rate setter: a new rate is a new policy contract, activated through `proposePolicy` →
+  `policyChangeDelay` → `activatePolicy`, so every rate change carries the public notice. Do not
+  add fee state, a fee cap setter or a fee withdrawal path to the vault or the factory.
 - Tests and their fixtures live in each package's `test/` folder (`circuit/test`, `contracts/test`).
   Sample token/keys are in `circuit/test/fixtures`; `contracts/test/fixtures` is a copy refreshed by
   `yarn fixtures`. Run `sh test/e2e.sh` in `circuit/` after changing the circuit or script.

@@ -31,9 +31,9 @@
   "zkVerifier": "0x5321ece7135E26401CDfcf070a19DcbE82Bb60A8",
   "pviumIdentity": "0x8BBe0B15deD83EcD0925D0B61F2D8455d56Aae8B",
   "pviumVerifier": "0x2BF1c5Addbf202dB65779829Bb9deC183409ec48",
-  "policy": "0x53bc85751E53B05FA77471d43dFe9864FF905C6b",
-  "factory": "0x48fD1bc4f982342dCFe2BEAc5fCFd22b4c1Ba4f6",
-  "baseImplementation": "0x48538155f2D75D18a18c7fB8D4efDE3B0eA76179",
+  "policy": "0xA35165c02756FB9316de1c22D16827f2e44ed3FE",
+  "factory": "0xF53B8f480718060f30dc8F634663a1b2D54aC42c",
+  "baseImplementation": "0x9586C6Ca984c13789407F3D5C75Be8B3935d8B96",
   "baseImplementationContract": "src/P2IDVault.sol:P2IDVault",
   "vaultInitCodeHash": "0x23dec57677be79edb9ad208117422435778ee00c12d4c56e2edf226d2a57b18a",
   "vaultProxyContract": "src/PviumP2IDVaultProxy.sol:PviumP2IDVaultProxy"

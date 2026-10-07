@@ -130,7 +130,10 @@ The script
    circuit version, pinned vkHash from circuit/version.json and the owner in `PviumIdentity`, the attester in `PviumVerifier`, the policy's owner and
    allowlist, and the factory's owner, policy, default verifier, namespace, delays, refund bounds,
    base implementation address/code/factory binding/registration, and vault init-code hash against `p2id.json`,
-4. writes `contracts/deployments/<scheme>.<environment>.<chainId>.json`, including the Privy keys
+4. calls `policy.setFactory(factory)` when the deployer is the owner; otherwise prints the calldata
+   for the owner (a Safe) to send. Until it is sent the policy refuses every fee and recipients are
+   paid in full, so nothing breaks if it waits, but it must be done before a fee policy is activated,
+5. writes `contracts/deployments/<scheme>.<environment>.<chainId>.json`, including the Privy keys
    and their `kid`s. Commit it.
 
 Before sending anything it compares its predicted factory with `p2id.json` and with every earlier
@@ -211,7 +214,7 @@ On a testnet, with a test identity you control:
 | New attester, or turning screening on | `PviumVerifier.setConstraintSigner(attester, true)` from the verifier's owner; revoke old ones the same way. No new deployment | unchanged |
 | A third party's verifier | `policy.approveVerifier`; payers opt in with `fundWith` | unchanged |
 | A verifier is found unsafe | `policy.approveVerifier(v, false)`: claims under it freeze, refunds still work | unchanged |
-| Protocol fees, or permissionless verifier registration (staking) | Deploy a new `IP2IDPolicy`, then `factory.proposePolicy` → wait the delay → `activatePolicy`. Fees stay capped at 1% by the vault and apply only to deposits made after the switch; the new policy's `distributeFee` decides who receives them (e.g. a verifier operator's share) | unchanged |
+| Protocol fees, or permissionless verifier registration (staking) | Deploy a new `IP2IDPolicy`, then `factory.proposePolicy` → wait the delay → `activatePolicy`. Fees stay capped at the factory's fixed `MAX_FEE_BPS` (1%) and apply only to deposits made after the switch; the new policy's `collectFee` receives each fee at claim time, with the claimer's address, and decides who gets it (e.g. a verifier operator's share, a claim relayer's reward) | unchanged |
 | Vault, factory or launch-policy code changes before release | While no factory is recorded in `p2id.json`: rebuild, `embed-p2id.mjs --update`, deploy again (a superseded testnet record in `deployments/` must be moved aside first) | new addresses for the changed contracts |
 | Compatible vault implementation for an existing factory | `IMPLEMENTATION=<Contract> yarn implementation --network <chain>`: runs the `yarn layout` checks (storage layout against `storage/P2IDVault.layout.json`, the owner-proof hook, no `delegatecall`/`selfdestruct`, no proxy-reserved selectors), deploys through `factory.deployVaultImplementation` at the same CREATE2 address on every chain, and proposes it (`MAKE_DEFAULT=1` to also make new vaults start on it; prints calldata when the owner is a multisig); after 14 days `REGISTER=1 yarn implementation`. Verify it with `IMPLEMENTATIONS=src/X.sol:X@0x… yarn verify`. Each vault owner opts in with `upgradeTo` and an identity proof | vault addresses unchanged; new vaults use the current default |
 | Revoke an implementation | `revokeImplementation` removes it as an upgrade target immediately; installed copies continue executing. The original implementation and current default cannot be revoked | unchanged |

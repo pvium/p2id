@@ -6,7 +6,7 @@
       "vaultInitCodeHash": "0x23dec57677be79edb9ad208117422435778ee00c12d4c56e2edf226d2a57b18a",
       "factories": {
         "production": null,
-        "sandbox": "0x48fD1bc4f982342dCFe2BEAc5fCFd22b4c1Ba4f6"
+        "sandbox": "0xF53B8f480718060f30dc8F634663a1b2D54aC42c"
       },
       "compiler": {
         "solc": "0.8.28",

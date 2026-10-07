@@ -124,28 +124,26 @@ describe('P2IDVault native coin (BNB on BNB Chain, ETH on Base)', function () {
       .to.be.revertedWithCustomError(factory, 'UnexpectedValue');
   });
 
-  it('fees in BNB accrue at the deposit\'s rate and are sent to the policy to distribute', async () => {
-    await policy.setFee(100, treasury.address); // 1%
+  it('fees in BNB are charged at the deposit\'s rate and handed to the policy at claim time', async () => {
+    await policy.setFee(50, treasury.address); // 0.5%
     await deployVault();
     await vault.connect(payer).fund(NATIVE, bnb('10'), Z, DAY, ethers.ZeroHash, { value: bnb('10') });
     const before = await balance(ownerWallet.address);
-    await vault.connect(payer).refreshProofAndSweep(V, proofFor(ownerWallet.address, 1000), NATIVE, 0);
-    expect((await balance(ownerWallet.address)) - before).to.equal(bnb('9.9'));
-    expect(await vault.feesOwed(V, NATIVE)).to.equal(bnb('0.1'));
-    expect(await vault.untrackedBalance(NATIVE)).to.equal(0n); // held apart
-
     const t0 = await balance(treasury.address);
-    await expect(vault.connect(payer).withdrawFees(V, NATIVE))
-      .to.emit(vault, 'FeesDistributed').withArgs(V, NATIVE, bnb('0.1'), await policy.getAddress());
-    expect((await balance(treasury.address)) - t0).to.equal(bnb('0.1'));
+    await expect(vault.connect(payer).refreshProofAndSweep(V, proofFor(ownerWallet.address, 1000), NATIVE, 0))
+      .to.emit(vault, 'FeeCollected').withArgs(V, NATIVE, payer.address, bnb('0.05'), await policy.getAddress());
+    expect((await balance(ownerWallet.address)) - before).to.equal(bnb('9.95'));
+    expect((await balance(treasury.address)) - t0).to.equal(bnb('0.05'));
+    expect(await policy.claimerFees(payer.address, NATIVE)).to.equal(bnb('0.05'));
     expect(await balance(await vault.getAddress())).to.equal(0n);
 
-    // a failing distribution moves nothing
+    // a policy that fails at claim time takes nothing: the recipient gets the whole amount
     await vault.connect(payer).fund(NATIVE, bnb('1'), Z, DAY, ethers.ZeroHash, { value: bnb('1') });
-    await vault.connect(payer).sweep(V, NATIVE, 0);
-    await policy.setMode(3);
-    await expect(vault.withdrawFees(V, NATIVE)).to.be.reverted;
-    expect(await vault.feesOwed(V, NATIVE)).to.equal(bnb('0.01'));
+    await policy.setMode(5);
+    const b1 = await balance(ownerWallet.address);
+    await expect(vault.connect(payer).sweep(V, NATIVE, 0)).not.to.emit(vault, 'FeeCollected');
+    expect((await balance(ownerWallet.address)) - b1).to.equal(bnb('1'));
+    expect(await balance(await vault.getAddress())).to.equal(0n);
   });
 
   it('an owner wallet that re-enters on receiving BNB cannot double-claim', async () => {
