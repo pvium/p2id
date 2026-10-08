@@ -1,6 +1,6 @@
 {
   "name": "@pvium/p2id-verifier",
-  "version": "0.4.0",
+  "version": "1.0.0",
   "description": "Pvium's off-chain verifier for P2ID identity attestations (Noir/UltraHonk zero-knowledge proofs)",
   "license": "MIT",
   "type": "module",
@@ -29,7 +29,7 @@
   },
   "dependencies": {
     "@aztec/bb.js": "5.0.0",
-    "@pvium/p2id-core": "^0.4.0"
+    "@pvium/p2id-core": "^1.0.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

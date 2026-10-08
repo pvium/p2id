@@ -62,21 +62,46 @@ export function vaultTarget(address: string): Target {
     address: ethers.getAddress(address), args: [] };
 }
 
-/** Whether the explorer already has source for `address`; null when it could not be asked. */
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const RATE_LIMITED = /rate limit|max calls per sec/i;
+
+/** Whether the explorer has an exact source match for `address`; null when it could not be asked.
+ *  A "similar match" (source the explorer borrowed from another contract with the same runtime
+ *  code, e.g. an earlier build differing only in its constructor) does not count: it can show
+ *  source that is not what was deployed, so it is resubmitted for an exact match. */
 async function isVerified(chainId: bigint, address: string, apiKey: string): Promise<boolean | null> {
   const url = `${ETHERSCAN_V2}?chainid=${chainId}&module=contract&action=getsourcecode&address=${address}&apikey=${apiKey}`;
-  try {
-    const res = await fetch(url);
-    const body = (await res.json()) as { status: string; message: string; result: any };
-    if (body.status !== '1' || !Array.isArray(body.result)) return null;
-    const entry = body.result[0] ?? {};
-    return typeof entry.SourceCode === 'string' && entry.SourceCode.length > 0;
-  } catch {
-    return null;
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    try {
+      const res = await fetch(url);
+      const body = (await res.json()) as { status: string; message: string; result: any };
+      if (body.status === '1' && Array.isArray(body.result)) {
+        const entry = body.result[0] ?? {};
+        return typeof entry.SourceCode === 'string' && entry.SourceCode.length > 0 && !entry.SimilarMatch;
+      }
+      if (!RATE_LIMITED.test(`${body.message} ${body.result}`)) return null;
+    } catch {
+      return null;
+    }
+    await sleep(1500 * attempt); // rate limited: back off and ask again
   }
+  return null;
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** Submit through hardhat-verify, retrying when the explorer rate-limits the burst of calls it makes. */
+async function submit(t: Target): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      // force: our own check found no exact match, so submit even if the plugin's check is
+      // satisfied by a similar match.
+      await run('verify:verify', { address: t.address, constructorArguments: t.args, libraries: t.libraries, contract: t.contract, force: true });
+      return;
+    } catch (err) {
+      if (attempt >= 5 || !RATE_LIMITED.test((err as Error).message ?? '')) throw err;
+      await sleep(2000 * attempt);
+    }
+  }
+}
 
 async function main() {
   const chainId = (await ethers.provider.getNetwork()).chainId;
@@ -129,7 +154,7 @@ async function main() {
     }
     if (verified === null) console.log(`${label}  could not check verification status; submitting anyway`);
     try {
-      await run('verify:verify', { address: t.address, constructorArguments: t.args, libraries: t.libraries, contract: t.contract });
+      await submit(t);
       console.log(`${label}  verified`);
     } catch (err) {
       const msg = (err as Error).message ?? String(err);

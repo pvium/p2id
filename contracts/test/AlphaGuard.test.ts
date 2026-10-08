@@ -20,13 +20,13 @@ describe('alpha proof acceptance by verification key', () => {
     V = await verifier.getAddress(); K = await verifier.vkHash();
     token = await ethers.deployContract('MockERC20'); T = await token.getAddress();
     policy = await ethers.deployContract('PviumP2IDPolicy', [admin.address, [V]]);
-    factory = await ethers.deployContract('PviumP2IdVaultFactory', [admin.address, ethers.id('pvium.vault.v1'), policy.target, V, DAY, 0, DAY, attester.address]);
+    factory = await ethers.deployContract('PviumP2IdVaultFactory', [admin.address, ethers.id('pvium.vault.v1'), policy.target, V, DAY, 3600, DAY, attester.address]);
     await factory.deploy(ID);
     vault = await ethers.getContractAt('P2IDVault', await factory.vaultFor(ID));
     proxy = await ethers.getContractAt('PviumP2IDVaultProxy', vault.target);
     proof = ethers.AbiCoder.defaultAbiCoder().encode(['address', 'bytes32', 'uint64'], [recipient.address, ID, await time.latest()]);
     await token.mint(admin.address, 100n); await token.approve(vault.target, 100n);
-    await vault.fund(T, 100n, ethers.ZeroHash, 0, ethers.ZeroHash);
+    await vault.fund(T, 100n, ethers.ZeroHash, 3600, ethers.ZeroHash);
   });
   const action = (name: string, args: any[]) => vault.interface.encodeFunctionData(name, args);
   async function authorization(data: string, overrides: any = {}, signer?: any) {
@@ -138,7 +138,7 @@ describe('alpha proof acceptance by verification key', () => {
   it('keeps funding constraints mandatory and binds their evidence into the alpha approval', async () => {
     const c = { commitment: ethers.id('constraint'), signature: ethers.hexlify(ethers.toUtf8Bytes('ok')) };
     await token.mint(admin.address, 30n); await token.approve(vault.target, 30n);
-    await vault.fund(T, 30n, c.commitment, 0, ethers.ZeroHash);
+    await vault.fund(T, 30n, c.commitment, 3600, ethers.ZeroHash);
     const data = action('sweepBucketDeposits', [V, c, T, [1], proof]); const a = await authorization(data);
     await expect(vault.sweepBucketDepositsWithAttestation(V, { ...c, signature: '0x' }, T, [1], proof, a)).to.be.revertedWithCustomError(factory, 'InvalidAlphaAuthorization');
     await vault.executeWithAttestation(data, a);

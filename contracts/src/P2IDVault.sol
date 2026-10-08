@@ -32,8 +32,6 @@ contract P2IDVault is IP2IDVault {
     address public immutable factory;
     bytes32 public nsHash;
     bytes32 public saltCommitment;
-    uint64 public minRefundWindow;
-    uint64 public maxRefundWindow;
     bool private _initialized;
 
     /// @notice Cached payout wallet per verifier. Equal-time proofs do not replace an existing wallet.
@@ -104,19 +102,21 @@ contract P2IDVault is IP2IDVault {
     receive() external payable {}
 
     /// @notice Initialize vault settings once; callable only by the configured factory.
-    function initialize(
-        bytes32 _nsHash,
-        bytes32 _saltCommitment,
-        uint64 _minRefundWindow,
-        uint64 _maxRefundWindow
-    ) external onlyFactory {
+    function initialize(bytes32 _nsHash, bytes32 _saltCommitment) external onlyFactory {
         if (_initialized) revert AlreadyInitialized();
-        if (_minRefundWindow > _maxRefundWindow) revert InvalidRefundWindow();
         _initialized = true;
         nsHash = _nsHash;
         saltCommitment = _saltCommitment;
-        minRefundWindow = _minRefundWindow;
-        maxRefundWindow = _maxRefundWindow;
+    }
+
+    /// @notice Shortest refund window a new deposit may choose: the factory's current setting.
+    function minRefundWindow() public view returns (uint64) {
+        return IP2IdVaultFactory(factory).minRefundWindow();
+    }
+
+    /// @notice Longest refund window a new deposit may choose: the factory's current setting.
+    function maxRefundWindow() public view returns (uint64) {
+        return IP2IdVaultFactory(factory).maxRefundWindow();
     }
 
     // ------------------------------------------------------------------ alpha authorization
@@ -329,7 +329,7 @@ contract P2IDVault is IP2IDVault {
             constraintKey = keccak256(abi.encode(constraint, funder));
             if (_constraintDeposit[constraintKey] != 0) revert ConstraintUsed(_constraintDeposit[constraintKey] - 1);
         }
-        if (refundWindow < minRefundWindow || refundWindow > maxRefundWindow) revert InvalidRefundWindow();
+        if (refundWindow < minRefundWindow() || refundWindow > maxRefundWindow()) revert InvalidRefundWindow();
         if (amount == 0 || amount > type(uint128).max) revert InvalidRefundAmount();
 
         uint256 credited;

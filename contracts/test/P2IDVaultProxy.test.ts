@@ -48,7 +48,7 @@ describe('PviumP2IDVaultProxy', function () {
     expect(await vault.saltCommitment()).to.equal(ID);
     const impl = await ethers.getContractAt('P2IDVault', await factory.baseImplementation());
     expect(await impl.factory()).to.equal(await factory.getAddress());
-    await expect(impl.initialize(NS, ID, DAY, 30 * DAY)).to.be.revertedWithCustomError(impl, 'NotFactory'); // the raw implementation is inert
+    await expect(impl.initialize(NS, ID)).to.be.revertedWithCustomError(impl, 'NotFactory'); // the raw implementation is inert
   });
 
   it('funds, claims, refunds and plain sends all work through the proxy', async () => {

@@ -12,7 +12,7 @@ import {IP2IDVault} from "./interfaces/IP2IDVault.sol";
 /// @notice Deploys one PviumP2IDVaultProxy per identity with CREATE2 (salt = identityHash) and
 ///         supplies policy and default-verifier settings. The proxy takes no constructor arguments;
 ///         its address is the low 160 bits of keccak256(0xff || factory || identityHash || initCodeHash()).
-/// @dev Policy-address changes wait policyChangeDelay, which may be zero. Default-verifier
+/// @dev Policy-address and configuration changes wait policyChangeDelay. Default-verifier
 ///      changes and implementation registration wait DEFAULT_VERIFIER_DELAY. Implementation
 ///      revocation changes registry membership without changing installed proxy code. Proposal
 ///      and registration check code presence and reported factory, alpha support and vault version;
@@ -140,8 +140,10 @@ contract PviumP2IdVaultFactory is IP2IdVaultFactory {
     address public proposedImplementation;
     /// @notice Earliest time the proposed implementation can be registered; 0 when nothing is proposed.
     uint64 public proposedImplementationEta;
-    uint64 public immutable minRefundWindow;
-    uint64 public immutable maxRefundWindow;
+    /// @inheritdoc IP2IdVaultFactory
+    uint64 public minRefundWindow;
+    /// @inheritdoc IP2IdVaultFactory
+    uint64 public maxRefundWindow;
 
     /// @notice Administrative owner for settings and implementation registration; transferred in two steps.
     address public owner;
@@ -155,7 +157,17 @@ contract PviumP2IdVaultFactory is IP2IdVaultFactory {
     /// @notice Notice before a proposed default verifier can be activated. Fixed in this bytecode.
     uint64 public constant DEFAULT_VERIFIER_DELAY = 14 days;
     /// @notice Notice before a proposed policy can be activated.
-    uint64 public immutable policyChangeDelay;
+    uint64 public policyChangeDelay;
+    /// @notice Bounds a configuration proposal must respect. Fixed in this bytecode.
+    uint64 public constant MIN_POLICY_CHANGE_DELAY = 1 days;
+    uint64 public constant MAX_POLICY_CHANGE_DELAY = 30 days;
+    uint64 public constant MIN_REFUND_WINDOW_FLOOR = 1 hours;
+    uint64 public constant MAX_REFUND_WINDOW_CEILING = 365 days;
+    struct PendingConfig {
+        uint64 value;
+        uint64 eta;
+    }
+    mapping(ConfigKey => PendingConfig) private _pendingConfig;
     address public proposedDefaultVerifier;
     /// @notice Earliest time the proposed default can be activated; 0 when nothing is proposed.
     uint64 public proposedDefaultEta;
@@ -176,6 +188,9 @@ contract PviumP2IdVaultFactory is IP2IdVaultFactory {
     event PolicyProposed(address indexed policy, uint64 eta);
     event PolicyProposalCancelled(address indexed policy);
     event PolicyActivated(address indexed policy);
+    event ConfigProposed(ConfigKey indexed key, uint64 value, uint64 eta);
+    event ConfigProposalCancelled(ConfigKey indexed key, uint64 value);
+    event ConfigActivated(ConfigKey indexed key, uint64 value);
 
     error NotOwner();
     error NotPendingOwner();
@@ -185,6 +200,7 @@ contract PviumP2IdVaultFactory is IP2IdVaultFactory {
     error NothingProposed();
     error TimelockNotElapsed(uint64 eta);
     error InvalidRefundWindow();
+    error InvalidConfig(ConfigKey key, uint64 value);
     error TokenCallFailed();
     error TokenBalanceQueryFailed();
     error NothingReceived();
@@ -203,6 +219,19 @@ contract PviumP2IdVaultFactory is IP2IdVaultFactory {
         address _alphaAttester
     ) {
         if (_owner == address(0)) revert InvalidOwner();
+        // The same limits proposeConfig enforces, so no deployment can start outside them.
+        if (
+            _policyChangeDelay < MIN_POLICY_CHANGE_DELAY ||
+            _policyChangeDelay > MAX_POLICY_CHANGE_DELAY
+        ) revert InvalidConfig(ConfigKey.PolicyChangeDelay, _policyChangeDelay);
+        if (
+            _minRefundWindow < MIN_REFUND_WINDOW_FLOOR ||
+            _minRefundWindow > MAX_REFUND_WINDOW_CEILING
+        ) revert InvalidConfig(ConfigKey.MinRefundWindow, _minRefundWindow);
+        if (
+            _maxRefundWindow < MIN_REFUND_WINDOW_FLOOR ||
+            _maxRefundWindow > MAX_REFUND_WINDOW_CEILING
+        ) revert InvalidConfig(ConfigKey.MaxRefundWindow, _maxRefundWindow);
         if (_minRefundWindow > _maxRefundWindow) revert InvalidRefundWindow();
         if (_policy.code.length == 0) revert InvalidPolicy();
         if (!IP2IDPolicy(_policy).isVerifierAllowed(_defaultVerifier))
@@ -343,22 +372,48 @@ contract PviumP2IdVaultFactory is IP2IdVaultFactory {
     ///      match this factory, true and VAULT_VERSION. These getters do not establish
     ///      storage compatibility or implementation behavior.
     function _checkImplementation(address implementation) private view {
-        if (!_viewMatches(implementation, abi.encodeWithSignature("factory()"), bytes32(uint256(uint160(address(this)))))) {
+        if (
+            !_viewMatches(
+                implementation,
+                abi.encodeWithSignature("factory()"),
+                bytes32(uint256(uint160(address(this))))
+            )
+        ) {
             revert InvalidImplementation();
         }
-        if (!_viewMatches(implementation, abi.encodeCall(IP2IDVault.supportsAlphaGuard, ()), bytes32(uint256(1)))) {
+        if (
+            !_viewMatches(
+                implementation,
+                abi.encodeCall(IP2IDVault.supportsAlphaGuard, ()),
+                bytes32(uint256(1))
+            )
+        ) {
             revert InvalidImplementation();
         }
-        (bool ok, bytes memory result) = implementation.staticcall(abi.encodeCall(IP2IDVault.p2idVersion, ()));
-        if (!ok || result.length < 64 || keccak256(abi.decode(result, (bytes))) != keccak256(bytes(VAULT_VERSION))) {
+        (bool ok, bytes memory result) = implementation.staticcall(
+            abi.encodeCall(IP2IDVault.p2idVersion, ())
+        );
+        if (
+            !ok ||
+            result.length < 64 ||
+            keccak256(abi.decode(result, (bytes))) !=
+            keccak256(bytes(VAULT_VERSION))
+        ) {
             revert InvalidImplementation();
         }
     }
 
     /// @dev staticcall `data` on `target` and require exactly one word equal to `expected`.
-    function _viewMatches(address target, bytes memory data, bytes32 expected) private view returns (bool) {
+    function _viewMatches(
+        address target,
+        bytes memory data,
+        bytes32 expected
+    ) private view returns (bool) {
         (bool ok, bytes memory result) = target.staticcall(data);
-        return ok && result.length == 32 && abi.decode(result, (bytes32)) == expected;
+        return
+            ok &&
+            result.length == 32 &&
+            abi.decode(result, (bytes32)) == expected;
     }
 
     function cancelImplementationProposal() external onlyOwner {
@@ -401,6 +456,61 @@ contract PviumP2IdVaultFactory is IP2IdVaultFactory {
     }
 
     // ------------------------------------------------------------------ policy (timelocked)
+
+    /// @inheritdoc IP2IdVaultFactory
+    /// @dev Bounds: delay within [MIN_POLICY_CHANGE_DELAY, MAX_POLICY_CHANGE_DELAY]; refund windows
+    ///      within [MIN_REFUND_WINDOW_FLOOR, MAX_REFUND_WINDOW_CEILING]. Ordering against the other
+    ///      refund bound is checked at activation, against the values live then. A change to the
+    ///      delay itself waits the current delay.
+    function proposeConfig(ConfigKey key, uint64 value) external onlyOwner {
+        if (key == ConfigKey.PolicyChangeDelay) {
+            if (
+                value < MIN_POLICY_CHANGE_DELAY ||
+                value > MAX_POLICY_CHANGE_DELAY
+            ) revert InvalidConfig(key, value);
+        } else if (
+            value < MIN_REFUND_WINDOW_FLOOR || value > MAX_REFUND_WINDOW_CEILING
+        ) {
+            revert InvalidConfig(key, value);
+        }
+        uint64 eta = uint64(block.timestamp) + policyChangeDelay;
+        _pendingConfig[key] = PendingConfig(value, eta);
+        emit ConfigProposed(key, value, eta);
+    }
+
+    /// @inheritdoc IP2IdVaultFactory
+    function cancelConfig(ConfigKey key) external onlyOwner {
+        PendingConfig memory p = _pendingConfig[key];
+        if (p.eta == 0) revert NothingProposed();
+        delete _pendingConfig[key];
+        emit ConfigProposalCancelled(key, p.value);
+    }
+
+    /// @inheritdoc IP2IdVaultFactory
+    function activateConfig(ConfigKey key) external onlyOwner {
+        PendingConfig memory p = _pendingConfig[key];
+        if (p.eta == 0) revert NothingProposed();
+        if (block.timestamp < p.eta) revert TimelockNotElapsed(p.eta);
+        delete _pendingConfig[key];
+        if (key == ConfigKey.PolicyChangeDelay) {
+            policyChangeDelay = p.value;
+        } else if (key == ConfigKey.MinRefundWindow) {
+            if (p.value > maxRefundWindow) revert InvalidRefundWindow();
+            minRefundWindow = p.value;
+        } else {
+            if (p.value < minRefundWindow) revert InvalidRefundWindow();
+            maxRefundWindow = p.value;
+        }
+        emit ConfigActivated(key, p.value);
+    }
+
+    /// @inheritdoc IP2IdVaultFactory
+    function pendingConfig(
+        ConfigKey key
+    ) external view returns (uint64 value, uint64 eta) {
+        PendingConfig memory p = _pendingConfig[key];
+        return (p.value, p.eta);
+    }
 
     /// @notice Announce a new policy. Takes effect only after `policyChangeDelay`, via
     ///         activatePolicy(). Replaces any pending policy proposal.
@@ -520,12 +630,7 @@ contract PviumP2IdVaultFactory is IP2IdVaultFactory {
         vault = vaultFor(identityHash);
         if (vault.code.length != 0) return vault;
         vault = address(new PviumP2IDVaultProxy{salt: identityHash}());
-        IP2IDVault(vault).initialize(
-            nsHash,
-            identityHash,
-            minRefundWindow,
-            maxRefundWindow
-        );
+        IP2IDVault(vault).initialize(nsHash, identityHash);
         emit VaultDeployed(identityHash, vault);
     }
 

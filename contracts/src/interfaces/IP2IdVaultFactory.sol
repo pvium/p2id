@@ -50,9 +50,21 @@ interface IP2IdVaultFactory {
     function nsHash() external view returns (bytes32);
     /// @notice Proxy creation-code hash used with this factory's address and an identityHash for CREATE2 derivation.
     function initCodeHash() external pure returns (bytes32);
-    /// @notice Refund-window bounds passed to new vaults during initialization.
+    /// @notice Refund-window bounds every vault applies to new deposits (read live; existing
+    ///         deposits keep the window they chose). Changed through proposeConfig/activateConfig.
     function minRefundWindow() external view returns (uint64);
     function maxRefundWindow() external view returns (uint64);
+    /// @notice Notice period for policy and configuration changes. Changed through proposeConfig/activateConfig.
+    function policyChangeDelay() external view returns (uint64);
+
+    // ---- timelocked numeric configuration ----
+    enum ConfigKey { PolicyChangeDelay, MinRefundWindow, MaxRefundWindow }
+    /// @notice Announce a new value for `key`. Takes effect after the current policyChangeDelay via
+    ///         activateConfig(key). Replaces a pending proposal for the same key.
+    function proposeConfig(ConfigKey key, uint64 value) external;
+    function cancelConfig(ConfigKey key) external;
+    function activateConfig(ConfigKey key) external;
+    function pendingConfig(ConfigKey key) external view returns (uint64 value, uint64 eta);
 
     // ---- vaults ----
     /// @notice The vault address for `identityHash`, deployed or not:

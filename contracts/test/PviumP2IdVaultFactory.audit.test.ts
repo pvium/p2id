@@ -40,9 +40,9 @@ describe('PviumP2IdVaultFactory proxy deployment and maintenance audit', functio
     expect(await vault.saltCommitment()).to.equal(ID);
     expect(await vault.nsHash()).to.equal(NS);
     expect(await vault.owner(await verifier.getAddress())).to.equal(ethers.ZeroAddress);
-    await expect(vault.connect(payer).initialize(Z, Z, 0, 0)).to.be.revertedWithCustomError(vault, 'NotFactory');
+    await expect(vault.connect(payer).initialize(Z, Z)).to.be.revertedWithCustomError(vault, 'NotFactory');
     const base = await ethers.getContractAt('P2IDVault', await factory.baseImplementation());
-    await expect(base.connect(admin).initialize(NS, ID, DAY, 30 * DAY)).to.be.revertedWithCustomError(base, 'NotFactory');
+    await expect(base.connect(admin).initialize(NS, ID)).to.be.revertedWithCustomError(base, 'NotFactory');
     await vault.refreshProofAndSweep(await verifier.getAddress(), proof(wallet.address), await token.getAddress(), 0);
     expect(await token.balanceOf(wallet.address)).to.equal(100n);
     expect(await token.balanceOf(payer.address)).to.equal(0n);

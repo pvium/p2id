@@ -58,7 +58,7 @@ describe('single vault: pre-alpha behavior regression', () => {
     const token = await ethers.deployContract('MockERC20');
     const T = await token.getAddress();
     const policy = await ethers.deployContract('PviumP2IDPolicy', [admin.address, [V]]);
-    const factory = await ethers.deployContract('PviumP2IdVaultFactory', [admin.address, ethers.id('pvium.vault.v1'), await policy.getAddress(), V, 86400, 0, 86400, ethers.ZeroAddress]);
+    const factory = await ethers.deployContract('PviumP2IdVaultFactory', [admin.address, ethers.id('pvium.vault.v1'), await policy.getAddress(), V, 86400, 3600, 86400, ethers.ZeroAddress]);
     await factory.setAlpha(await (await ethers.getContractAt('IP2IDVerifier', await factory.defaultVerifier())).vkHash(), false); // this suite exercises the ordinary (post-alpha) paths
     expect(await factory.isAlpha(await (await ethers.getContractAt('IP2IDVerifier', await factory.defaultVerifier())).vkHash())).to.equal(false);
     const identity = ethers.id('parity identity');
@@ -70,16 +70,16 @@ describe('single vault: pre-alpha behavior regression', () => {
     await setBalance(f, ethers.parseEther('1'));
     try {
       const signer = await ethers.getSigner(f);
-      for (const vault of vaults) await vault.connect(signer).getFunction('initialize')(ethers.id('pvium.vault.v1'), identity, 0, 86400);
+      for (const vault of vaults) await vault.connect(signer).getFunction('initialize')(ethers.id('pvium.vault.v1'), identity);
     } finally {
       await stopImpersonatingAccount(f);
     }
     for (const vault of vaults) {
       await token.mint(admin.address, 170n);
       await token.approve(vault.target, 170n);
-      await vault.getFunction('fund')(T, 100n, ethers.ZeroHash, 0, ethers.ZeroHash);
-      await vault.getFunction('fundWith')(V, T, 30n, constraint.commitment, 0, ethers.ZeroHash);
-      await vault.getFunction('fund')(T, 40n, ethers.ZeroHash, 0, ethers.ZeroHash);
+      await vault.getFunction('fund')(T, 100n, ethers.ZeroHash, 3600, ethers.ZeroHash);
+      await vault.getFunction('fundWith')(V, T, 30n, constraint.commitment, 3600, ethers.ZeroHash);
+      await vault.getFunction('fund')(T, 40n, ethers.ZeroHash, 3600, ethers.ZeroHash);
       await token.mint(vault.target, 20n);
       await vault.getFunction('refreshProof')(V, proof);
       expect(await vault.getFunction('owner')(V)).to.equal(recipient.address);
@@ -88,6 +88,7 @@ describe('single vault: pre-alpha behavior regression', () => {
       await vault.getFunction('sweep')(V, T, 1);
       expect(await vault.getFunction('sweepBucketDeposits').staticCall(V, constraint, T, [1], proof)).to.equal(30n);
       await vault.getFunction('sweepBucketDeposits')(V, constraint, T, [1], proof);
+      await time.increase(3601); // past the one-hour minimum refund window
       await vault.getFunction('refund')(2);
       expect(await vault.getFunction('trackedTotal')(T)).to.equal(0n);
       expect(await vault.getFunction('untrackedBalance')(T)).to.equal(0n);

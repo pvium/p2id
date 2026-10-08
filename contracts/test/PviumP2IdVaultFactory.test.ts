@@ -90,15 +90,68 @@ describe('PviumP2IdVaultFactory', function () {
     expect(await factory.vaultFor(ethers.id('identity-b'))).to.not.equal(a);
   });
 
+  it('the constructor refuses initial settings outside the limits proposeConfig enforces (audit)', async () => {
+    const args = async (delay: number, min: number, max: number) =>
+      [deployer.address, NS, await policy.getAddress(), await idv.getAddress(), delay, min, max, ethers.ZeroAddress];
+    const F = await ethers.getContractFactory('PviumP2IdVaultFactory');
+    for (const [delay, min, max, key] of [[0, DAY, 30 * DAY, 0], [31 * DAY, DAY, 30 * DAY, 0], [7 * DAY, 0, 30 * DAY, 1], [7 * DAY, DAY, 400 * DAY, 2], [7 * DAY, 3599, DAY, 1]]) {
+      await expect(F.deploy(...await args(delay, min, max))).to.be.revertedWithCustomError(F, 'InvalidConfig').withArgs(key, key === 0 ? delay : key === 1 ? min : max);
+    }
+    await expect(F.deploy(...await args(7 * DAY, 2 * DAY, DAY))).to.be.revertedWithCustomError(F, 'InvalidRefundWindow');
+    await F.deploy(...await args(DAY, 3600, 365 * DAY)); // the limits themselves are accepted
+  });
+
+  it('policy delay and refund bounds are changed only through the timelocked config path, within fixed limits, and vaults follow live', async () => {
+    const [PolicyDelay, MinWindow, MaxWindow] = [0, 1, 2];
+    await factory.deploy(ID);
+    const v = await ethers.getContractAt('P2IDVault', await factory.vaultFor(ID));
+    expect(await v.maxRefundWindow()).to.equal(BigInt(30 * DAY));
+
+    // owner only, and bounded by constants in the bytecode
+    await expect(factory.connect(payer).proposeConfig(MaxWindow, 60 * DAY)).to.be.revertedWithCustomError(factory, 'NotOwner');
+    await expect(factory.proposeConfig(PolicyDelay, DAY - 1)).to.be.revertedWithCustomError(factory, 'InvalidConfig');
+    await expect(factory.proposeConfig(PolicyDelay, 30 * DAY + 1)).to.be.revertedWithCustomError(factory, 'InvalidConfig');
+    await expect(factory.proposeConfig(MinWindow, 3599)).to.be.revertedWithCustomError(factory, 'InvalidConfig');
+    await expect(factory.proposeConfig(MaxWindow, 365 * DAY + 1)).to.be.revertedWithCustomError(factory, 'InvalidConfig');
+
+    // waits the current delay; cancellable
+    await expect(factory.proposeConfig(MaxWindow, 180 * DAY)).to.emit(factory, 'ConfigProposed');
+    expect((await factory.pendingConfig(MaxWindow)).value).to.equal(BigInt(180 * DAY));
+    await expect(factory.activateConfig(MaxWindow)).to.be.revertedWithCustomError(factory, 'TimelockNotElapsed');
+    await factory.cancelConfig(MaxWindow);
+    await expect(factory.activateConfig(MaxWindow)).to.be.revertedWithCustomError(factory, 'NothingProposed');
+    await expect(factory.cancelConfig(MaxWindow)).to.be.revertedWithCustomError(factory, 'NothingProposed');
+
+    await factory.proposeConfig(MaxWindow, 180 * DAY);
+    await time.increase(7 * DAY + 1);
+    await expect(factory.connect(payer).activateConfig(MaxWindow)).to.be.revertedWithCustomError(factory, 'NotOwner');
+    await expect(factory.activateConfig(MaxWindow)).to.emit(factory, 'ConfigActivated').withArgs(MaxWindow, 180 * DAY);
+    expect(await factory.maxRefundWindow()).to.equal(BigInt(180 * DAY));
+    expect(await v.maxRefundWindow()).to.equal(BigInt(180 * DAY)); // an existing vault follows
+
+    // ordering is checked against live values at activation
+    await factory.proposeConfig(MinWindow, 200 * DAY);
+    await time.increase(7 * DAY + 1);
+    await expect(factory.activateConfig(MinWindow)).to.be.revertedWithCustomError(factory, 'InvalidRefundWindow');
+
+    // shortening the delay itself waits the current delay, then applies to later proposals
+    await factory.proposeConfig(PolicyDelay, 2 * DAY);
+    await time.increase(7 * DAY + 1);
+    await factory.activateConfig(PolicyDelay);
+    expect(await factory.policyChangeDelay()).to.equal(BigInt(2 * DAY));
+    await factory.proposeConfig(MinWindow, 2 * DAY);
+    expect((await factory.pendingConfig(MinWindow)).eta - BigInt(await time.latest())).to.equal(BigInt(2 * DAY));
+  });
+
   it('initialize is factory-only and runs once', async () => {
     const [deployer] = await ethers.getSigners();
     const loose = await ethers.deployContract('P2IDVault', [deployer.address]); // an EOA as the "factory"
     await expect(
-      loose.connect(payer).initialize(NS, ID, DAY, 30 * DAY),
+      loose.connect(payer).initialize(NS, ID),
     ).to.be.revertedWithCustomError(loose, 'NotFactory');
-    await loose.initialize(NS, ID, DAY, 30 * DAY);
+    await loose.initialize(NS, ID);
     await expect(
-      loose.initialize(NS, ID, DAY, 30 * DAY),
+      loose.initialize(NS, ID),
     ).to.be.revertedWithCustomError(loose, 'AlreadyInitialized');
     await factory.deploy(ID);
     const vault = await ethers.getContractAt(
@@ -106,7 +159,7 @@ describe('PviumP2IdVaultFactory', function () {
       await factory.vaultFor(ID),
     );
     await expect(
-      vault.initialize(NS, ID, DAY, 30 * DAY),
+      vault.initialize(NS, ID),
     ).to.be.revertedWithCustomError(vault, 'NotFactory');
   });
 

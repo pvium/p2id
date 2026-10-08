@@ -5,8 +5,8 @@
       "identityDomain": "p2id.identity.v1",
       "vaultInitCodeHash": "0x23dec57677be79edb9ad208117422435778ee00c12d4c56e2edf226d2a57b18a",
       "factories": {
-        "production": null,
-        "sandbox": "0xF53B8f480718060f30dc8F634663a1b2D54aC42c"
+        "production": "0x58982A37b8B0d48A10aB370e000a837cF916526a",
+        "sandbox": "0x06663e26Fd76A9D075a83D9a987ADD6d08a85A98"
       },
       "compiler": {
         "solc": "0.8.28",
