@@ -27,14 +27,19 @@ test('identityHash matches the circuit and contract fixtures, by id or by name, 
   assert.notEqual(identityHash('phone', '+15551234567'), identityHash('phone', '+15551234568'));
 });
 
-test('v1 is the current unreleased scheme', () => {
+// Released: the production factory is deployed (Base, BSC) and the scheme is frozen.
+const V1_PRODUCTION_FACTORY = '0x58982A37b8B0d48A10aB370e000a837cF916526a';
+// factory.vaultFor(identityHash('email', 'test-9988@privy.io')) as returned on chain by both Base and BSC.
+const V1_PRODUCTION_EMAIL_ADDRESS = '0x9AdcE99AB1f123e7291A2794752b4BA2476328BD';
+
+test('v1 is the current, released scheme', () => {
   assert.equal(P2ID_SCHEME, 'pvium.vault.v1');
   assert.deepEqual(Object.keys(P2ID_SCHEMES), ['pvium.vault.v1']);
   const v1 = p2idScheme('pvium.vault.v1');
   assert.equal(v1.identityDomain, 'p2id.identity.v1');
   assert.equal(v1.vaultInitCodeHash, V1_INIT_CODE_HASH);
-  assert.equal(v1.factories.production, null); // unreleased: only a production factory freezes the scheme
-  // Proxy changes clear the previous sandbox factory until a fresh stack is recorded.
+  assert.equal(v1.factories.production, V1_PRODUCTION_FACTORY); // released: frozen from here on
+  // The sandbox factory is re-recorded after sandbox redeploys.
   if (v1.factories.sandbox !== null) assert.match(v1.factories.sandbox, /^0x[0-9a-fA-F]{40}$/);
   assert.deepEqual(p2idScheme(), v1);
   assert.throws(() => p2idScheme('pvium.vault.v9'), /unknown P2ID scheme "pvium.vault.v9" \(known: pvium.vault.v1\)/);
@@ -59,10 +64,9 @@ test('the address takes no chain: one factory per environment, and a missing one
       assert.equal(call(), p2idAddressForHash(EMAIL_COMMITMENT, { environment }));
     }
   }
-  // production is the default
-  if (p2idScheme().factories.production === null) {
-    assert.throws(() => p2idAddress({ identityType: 'email', identityValue: 'test-9988@privy.io' }), /no production factory/);
-  }
+  // production is the default, and matches what the deployed factory returns on chain
+  assert.equal(p2idAddress({ identityType: 'email', identityValue: 'test-9988@privy.io' }), V1_PRODUCTION_EMAIL_ADDRESS);
+  assert.equal(p2idAddress({ identityType: 'email', identityValue: 'Test-9988@Privy.io', environment: 'production' }), V1_PRODUCTION_EMAIL_ADDRESS);
   assert.throws(() => p2idAddress({ identityType: 'email', identityValue: 'a@b.c', environment: 'staging' as any, factory: FACTORY }),
     /unknown environment "staging"/,
   );
