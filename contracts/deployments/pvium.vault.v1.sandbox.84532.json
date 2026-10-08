@@ -1,7 +1,7 @@
 {
   "scheme": "pvium.vault.v1",
   "environment": "sandbox",
-  "privyJwks": "https://auth.privy.io/api/v1/apps/cmhc6t92u001tju0cxkxg34on/jwks.json",
+  "privyJwks": ".env PRIVY_SIGNER_KEYS_SANDBOX",
   "privyKeys": [
     {
       "kid": "Lp_q4NY6tg5jSdiD790AIm01JR7GIJ_xmDVZZ6MVAfM",
@@ -31,9 +31,9 @@
   "zkVerifier": "0x5321ece7135E26401CDfcf070a19DcbE82Bb60A8",
   "pviumIdentity": "0x8BBe0B15deD83EcD0925D0B61F2D8455d56Aae8B",
   "pviumVerifier": "0x2BF1c5Addbf202dB65779829Bb9deC183409ec48",
-  "policy": "0xA35165c02756FB9316de1c22D16827f2e44ed3FE",
-  "factory": "0xF53B8f480718060f30dc8F634663a1b2D54aC42c",
-  "baseImplementation": "0x9586C6Ca984c13789407F3D5C75Be8B3935d8B96",
+  "policy": "0x7D915675295772A4bEAEfc05Ef5BB0c4ECaC33B7",
+  "factory": "0x06663e26Fd76A9D075a83D9a987ADD6d08a85A98",
+  "baseImplementation": "0x0062823aba6a81504498DDcbB7cb8713A5ccA126",
   "baseImplementationContract": "src/P2IDVault.sol:P2IDVault",
   "vaultInitCodeHash": "0x23dec57677be79edb9ad208117422435778ee00c12d4c56e2edf226d2a57b18a",
   "vaultProxyContract": "src/PviumP2IDVaultProxy.sol:PviumP2IDVaultProxy"

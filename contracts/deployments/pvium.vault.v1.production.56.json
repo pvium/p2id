@@ -1,0 +1,40 @@
+{
+  "scheme": "pvium.vault.v1",
+  "environment": "production",
+  "privyJwks": ".env PRIVY_SIGNER_KEYS_PROD",
+  "privyKeys": [
+    {
+      "kid": "gtxaE3pGoA51jLX-_Oeo75Zif0R3k-tBo7NsQpAy4RI",
+      "x": "0x95b9d9d18fbed9f5c3b8aab466271793539be2cbc86a7090dd92f4df600850de",
+      "y": "0x3acff34d3319d44a03afdd818474d3551e2b37ee2ff029ceac1ee74924eeb813"
+    },
+    {
+      "kid": "w43bEjqKgP4wGge2dXiLR18B83IgjT4rAjjDcXXd7E0",
+      "x": "0xf638cd1c8ae040434c3325c1fdfb4d313496b9e4d266017266c803c4e474cada",
+      "y": "0x93d01d1f671d945cd44a46142a5c35e9b06c27bdac8d65d77c6996112509d029"
+    }
+  ],
+  "config": {
+    "owner": "0xbC5E749404Bf159177E53e244319C4Ca1B633344",
+    "attester": "0x944039a5445A90384F908232177859f436456720",
+    "alphaAttester": "0x944039a5445A90384F908232177859f436456720",
+    "circuitVersion": 1,
+    "vkHash": "0x778f89fcdc8b42ebfdd63e6383ba0d2f7753d4e36dee86e711b55d0db7c0e7c3",
+    "policyChangeDelay": 604800,
+    "minRefundWindow": 86400,
+    "maxRefundWindow": 7776000
+  },
+  "network": "bsc",
+  "chainId": 56,
+  "relationsLib": "0x8339dBA6607687A1810BF2C7f50C36977317D0a6",
+  "transcriptLib": "0x0fF89f21E57B020F50e8F737E2762B33b49f7A5B",
+  "zkVerifier": "0x5321ece7135E26401CDfcf070a19DcbE82Bb60A8",
+  "pviumIdentity": "0xE63abc8127068Ef7c7BC83bCcc5b8A02938D3B78",
+  "pviumVerifier": "0x310020527Bc13a765F85976217A34c394bF2F1f2",
+  "policy": "0x80f37ED47541C4097a28cbF3c90CDE400572ee3D",
+  "factory": "0x58982A37b8B0d48A10aB370e000a837cF916526a",
+  "baseImplementation": "0xB63Cc52beCea7D1318aDC8D1739978974E366BC6",
+  "baseImplementationContract": "src/P2IDVault.sol:P2IDVault",
+  "vaultInitCodeHash": "0x23dec57677be79edb9ad208117422435778ee00c12d4c56e2edf226d2a57b18a",
+  "vaultProxyContract": "src/PviumP2IDVaultProxy.sol:PviumP2IDVaultProxy"
+}

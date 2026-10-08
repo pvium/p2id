@@ -6,12 +6,17 @@
 //
 // The network decides the environment (deploy.config.ts): testnets are `sandbox`, mainnets are
 // `production`. Everything environment-specific is read with that suffix from contracts/.env:
-//   PRIVY_JWKS_URL_SANDBOX / _PROD   the Privy app's JWKS (URL, or a path to a saved jwks.json)
+//   PRIVY_SIGNER_KEYS_SANDBOX / _PROD  the Privy app's ES256 keys, every key in its JWKS:
+//                                    comma-separated `kid:0x<x>:0x<y>` (the initial key set; part
+//                                    of every address, so never change it after the first deploy)
+//   PRIVY_JWKS_URL_SANDBOX / _PROD   optional, only used when the keys above are unset: a JWKS URL
+//                                    or saved jwks.json
 //   OWNER_SANDBOX / _PROD            factory registry owner (a Safe at the same address everywhere)
 //   ATTESTER_SANDBOX / _PROD         constraint attester, or "none"
 //   ALPHA_ATTESTER_SANDBOX / _PROD   alpha attester; omitted uses OWNER
 // Shared, optional: DEPLOYER_KEY (or DEPLOYER_KEY_<SUFFIX>), POLICY_CHANGE_DELAY, MIN_REFUND_WINDOW,
-// MAX_REFUND_WINDOW, SCHEME (default: `current` in sdks/node/p2id-core/src/p2id.json), CIRCUIT_VERSION.
+// MAX_REFUND_WINDOW (initial values; part of the factory address; later changes go through
+// factory.proposeConfig/activateConfig), SCHEME (default: `current` in sdks/node/p2id-core/src/p2id.json), CIRCUIT_VERSION.
 //
 // PREDICT=1 prints the addresses without sending anything (with no --network, set P2ID_ENV).
 //
@@ -59,6 +64,17 @@ async function fetchJson(url: string, attempts = 5): Promise<unknown> {
   throw new Error(`fetching ${url}: ${last} after ${attempts} attempts. Nothing was deployed. Retry later, or point PRIVY_JWKS_URL_* at a saved jwks.json.`);
 }
 
+/** Keys written in .env as comma-separated `kid:0x<x>:0x<y>` entries. */
+function parsePrivyKeys(name: string, value: string): PrivyKey[] {
+  const keys = value.split(',').map((s) => s.trim()).filter(Boolean).map((entry) => {
+    const m = /^([^:]+):(0x[0-9a-fA-F]{64}):(0x[0-9a-fA-F]{64})$/.exec(entry);
+    if (!m) throw new Error(`${name}: bad entry "${entry}" (expected kid:0x<64 hex x>:0x<64 hex y>)`);
+    return { kid: m[1], x: BigInt(m[2]), y: BigInt(m[3]) };
+  });
+  if (keys.length === 0) throw new Error(`${name} has no keys`);
+  return keys;
+}
+
 /** Every ES256 signing key in a Privy JWKS, from a URL or a saved jwks.json. */
 async function loadPrivyKeys(source: string): Promise<PrivyKey[]> {
   let body: unknown;
@@ -91,8 +107,19 @@ async function setting(name: string, environment: P2IDEnvironment, localDefault:
 }
 
 async function configFor(environment: P2IDEnvironment, scheme: string, circuitVersion: number) {
-  const jwks = await setting('PRIVY_JWKS_URL', environment, () => SANDBOX_JWKS);
-  const keys = await loadPrivyKeys(jwks);
+  // The initial key set comes from .env (PRIVY_SIGNER_KEYS_*). A JWKS is only a fallback, and on a
+  // real network only when explicitly configured.
+  const suffix = environment === 'sandbox' ? 'SANDBOX' : 'PROD';
+  const inline = envFor('PRIVY_SIGNER_KEYS', environment);
+  let jwks: string;
+  let keys: PrivyKey[];
+  if (inline !== undefined) {
+    jwks = `.env PRIVY_SIGNER_KEYS_${suffix}`;
+    keys = parsePrivyKeys(`PRIVY_SIGNER_KEYS_${suffix}`, inline);
+  } else {
+    jwks = await setting('PRIVY_JWKS_URL', environment, () => SANDBOX_JWKS);
+    keys = await loadPrivyKeys(jwks);
+  }
   const owner = address(
     await setting('OWNER', environment, async () => (await ethers.getSigners())[0].address),
     `OWNER for ${environment}`,

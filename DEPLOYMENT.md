@@ -21,15 +21,19 @@ chain is one line in `deploy.config.ts`.
 
 Three facts to keep in mind throughout:
 
-- **The contract configuration is permanent for a scheme and environment.** The owner, the Privy
-  key set, the initial attester, delays and refund windows are constructor values; with deterministic
-  deployment they decide the factory address, and the factory address decides every identity's
-  P2ID address. Changing any of them later means a new stack at new addresses. (Attesters can be
-  added and revoked afterwards by the verifier's owner; only the initial one is part of the address.)
-- **The Privy key set is read from the JWKS at deployment time.** Privy publishes two keys per app
-  and may sign with either, so `PviumIdentity` accepts the whole set. If Privy's JWKS changes
-  between two chains' deployments, the second would get different addresses; the script detects
-  that and refuses (see step 4). Keys Privy adds later are proposed by the owner and accepted
+- **The constructor configuration is permanent for a scheme and environment.** The owner, the Privy
+  key set, the initial attester and the *initial* delay and refund windows are constructor values;
+  with deterministic deployment they decide the factory address, and the factory address decides
+  every identity's P2ID address. Deploy every chain with the same values. Afterwards the attesters
+  (by the verifier's owner) and the delay and refund windows (by the factory owner, through the
+  timelocked `proposeConfig` → `activateConfig`) can change per chain without moving any address.
+- **The initial Privy key set is pinned in configuration.** `PRIVY_SIGNER_KEYS_SANDBOX` / `_PROD`
+  (in `.env`, with the same values committed in `.env.example`) list every key in each app's JWKS
+  as `kid:0x<x>:0x<y>`. Privy publishes two keys per app and may sign with either, so
+  `PviumIdentity` accepts the whole set; the PEM the dashboard shows is only one of them, so never
+  deploy from it alone. Never change these values once a stack is deployed from them: every later
+  chain of that environment must start from the same keys to get the same addresses (the script
+  refuses a mismatch, see step 4). `PRIVY_JWKS_URL_*` is only a fallback when the keys are unset. Keys Privy adds later are proposed by the owner and accepted
   after 7 days' public notice (`proposeSignerKey` → `activateSignerKey`), with no redeployment.
 - **Proofs made before the circuit's public inputs changed (the `recipient` input became the checked
   `wallet`) no longer verify.** Nothing was deployed, so the circuit is still version 1, but any
@@ -45,8 +49,7 @@ Three facts to keep in mind throughout:
   Create it first (Safe's deterministic deployment gives the same address everywhere when the
   owners, threshold and salt nonce match). An EOA works mechanically but is a single key holding
   the verifier registry.
-- The two Privy JWKS URLs (already filled in `.env.example`). A saved `jwks.json` path works too,
-  if you want to pin exactly what was deployed or the endpoint is unavailable.
+- The two Privy key sets, already filled in `.env.example` (`PRIVY_SIGNER_KEYS_*`).
 - A funded deployer account on each chain. It receives no privileges and does not affect addresses.
 
 ## Trying it locally first
@@ -73,8 +76,9 @@ optional `ALPHA_ATTESTER_SANDBOX` / `ALPHA_ATTESTER_PROD` (the factory alpha sig
 omitted or blank uses that environment's owner), and the deployer key. Set both attester
 variables to the same address if the roles should share a key. The factory alpha signer
 is a single address; constraint signers remain a verifier-managed set. Signer changes
-are immediate. The JWKS URLs are prefilled. Change the delays only if the defaults (7-day
-policy-change notice, 1–90 day refund windows) are not what you want. A default-verifier change
+are immediate. The JWKS URLs are prefilled. The defaults (7-day policy-change notice, 1–90 day
+refund windows) are starting values: the factory owner can change them later through the
+timelock, within limits fixed in the factory (delay 1–30 days, refund windows 1 hour–365 days). A default-verifier change
 always needs 14 days' notice; that is fixed in the factory.
 
 ## 2. Predict the addresses (no transactions)
@@ -213,6 +217,7 @@ On a testnet, with a test identity you control:
 | A new circuit version | Deploy a new `PviumIdentity` + `PviumVerifier`, `policy.approveVerifier` it (payers can opt in with `fundWith` at once), then `proposeDefaultVerifier` → wait 14 days → `activateDefaultVerifier`. Owners need a fresh proof under the new default before direct transfers follow | unchanged |
 | New attester, or turning screening on | `PviumVerifier.setConstraintSigner(attester, true)` from the verifier's owner; revoke old ones the same way. No new deployment | unchanged |
 | A third party's verifier | `policy.approveVerifier`; payers opt in with `fundWith` | unchanged |
+| Policy-change delay or refund-window bounds | `factory.proposeConfig(key, value)` (`0` delay, `1` min window, `2` max window) → wait the current delay → `activateConfig(key)`; `cancelConfig(key)` before then. Limits are fixed in the factory; existing vaults follow at once, existing deposits keep their window. Per chain: send it on every chain of the environment | unchanged |
 | A verifier is found unsafe | `policy.approveVerifier(v, false)`: claims under it freeze, refunds still work | unchanged |
 | Protocol fees, or permissionless verifier registration (staking) | Deploy a new `IP2IDPolicy`, then `factory.proposePolicy` → wait the delay → `activatePolicy`. Fees stay capped at the factory's fixed `MAX_FEE_BPS` (1%) and apply only to deposits made after the switch; the new policy's `collectFee` receives each fee at claim time, with the claimer's address, and decides who gets it (e.g. a verifier operator's share, a claim relayer's reward) | unchanged |
 | Vault, factory or launch-policy code changes before release | While no factory is recorded in `p2id.json`: rebuild, `embed-p2id.mjs --update`, deploy again (a superseded testnet record in `deployments/` must be moved aside first) | new addresses for the changed contracts |

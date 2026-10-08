@@ -44,7 +44,10 @@ interface IP2IDVault {
     event FeeCollected(address indexed verifier, address indexed token, address indexed claimer, uint256 amount, address policy);
 
     // setup (factory only, once)
-    function initialize(bytes32 nsHash, bytes32 saltCommitment, uint64 minRefundWindow, uint64 maxRefundWindow) external;
+    function initialize(bytes32 nsHash, bytes32 saltCommitment) external;
+    /// @notice Refund-window bounds for new deposits, read live from the factory. A deposit keeps the window it chose.
+    function minRefundWindow() external view returns (uint64);
+    function maxRefundWindow() external view returns (uint64);
 
     // funding
     /// @notice Fund under the factory's default verifier. A non-zero `constraint` can be used once per funder.

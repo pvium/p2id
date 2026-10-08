@@ -71,10 +71,13 @@ yarn fixtures   # after re-proving in ../circuit: refresh test fixtures + regene
   allowlist with no fee. Permissionless, stake-based verifier registration and protocol fees are
   later policies; switching to one never changes the vault or any address.
 - `src/PviumP2IdVaultFactory.sol` — deploys `PviumP2IDVaultProxy` with CREATE2 salted by identity hash,
-  initializes it in the same transaction, and provides policy and default-verifier settings.
-  Both settings change through a timelock:
+  initializes it in the same transaction, and provides policy, default-verifier and refund-window
+  settings. All change through a timelock:
   the policy after `policyChangeDelay` (7 days by default), the default verifier after a fixed
-  14 days (`DEFAULT_VERIFIER_DELAY`), since direct transfers follow it and have no refund path.
+  14 days (`DEFAULT_VERIFIER_DELAY`), since direct transfers follow it and have no refund path,
+  and the numeric settings (`policyChangeDelay`, `minRefundWindow`, `maxRefundWindow`) through
+  `proposeConfig(key, value)` → `activateConfig(key)` after the current delay, within limits fixed
+  in the bytecode. Vaults read the refund-window bounds live; each deposit keeps the window it chose.
   An identity's vault address is the low 160 bits of
   `keccak256(0xff ‖ factory ‖ identityHash ‖ keccak256(PviumP2IDVaultProxy creationCode))`
   (`vaultFor`, `initCodeHash`), so payers can derive it offline and pay before the vault exists.

@@ -216,9 +216,14 @@ export async function deployStack(
     signer,
     { name: 'pviumVerifier', log },
   );
+  // The launch policy binds once to its factory (setFactory), so a policy must never be shared
+  // by two factory builds. Its salt therefore commits to the factory's creation code: any factory
+  // change yields a fresh policy (and so a fresh factory), still identical on every chain.
+  const factoryCodeHash = ethers.keccak256((await ethers.getContractFactory('PviumP2IdVaultFactory')).bytecode);
+  const policySalt = ethers.keccak256(ethers.AbiCoder.defaultAbiCoder().encode(['bytes32', 'bytes32'], [salt, factoryCodeHash]));
   const policy = await deployDeterministic(
     await initCodeOf('PviumP2IDPolicy', [p.owner, [pviumVerifier]]),
-    salt,
+    policySalt,
     signer,
     { name: 'policy', log },
   );
