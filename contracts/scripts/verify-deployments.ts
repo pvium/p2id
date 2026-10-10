@@ -3,6 +3,7 @@
 //   yarn verify --network baseSepolia                       # every deployments/*.<chainId>.json for that chain
 //   DEPLOYMENT=deployments/pvium.vault.v1.sandbox.84532.json yarn verify --network baseSepolia
 //   VAULTS=0xabc…,0xdef… yarn verify --network bsc          # also vault proxies (no constructor args)
+//   VAULT=0xabc… yarn verify:vault --network base           # only the given vault(s), linked to their implementation
 //   DRY_RUN=1 yarn verify --network base                    # plan only: no explorer calls
 //
 // Reads each contract's address and constructor arguments from the deployment record (written by
@@ -63,6 +64,34 @@ export function vaultTarget(address: string): Target {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Refuse anything that is not a P2ID vault proxy, naming it when it is a recorded stack contract. */
+async function checkIsVault(address: string, records: any[]): Promise<string> {
+  const known = records.flatMap((r) => Object.entries(r).filter(([, v]) => typeof v === 'string' && v.toLowerCase() === address.toLowerCase()).map(([k]) => `${k} of ${r.scheme}/${r.environment}`));
+  const proxy = new ethers.Contract(address, ['function implementation() view returns (address)', 'function factory() view returns (address)'], ethers.provider);
+  try {
+    const [impl, factory] = await Promise.all([proxy.implementation(), proxy.factory()]);
+    const owner = records.find((r) => r.factory?.toLowerCase() === String(factory).toLowerCase());
+    if (!owner) throw new Error(`its factory ${factory} is not in any deployment record for this chain`);
+    return impl as string;
+  } catch (err) {
+    const what = known.length ? `it is the ${known.join(', ')}, not a vault` : `it does not answer implementation()/factory() like a P2ID vault proxy (${(err as Error).message.split('\n')[0]})`;
+    throw new Error(`${address}: ${what}. Use \`yarn verify\` for stack contracts.`);
+  }
+}
+
+/** Ask the explorer to treat a verified ERC-1967 proxy as a proxy of `implementation` (Read/Write as Proxy). */
+async function linkProxy(chainId: bigint, address: string, implementation: string, apiKey: string): Promise<string> {
+  const body = new URLSearchParams({ module: 'contract', action: 'verifyproxycontract', address, expectedimplementation: implementation });
+  const res = await (await fetch(`${ETHERSCAN_V2}?chainid=${chainId}&apikey=${apiKey}`, { method: 'POST', body })).json() as { status: string; result: string };
+  if (res.status !== '1') return `proxy link not submitted: ${res.result}`;
+  for (let i = 0; i < 6; i++) {
+    await sleep(3000);
+    const check = await (await fetch(`${ETHERSCAN_V2}?chainid=${chainId}&module=contract&action=checkproxyverification&guid=${res.result}&apikey=${apiKey}`)).json() as { status: string; result: string };
+    if (check.status === '1' || !/pending|in queue/i.test(check.result)) return check.result;
+  }
+  return 'proxy link submitted; still pending on the explorer';
+}
 const RATE_LIMITED = /rate limit|max calls per sec/i;
 
 /** Whether the explorer has an exact source match for `address`; null when it could not be asked.
@@ -118,10 +147,14 @@ async function main() {
       : [];
   if (files.length === 0) throw new Error(`no deployment record for chain ${chainId} (${network.name}) in ${DEPLOYMENTS}; set DEPLOYMENT=<file>`);
 
+  const vaultsOnly = process.env.VAULTS_ONLY === '1';
   const targets: Target[] = [];
+  const records: any[] = [];
   for (const file of files) {
     const record = JSON.parse(readFileSync(file, 'utf8'));
     if (BigInt(record.chainId) !== chainId) throw new Error(`${file} is for chain ${record.chainId}, not ${chainId}`);
+    records.push(record);
+    if (vaultsOnly) continue;
     console.log(`record ${file}: ${record.scheme} / ${record.environment}`);
     targets.push(...targetsOf(record));
   }
@@ -132,9 +165,13 @@ async function main() {
     const factoryAddress = files.length ? JSON.parse(readFileSync(files[0], 'utf8')).factory : undefined;
     targets.push({ name: contract.split(':')[1], contract, address: ethers.getAddress(address), args: [factoryAddress] });
   }
-  for (const v of (process.env.VAULTS ?? '').split(',').map((s) => s.trim()).filter(Boolean)) {
-    targets.push(vaultTarget(v));
+  const vaultImpls = new Map<string, string>();
+  for (const v of `${process.env.VAULTS ?? ''},${process.env.VAULT ?? ''}`.split(',').map((s) => s.trim()).filter(Boolean)) {
+    const t = vaultTarget(v);
+    vaultImpls.set(t.address, await checkIsVault(t.address, records));
+    targets.push(t);
   }
+  if (vaultsOnly && vaultImpls.size === 0) throw new Error('set VAULT=0x… (or VAULTS=0x…,0x…) to the vault address(es) to verify');
 
   let failed = 0;
   for (const t of targets) {
@@ -148,23 +185,29 @@ async function main() {
       continue;
     }
     const verified = await isVerified(chainId, t.address, apiKey);
-    if (verified === true) {
+    let ok = verified === true;
+    if (ok) {
       console.log(`${label}  already verified, skipped`);
-      continue;
-    }
-    if (verified === null) console.log(`${label}  could not check verification status; submitting anyway`);
-    try {
-      await submit(t);
-      console.log(`${label}  verified`);
-    } catch (err) {
-      const msg = (err as Error).message ?? String(err);
-      if (/already verified/i.test(msg)) {
-        console.log(`${label}  already verified, skipped`);
-      } else {
-        failed++;
-        console.error(`${label}  FAILED: ${msg.split('\n')[0]}`);
+    } else {
+      if (verified === null) console.log(`${label}  could not check verification status; submitting anyway`);
+      try {
+        await submit(t);
+        console.log(`${label}  verified`);
+        ok = true;
+      } catch (err) {
+        const msg = (err as Error).message ?? String(err);
+        if (/already verified/i.test(msg)) {
+          console.log(`${label}  already verified, skipped`);
+          ok = true;
+        } else {
+          failed++;
+          console.error(`${label}  FAILED: ${msg.split('\n')[0]}`);
+        }
       }
     }
+    // A vault proxy is also linked to its implementation, so the explorer offers Read/Write as Proxy.
+    const impl = vaultImpls.get(t.address);
+    if (ok && impl) console.log(`${label}  proxy of ${impl}: ${await linkProxy(chainId, t.address, impl, apiKey)}`);
     await sleep(1000); // explorer rate limit
   }
   if (failed > 0) throw new Error(`${failed} contract(s) failed verification`);

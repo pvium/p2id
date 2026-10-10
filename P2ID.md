@@ -70,6 +70,12 @@ separators, or a length prefix.
 - Normalization MUST NOT trim whitespace or perform Unicode case folding.
 - `phone` values MUST use E.164 form, including the leading `+`.
 - Handle values MUST omit a leading `@`.
+- A `discord` value MUST be the username exactly as Discord records it, including its
+  discriminator. Discord records migrated (unique) usernames with the discriminator `#0`, so the
+  value for the user `alice` is `alice#0`; `alice` alone is a different identity whose vault no
+  Discord account can claim. A legacy username keeps its four-digit discriminator
+  (`alice#1234`). Clients SHOULD append `#0` to a Discord username entered without a
+  discriminator before hashing.
 - An EVM `wallet` value MUST be a `0x`-prefixed hexadecimal address. It is ASCII-lowercased
   before hashing. A wallet value without `0x` is not lowercased.
 
@@ -81,7 +87,7 @@ separators, or a length prefix.
 | 1 | `phone` | E.164 phone number | unchanged |
 | 2 | `google` | Google account email | ASCII lowercase |
 | 3 | `x` | X handle | ASCII lowercase |
-| 4 | `discord` | Discord username | ASCII lowercase |
+| 4 | `discord` | Discord username with discriminator (`alice#0`) | ASCII lowercase |
 | 5 | `github` | GitHub username | ASCII lowercase |
 | 6 | `linkedin` | LinkedIn account email | ASCII lowercase |
 | 7 | `apple` | Apple ID email | ASCII lowercase |

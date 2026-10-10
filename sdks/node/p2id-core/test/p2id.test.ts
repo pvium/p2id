@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { checksumAddress, identityHash, p2idAddress, p2idAddressForHash, p2idScheme, P2ID_SCHEME, P2ID_SCHEMES } from '../src/p2id.js';
-import { IdentityType } from '../src/identity.js';
+import { IdentityType, completeIdentityValue, normalizeIdentityValue } from '../src/identity.js';
 import { identityTypeName } from '../src/identityNames.js';
 
 // From contracts/test: identityHash('email', 'test-9988@privy.io') and the vault fixture.
@@ -77,4 +77,20 @@ test('the address takes no chain: one factory per environment, and a missing one
 test('EIP-55 checksum', () => {
   assert.equal(checksumAddress('0xfb6916095ca1df60bb79ce92ce3ea74c37c5d359'), '0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359');
   assert.equal(checksumAddress('0xA01b6E60D51eDB3fEB9f86a62b846f4F90070f98'), '0xA01b6E60D51eDB3fEB9f86a62b846f4F90070f98');
+});
+
+test('Discord usernames are completed with the #0 discriminator Discord records', () => {
+  const full = identityHash(IdentityType.Discord, 'alice#0');
+  assert.equal(identityHash(IdentityType.Discord, 'alice'), full);
+  assert.equal(identityHash(IdentityType.Discord, 'Alice'), full); // still case-insensitive
+  assert.equal(normalizeIdentityValue(IdentityType.Discord, 'Alice'), 'alice#0');
+  assert.equal(completeIdentityValue(IdentityType.Discord, 'alice#0'), 'alice#0'); // already appended by the integrator: unchanged
+  assert.equal(normalizeIdentityValue(IdentityType.Discord, 'Alice#0'), 'alice#0');
+  assert.equal(completeIdentityValue(IdentityType.Discord, 'alice#1234'), 'alice#1234'); // legacy discriminator kept
+  assert.notEqual(identityHash(IdentityType.Discord, 'alice#1234'), full);
+  assert.equal(completeIdentityValue(IdentityType.Github, 'alice'), 'alice'); // other types untouched
+  assert.equal(
+    p2idAddress({ identityType: 'discord', identityValue: 'alice', factory: FACTORY }),
+    p2idAddress({ identityType: 'discord', identityValue: 'alice#0', factory: FACTORY }),
+  );
 });

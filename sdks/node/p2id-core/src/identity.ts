@@ -31,12 +31,24 @@ export function isCaseInsensitive(type: IdentityType): boolean {
 }
 
 /**
- * Apply the circuit's normalisation to an identity value: ASCII-lowercase for case-insensitive
- * types and for EVM (`0x…`) wallet addresses; base58 (Solana) addresses are left untouched.
+ * Complete a value to the form the identity provider records. Discord stores migrated (unique)
+ * usernames with the discriminator `#0` (`alice#0`), and that full form is what a proof hashes,
+ * so a bare Discord username gets `#0` appended. A value that already has a discriminator
+ * (`alice#0`, or a legacy `alice#1234`) is left as is. Every other type is unchanged.
+ */
+export function completeIdentityValue(type: IdentityType, value: string): string {
+  return type === IdentityType.Discord && !value.includes('#') ? `${value}#0` : value;
+}
+
+/**
+ * The value as it is hashed: completed (see completeIdentityValue), then the protocol's
+ * normalisation: ASCII-lowercase for case-insensitive types and for EVM (`0x…`) wallet
+ * addresses; base58 (Solana) addresses are left untouched.
  */
 export function normalizeIdentityValue(type: IdentityType, value: string): string {
-  const lower = isCaseInsensitive(type) || (type === IdentityType.Wallet && value.startsWith('0x'));
-  return lower ? value.replace(/[A-Z]/g, (c) => c.toLowerCase()) : value;
+  const complete = completeIdentityValue(type, value);
+  const lower = isCaseInsensitive(type) || (type === IdentityType.Wallet && complete.startsWith('0x'));
+  return lower ? complete.replace(/[A-Z]/g, (c) => c.toLowerCase()) : complete;
 }
 
 /**
