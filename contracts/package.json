@@ -8,6 +8,7 @@
     "test": "hardhat test",
     "fixtures": "sh scripts/refresh-fixtures.sh",
     "verify": "hardhat run scripts/verify-deployments.ts",
+    "verify:vault": "VAULTS_ONLY=1 hardhat run scripts/verify-deployments.ts",
     "layout": "hardhat run scripts/check-storage-layout.ts",
     "deploy:implementation": "hardhat run scripts/deploy-vault-implementation.ts"
   },
