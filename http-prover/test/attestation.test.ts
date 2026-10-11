@@ -122,7 +122,13 @@ test('generates an attestation the SDK verifies', { skip: !canProve && 'bb / cir
       attestation: { proof: a.proof, publicInputs: a.publicInputs, wallet: a.wallet! },
       signer: readFileSync(pemFile, 'utf8'), identityType: 'email', identityValue: 'TEST-9988@privy.io',
     });
-    assert.deepEqual(ok, { valid: true, wallet: WALLET, issuedAt: 1789240094 });
+    assert.deepEqual(ok, { valid: true, wallet: WALLET, issuedAt: 1789240094, circuitVersion: SERVED_VERSION });
+    // As a caller would pass it: with the prover's circuitVersion and vkHash selecting the key.
+    const withMeta = await verifyIdentity({
+      attestation: { proof: a.proof, publicInputs: a.publicInputs, wallet: a.wallet!, circuitVersion: a.circuitVersion, vkHash: a.vkHash },
+      signer: readFileSync(pemFile, 'utf8'), identityType: 'email', identityValue: 'test-9988@privy.io',
+    });
+    assert.deepEqual(withMeta, { valid: true, wallet: WALLET, issuedAt: 1789240094, circuitVersion: SERVED_VERSION });
     const wrong = await verifyIdentity({
       attestation: { proof: a.proof, publicInputs: a.publicInputs, wallet: '0x899BA183F2c55BF9C627D9Af2984fbdED2E64311' },
       signer: readFileSync(pemFile, 'utf8'), identityType: 'email', identityValue: 'test-9988@privy.io',

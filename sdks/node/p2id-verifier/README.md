@@ -75,13 +75,13 @@ Pass the response to `verifyIdentity` with `signer` set to your Privy app's JWKS
 
 | `result` | Meaning |
 | --- | --- |
-| `{ valid: true, wallet, issuedAt }` | The signed token links the requested identity and wallet. `issuedAt` is the token's issue time. |
+| `{ valid: true, wallet, issuedAt, circuitVersion }` | The signed token links the requested identity and wallet. `issuedAt` is the token's issue time; `circuitVersion` is the circuit whose verification key accepted the proof. |
 | `reason: 'identity value mismatch'` / `'identity type mismatch'` | The public inputs do not match the requested identity. |
 | `reason: 'wallet mismatch'` | The wallet does not match the public inputs. |
 | `reason: 'attestation carries no wallet'` | The public inputs contain no wallet commitment. |
 | `reason: 'not signed by a trusted key'` | The signing key is not accepted by the configured `signer`. |
 | `reason: 'invalid proof'` | The proof does not verify. |
-| `reason: 'attestation is for circuit version N; …'` or `'… different circuit build …'` | The declared circuit version or verification-key hash differs from this release (see [Versioning](#versioning)). |
+| `reason: 'attestation is for circuit version N; …'` or `'… circuit build …'` | The declared circuit version or verification-key hash is not one this entry point verifies (see [Versioning](#versioning)). |
 | `reason: 'malformed attestation: …'` | The public inputs could not be decoded. |
 | `reason: 'unknown identity type "…"'` / `'unrecognised signer: …'` | The identity type or signer argument is unsupported. |
 
@@ -187,7 +187,8 @@ require one; for identity payees, retry resolution when the proof is available.
 | `AttestationSigner`, `PVIUM_ENVIRONMENTS` | Signer presets, app IDs, JWKS URLs and pinned keys |
 | `decodeClaim(publicInputs)`, `toPublicInputFields`, `PUBLIC_INPUT_COUNT` | Decode and format public inputs without proof verification |
 | `shutdown()` | Release the verification backend |
-| `CIRCUIT_VERSION`, `VK_SHA256` | Supported circuit version and verification-key hash |
+| `CIRCUIT_VERSIONS` | Every circuit version this release verifies |
+| `CIRCUIT_VERSION`, `VK_SHA256` | The newest circuit version and its verification-key hash (on `/v1`, `/v2`: that entry point's version) |
 | `IdentityType`, `IdentityTypeName` | Identity types re-exported from `@pvium/p2id-core` |
 
 Proof bytes and public inputs accept `Uint8Array` or base64 strings. Public inputs also accept
@@ -195,8 +196,21 @@ an array of hexadecimal fields.
 
 ## Versioning
 
-Each release includes a verification key for one circuit version (`CIRCUIT_VERSION`).
+Each release bundles the verification key of every circuit version it supports
+(`CIRCUIT_VERSIONS`), so one install verifies attestations from all of them.
 `@aztec/bb.js` is pinned to the matching Barretenberg version (`5.0.0`).
-Preserve `circuitVersion` and `vkHash` when passing attestations so mismatches can be reported
-before proof verification. Circuit changes require a new package release; use the release
-matching the attestation's circuit version and verification key.
+
+The package root accepts any supported version. It selects the verification key from the
+attestation's `circuitVersion`, or else its `vkHash`; with neither, it tries each version, newest
+first. Preserve both fields when passing attestations: they select the key directly and let a
+mismatch be reported before proof verification.
+
+To accept a single circuit version only, import its entry point:
+
+```ts
+import { verifyIdentity } from '@pvium/p2id-verifier/v1'; // circuit version 1 only
+import { verifyIdentity as verifyV2 } from '@pvium/p2id-verifier/v2'; // circuit version 2 only
+```
+
+Each entry point has the same API as the root. A new circuit version is added in a new package
+release, alongside the existing ones.
