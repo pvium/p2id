@@ -1,0 +1,16 @@
+{
+  "version": "1.0",
+  "chainId": "84532",
+  "createdAt": 1791758353138,
+  "meta": {
+    "name": "Approve circuit v2 verifier",
+    "description": "policy.approveVerifier(0xBAd220346ba9800627f83009234F955eB1738110, true): payers can fundWith the circuit v2 verifier"
+  },
+  "transactions": [
+    {
+      "to": "0x7D915675295772A4bEAEfc05Ef5BB0c4ECaC33B7",
+      "value": "0",
+      "data": "0xa7d6619d000000000000000000000000bad220346ba9800627f83009234f955eb17381100000000000000000000000000000000000000000000000000000000000000001"
+    }
+  ]
+}

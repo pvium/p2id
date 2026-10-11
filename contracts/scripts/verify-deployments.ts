@@ -30,6 +30,8 @@ export function targetsOf(r: any): Target[] {
   const z = ethers.ZeroAddress;
   const keys: { x: string; y: string }[] = r.privyKeys; // already sorted as the constructor received them
   const attester: string = r.config.attester;
+  // A later circuit version's verifier set (deploy-verifier.ts): its first five contracts only.
+  if (r.kind === 'verifier-set') return targetsOf({ ...r, kind: undefined }).slice(0, 5);
   return [
     { name: 'RelationsLib', contract: 'src/PviumZKVerifier.sol:RelationsLib', address: r.relationsLib, args: [] },
     { name: 'ZKTranscriptLib', contract: 'src/PviumZKVerifier.sol:ZKTranscriptLib', address: r.transcriptLib, args: [] },

@@ -175,6 +175,71 @@ export async function deployStack(
   if (!/^pvium\.vault\.v[1-9][0-9]*$/.test(p.scheme)) throw new Error(`bad scheme "${p.scheme}" (expected pvium.vault.vN)`);
   const nsHash = ethers.id(p.scheme);
   const salt = p.salt ?? nsHash;
+  const { relationsLib, transcriptLib, zkVerifier, pviumIdentity, pviumVerifier } = await deployVerifierSet(p, signer, log);
+  // The launch policy binds once to its factory (setFactory), so a policy must never be shared
+  // by two factory builds. Its salt therefore commits to the factory's creation code: any factory
+  // change yields a fresh policy (and so a fresh factory), still identical on every chain.
+  const factoryCodeHash = ethers.keccak256((await ethers.getContractFactory('PviumP2IdVaultFactory')).bytecode);
+  const policySalt = ethers.keccak256(ethers.AbiCoder.defaultAbiCoder().encode(['bytes32', 'bytes32'], [salt, factoryCodeHash]));
+  const policy = await deployDeterministic(
+    await initCodeOf('PviumP2IDPolicy', [p.owner, [pviumVerifier]]),
+    policySalt,
+    signer,
+    { name: 'policy', log },
+  );
+  const factory = await deployDeterministic(
+    await initCodeOf('PviumP2IdVaultFactory', [
+      p.owner,
+      nsHash,
+      policy,
+      pviumVerifier,
+      p.policyChangeDelay,
+      p.minRefundWindow,
+      p.maxRefundWindow,
+      !p.alphaAttester || p.alphaAttester === ethers.ZeroAddress ? p.owner : p.alphaAttester,
+    ]),
+    salt,
+    signer,
+    { name: 'factory', log },
+  );
+  return {
+    relationsLib,
+    transcriptLib,
+    zkVerifier,
+    pviumIdentity,
+    pviumVerifier,
+    policy,
+    factory,
+    baseImplementation: ethers.getCreateAddress({ from: factory, nonce: 1 }),
+  };
+}
+
+/** What a circuit version's verifier set needs: a subset of StackParams. */
+export type VerifierSetParams = Pick<StackParams, 'scheme' | 'salt' | 'owner' | 'circuitVersion' | 'vkHash' | 'signerKeys' | 'attester'>;
+
+export interface VerifierSetAddresses {
+  relationsLib: string;
+  transcriptLib: string;
+  zkVerifier: string;
+  pviumIdentity: string;
+  pviumVerifier: string;
+}
+
+/**
+ * Deploy (or find) one circuit version's verifier set: the Honk libraries, the generated
+ * PviumZKVerifier (the vk is compiled in), PviumIdentity and PviumVerifier. The full stack deploys
+ * its first set through this; a later circuit version deploys only this, against the existing
+ * factory, and gets new addresses because the verifier bytecode differs. Same params + same build
+ * = same addresses on every chain. With `signer === null` nothing is sent.
+ */
+export async function deployVerifierSet(
+  p: VerifierSetParams,
+  signer: Signer | null,
+  log?: DeployLog,
+): Promise<VerifierSetAddresses> {
+  if (signer !== null) await ensureDeterministicDeployer();
+  if (!/^pvium\.vault\.v[1-9][0-9]*$/.test(p.scheme)) throw new Error(`bad scheme "${p.scheme}" (expected pvium.vault.vN)`);
+  const salt = p.salt ?? ethers.id(p.scheme);
   const relationsLib = await deployDeterministic(
     await initCodeOf('RelationsLib', []),
     salt,
@@ -216,42 +281,7 @@ export async function deployStack(
     signer,
     { name: 'pviumVerifier', log },
   );
-  // The launch policy binds once to its factory (setFactory), so a policy must never be shared
-  // by two factory builds. Its salt therefore commits to the factory's creation code: any factory
-  // change yields a fresh policy (and so a fresh factory), still identical on every chain.
-  const factoryCodeHash = ethers.keccak256((await ethers.getContractFactory('PviumP2IdVaultFactory')).bytecode);
-  const policySalt = ethers.keccak256(ethers.AbiCoder.defaultAbiCoder().encode(['bytes32', 'bytes32'], [salt, factoryCodeHash]));
-  const policy = await deployDeterministic(
-    await initCodeOf('PviumP2IDPolicy', [p.owner, [pviumVerifier]]),
-    policySalt,
-    signer,
-    { name: 'policy', log },
-  );
-  const factory = await deployDeterministic(
-    await initCodeOf('PviumP2IdVaultFactory', [
-      p.owner,
-      nsHash,
-      policy,
-      pviumVerifier,
-      p.policyChangeDelay,
-      p.minRefundWindow,
-      p.maxRefundWindow,
-      !p.alphaAttester || p.alphaAttester === ethers.ZeroAddress ? p.owner : p.alphaAttester,
-    ]),
-    salt,
-    signer,
-    { name: 'factory', log },
-  );
-  return {
-    relationsLib,
-    transcriptLib,
-    zkVerifier,
-    pviumIdentity,
-    pviumVerifier,
-    policy,
-    factory,
-    baseImplementation: ethers.getCreateAddress({ from: factory, nonce: 1 }),
-  };
+  return { relationsLib, transcriptLib, zkVerifier, pviumIdentity, pviumVerifier };
 }
 
 /** For each contract of the stack, whether it already has code on the current network. */

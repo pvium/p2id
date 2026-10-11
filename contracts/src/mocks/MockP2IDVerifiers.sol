@@ -187,3 +187,20 @@ contract MockNoAlphaVault {
     constructor(address factory_) { factory = factory_; }
     function supportsAlphaGuard() external pure returns (bool) { return false; }
 }
+
+/// @dev ERC-1271 contract signer (e.g. a provider's smart wallet) that accepts its owner's ECDSA signatures.
+contract MockERC1271Signer {
+    address public immutable signerOwner;
+
+    constructor(address _owner) {
+        signerOwner = _owner;
+    }
+
+    function isValidSignature(bytes32 digest, bytes calldata signature) external view returns (bytes4) {
+        if (signature.length != 65) return 0xffffffff;
+        bytes32 r = bytes32(signature[0:32]);
+        bytes32 s = bytes32(signature[32:64]);
+        uint8 v = uint8(signature[64]);
+        return ecrecover(digest, v, r, s) == signerOwner ? bytes4(0x1626ba7e) : bytes4(0xffffffff);
+    }
+}
