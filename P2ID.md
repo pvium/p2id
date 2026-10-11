@@ -85,12 +85,12 @@ separators, or a length prefix.
 | --: | --- | --- | :---: |
 | 0 | `email` | email address | ASCII lowercase |
 | 1 | `phone` | E.164 phone number | unchanged |
-| 2 | `google` | Google account email | ASCII lowercase |
+| 2 | `google` (deprecated) | Google account email | ASCII lowercase |
 | 3 | `x` | X handle | ASCII lowercase |
 | 4 | `discord` | Discord username with discriminator (`alice#0`) | ASCII lowercase |
 | 5 | `github` | GitHub username | ASCII lowercase |
-| 6 | `linkedin` | LinkedIn account email | ASCII lowercase |
-| 7 | `apple` | Apple ID email | ASCII lowercase |
+| 6 | `linkedin` (deprecated) | LinkedIn account email | ASCII lowercase |
+| 7 | `apple` (deprecated) | Apple ID email | ASCII lowercase |
 | 8 | `telegram` | Telegram username | ASCII lowercase |
 | 9 | `tiktok` | TikTok username | ASCII lowercase |
 | 10 | `instagram` | Instagram username | ASCII lowercase |
@@ -99,6 +99,13 @@ separators, or a length prefix.
 
 The type table is append-only. A new type MUST receive an unused identifier. An existing
 identifier MUST NOT be reassigned or reused.
+
+`google` (2), `linkedin` (6), and `apple` (7) are deprecated for new identities. Use `email`
+(0) for an email address regardless of the authentication provider. The verifier determines
+which evidence authenticates that address. The deprecated IDs remain reserved for legacy
+commitments; they MUST NOT be reassigned or silently converted to `email`, which produces a
+different commitment and vault address. The Node SDK rejects these types for identity hashing
+and address generation.
 
 ## Vault address
 

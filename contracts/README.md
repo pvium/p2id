@@ -102,8 +102,8 @@ yarn fixtures   # after re-proving in ../circuit: refresh test fixtures + regene
   source-level hazards. These checks do not establish behavioral safety or compatibility with
   storage appended by other versions. `UPDATE=1 yarn layout` rewrites the snapshot; do so only
   before deployment.
-- `scripts/deploy-vault-implementation.ts` — deterministic deployment and registration activation;
-  see [the deployment workflow](../DEPLOYMENT.md#deterministic-vault-implementations).
+- [`scripts/deploy-vault-implementation.ts`](scripts/deploy-vault-implementation.ts) — deterministic
+  deployment and registration activation.
 - `src/interfaces/` — `IPviumIdentity`, `IP2IDVault`, `IP2IdVaultFactory`, `IP2IDVerifier`, `IP2IDPolicy`: what developers import.
 - `test/fixtures/` — a proof, its public inputs and the vk hash for the sample email identity,
   copied from `../circuit/target/proof_email`, plus the real sample Privy token and Privy's public key.
@@ -190,8 +190,8 @@ The factory stores one alpha signer; constraint signer membership remains in the
 The Privy key set comes from the JWKS, so `PviumIdentity` accepts every key the app
 may sign with.
 
-The full runbook, including configuration, prediction, verification and what to do afterwards, is
-in [DEPLOYMENT.md](../DEPLOYMENT.md). Run it once per chain **with identical values**. It deploys the two Honk libraries,
+The deployment script reads [`.env.example`](.env.example) settings. Run it once per chain
+**with identical values**. It deploys the two Honk libraries,
 `PviumZKVerifier`, `PviumIdentity`, `PviumVerifier` and `PviumP2IdVaultFactory`, skips anything
 already deployed, and prints the addresses. Record `factory` under the scheme (`pvium.vault.v1`) in
 `sdks/node/p2id-core/src/p2id.json`, which freezes that scheme; the SDK then derives every identity's address

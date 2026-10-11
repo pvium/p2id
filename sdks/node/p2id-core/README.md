@@ -4,6 +4,10 @@ Derive deterministic EVM vault addresses from email addresses, social handles an
 identities. Addresses can receive funds before the recipient registers or the vault is deployed.
 Claims pay the wallet bound by an accepted identity proof.
 
+Use Pvium’s reference deployment or your own factory. A different factory address creates
+a separate set of deterministic vault addresses for the same identities, comparable to
+a different payment namespace. The SDK defaults to Pvium’s production factory.
+
 Learn more about P2ID in the [P2ID protocol specification](https://github.com/pvium/zkid/blob/main/P2ID.md).
 
 The package includes identity hashing, address derivation and Solidity sources. For off-chain
@@ -16,7 +20,7 @@ proof verification, use
 yarn add @pvium/p2id-core
 ```
 
-Requires Node.js 20+ or a browser with Web Crypto support.
+Requires Node.js 20+ or a browser with support for ES modules and `TextEncoder`.
 
 ## Quick start
 
@@ -44,11 +48,16 @@ p2idAddress({
 p2idAddress({
   identityType: IdentityType.Github,
   identityValue: 'octocat',
-  factory: '0xYourFactory…',
+  factory: yourFactoryAddress, // Your deployed factory address, typed as `0x${string}`.
 });
 ```
 
-Derivation requires a recorded factory for the selected environment or an explicit `factory`.
+The SDK includes factory addresses for Pvium's environments; an explicit `factory` overrides
+that address. It still uses the selected scheme's vault creation-code hash. For your own
+factory, confirm `factory.initCodeHash()` matches `p2idScheme().vaultInitCodeHash` and compare
+the result with `factory.vaultFor(identityHash)`. If your proxy bytecode differs, use your
+actual creation-code hash with the protocol formula or read the address from the factory.
+Address derivation does not check on-chain deployment or whether a recipient can produce a proof.
 
 ## Pay an identity
 
@@ -68,7 +77,7 @@ const to = p2idAddress({
 });
 
 // the native coin (BNB on BNB Chain, ETH on Base)
-await signer.sendTransaction({ to, value: ethers.parseEther('0.1') });
+await (await signer.sendTransaction({ to, value: ethers.parseEther('0.1') })).wait();
 
 // an ERC-20
 const USDC = '0x…'; // the token's contract address on the chain you are paying on
@@ -77,7 +86,7 @@ const usdc = new ethers.Contract(
   ['function transfer(address to, uint256 amount) returns (bool)'],
   signer,
 );
-await usdc.transfer(to, 25_000_000n); // 25 USDC (6 decimals)
+await (await usdc.transfer(to, 25_000_000n)).wait(); // 25 USDC (6 decimals)
 ```
 
 Direct transfers have no refund path. Funds can be claimed after vault deployment and identity
@@ -100,6 +109,7 @@ const factory = new ethers.Contract(
   p2idScheme().factories.production!, // or .sandbox on testnets
   [
     'function fund(bytes32 identityHash, address token, uint256 amount, bytes32 constraint, uint64 refundWindow, bytes32 ref) payable returns (address vault, uint256 depositId)',
+    'function fundWith(bytes32 identityHash, address verifier, address token, uint256 amount, bytes32 constraint, uint64 refundWindow, bytes32 ref) payable returns (address vault, uint256 depositId)',
   ],
   signer,
 );
@@ -111,9 +121,9 @@ const ref = ethers.id('invoice-42'); // application-defined bytes32; ethers.Zero
 
 // Native coin: use the zero address for `token` and send `amount` as transaction value.
 const amount = ethers.parseEther('0.1');
-await factory.fund(id, ethers.ZeroAddress, amount, NO_CONSTRAINT, WEEK, ref, {
+await (await factory.fund(id, ethers.ZeroAddress, amount, NO_CONSTRAINT, WEEK, ref, {
   value: amount,
-});
+})).wait();
 
 // an ERC-20: approve the factory, then fund
 const USDC = '0x…'; // the token's contract address
@@ -122,9 +132,14 @@ const usdc = new ethers.Contract(
   ['function approve(address spender, uint256 amount) returns (bool)'],
   signer,
 );
-await usdc.approve(await factory.getAddress(), 25_000_000n);
-await factory.fund(id, USDC, 25_000_000n, NO_CONSTRAINT, WEEK, ref);
+await (await usdc.approve(await factory.getAddress(), 25_000_000n)).wait();
+const receipt = await (await factory.fund(id, USDC, 25_000_000n, NO_CONSTRAINT, WEEK, ref)).wait();
 ```
+
+`fund` records the factory's default verifier for the deposit. Read the vault's `Funded`
+event from the transaction receipt to obtain the deposit ID and credited amount; sending
+a transaction does not return the Solidity function's return values. Fee-on-transfer tokens
+may credit less than the requested amount.
 
 `fund` accepts the same arguments for native coin and ERC-20 deposits:
 
@@ -146,8 +161,24 @@ the deposit by chain, vault address and `depositId`. The contract does not store
 or interpret its contents. The `memo` URI parameter remains application text, not an onchain
 funding argument.
 
-These funding signatures apply to `pvium.vault.v1`. Its factory addresses must be configured
-before use.
+### Choose a verifier for a deposit
+
+Use `fundWith` to select an approved verifier for that payment. With the ERC-20 approval
+and factory from the example above:
+
+```ts
+const receipt = await (await factory.fundWith(
+  id, verifierAddress, USDC, 25_000_000n, NO_CONSTRAINT, WEEK, ref,
+)).wait();
+```
+
+For native currency, pass `ethers.ZeroAddress` for the token and provide `{ value: amount }`.
+The selected verifier is stored with the deposit and does not change the vault address.
+
+When using Pvium's reference factory, contact Pvium to register your verifier before
+accepting payments through it. If you operate your own factory and policy, you control
+verifier approval. See the [setup guide](https://github.com/pvium/zkid/blob/main/DEPLOYMENT.md)
+for verifier requirements and both deployment options.
 
 ## Read balances
 
@@ -178,20 +209,35 @@ ID. The type table is append-only.
 | --------------------- | --: | ---------------- | ----------------------- | :--------: |
 | `Email`               |   0 | address          | `you@example.com`       |    yes     |
 | `Phone`               |   1 | E.164 number     | `+15551234567`          |     no     |
-| `Google`              |   2 | email            | `you@gmail.com`         |    yes     |
+| `Google` (deprecated)              |   2 | email            | `you@gmail.com`         |    yes     |
 | `X` (alias `Twitter`) |   3 | username, no `@` | `jack`                  |    yes     |
-| `Discord`             |   4 | username         | `wumpus`                |    yes     |
+| `Discord`             |   4 | username + discriminator | `wumpus#0`       |    yes     |
 | `Github`              |   5 | username         | `octocat`               |    yes     |
-| `Linkedin`            |   6 | email            | `you@example.com`       |    yes     |
-| `Apple`               |   7 | email            | `you@icloud.com`        |    yes     |
+| `Linkedin` (deprecated)            |   6 | email            | `you@example.com`       |    yes     |
+| `Apple` (deprecated)               |   7 | email            | `you@icloud.com`        |    yes     |
 | `Telegram`            |   8 | username         | `durov`                 |    yes     |
 | `Tiktok`              |   9 | username         | `charlidamelio`         |    yes     |
 | `Instagram`           |  10 | username         | `instagram`             |    yes     |
 | `Farcaster`           |  11 | username         | `dwr`                   |    yes     |
 | `Wallet`              |  12 | address          | `0xA01b…0f98` or base58 | only `0x…` |
 
-The same email produces different addresses under `Email`, `Google`, `Linkedin` and `Apple`.
-Select the type the recipient will use to authenticate.
+`Google` (2), `Linkedin` (6), and `Apple` (7) are deprecated. `identityHash`, `p2idAddress`,
+and `resolveIdentityType` reject their enum values and string names with an error directing
+you to `Email` / `'email'`. Authentication providers belong to the verifier's configuration,
+not separate email namespaces. Use `isDeprecatedIdentityType(type)` to inspect the deprecation
+flag; the enum values and name mappings remain available to identify legacy IDs.
+
+Do not replace the type of an existing commitment with `email`: the hash and vault address
+will differ. `p2idAddressForHash` can still derive an address from an existing commitment.
+
+Rejecting previously accepted types is a breaking SDK change and requires a major release.
+No automatic conversion of deprecated types is performed.
+
+For Discord, use the username with its discriminator: `wumpus#0` for a migrated username
+or `wumpus#1234` for a legacy one. The SDK appends `#0` when no discriminator is supplied.
+
+Normalization lowercases ASCII letters for the types shown above. It does not trim whitespace
+or perform Unicode case folding. Values must contain 1–128 UTF-8 bytes after completion.
 
 Handle reassignment can allow a new holder to claim remaining funds.
 
@@ -223,7 +269,9 @@ when the factory address and vault creation bytecode match. `production` and `sa
 separate factories.
 
 An address scheme fixes the identity domain, factory addresses and vault creation-code hash.
-Factory or vault bytecode changes require a new scheme. To derive an address under a previous
+A different factory address or vault proxy creation-code hash changes the derived addresses.
+A compatible vault implementation upgrade behind the same proxy leaves addresses unchanged.
+Pvium records a new address scheme when releasing a different factory/proxy deployment. To derive an address under a previous
 scheme, pass its name, for example `scheme: 'pvium.vault.v1'`.
 See [P2ID.md](https://github.com/pvium/zkid/blob/main/P2ID.md) for the protocol specification.
 
@@ -269,8 +317,9 @@ It reverts on failure and returns the attestation's issue time on success. Compu
 hash on chain binds the payout address to the proof. Verification costs approximately 4.4M gas
 with the current circuit.
 
-For a wallet on another chain, such as a base58 Solana address, pass
-`P2IDHash.walletHash("…")` with the wallet as a string.
+`P2IDHash.walletHash(string)` can hash a non-EVM wallet identifier, such as a base58 Solana
+address, for proof verification. The EVM payment example above requires an EVM payout wallet;
+hashing a non-EVM identifier does not enable an EVM vault to transfer assets to that chain.
 
 ## Exports
 
@@ -280,6 +329,7 @@ For a wallet on another chain, such as a base58 Solana address, pass
 | `p2idAddressForHash(hash, opts?)`                                                  | Derive a vault address from an identity hash                                                   |
 | `identityHash(type, value, scheme?)`                                               | Compute the identity commitment used as the vault salt                                         |
 | `P2ID_SCHEME`, `P2ID_SCHEMES`, `p2idScheme(name?)`                                 | Read address-scheme constants                                                                  |
-| `IdentityType`, `IdentityTypeName`, `IDENTITY_TYPE_BY_NAME`, `resolveIdentityType` | Identity type IDs and name mappings                                                            |
-| `normalizeIdentityValue`, `isCaseInsensitive`, `HASH_PREFIX`                       | Identity normalisation rules and hash prefix                                                   |
+| `IdentityType`, `IdentityTypeName`, `IDENTITY_TYPE_BY_NAME`, `resolveIdentityType` | Identity type IDs and name mappings (including reserved deprecated types)                                                            |
+| `isDeprecatedIdentityType(type)` | Check whether a type is deprecated for new identity generation |
+| `completeIdentityValue`, `normalizeIdentityValue`, `isCaseInsensitive`, `HASH_PREFIX`                       | Identity normalisation rules and hash prefix                                                   |
 | `checksumAddress`, `toHex`                                                         | Address checksum and hexadecimal encoding                                                      |

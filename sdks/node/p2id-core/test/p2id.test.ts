@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { checksumAddress, identityHash, p2idAddress, p2idAddressForHash, p2idScheme, P2ID_SCHEME, P2ID_SCHEMES } from '../src/p2id.js';
-import { IdentityType, completeIdentityValue, normalizeIdentityValue } from '../src/identity.js';
-import { identityTypeName } from '../src/identityNames.js';
+import { IdentityType, isDeprecatedIdentityType, identityHash as rawIdentityHash, completeIdentityValue, normalizeIdentityValue } from '../src/identity.js';
+import { identityTypeName, resolveIdentityType } from '../src/identityNames.js';
 
 // From contracts/test: identityHash('email', 'test-9988@privy.io') and the vault fixture.
 const EMAIL_COMMITMENT = '0xbcda0f09fa9732b2bfdea38199486b654a84e8e06085d7e364af8137f8d7deaf';
@@ -93,4 +93,32 @@ test('Discord usernames are completed with the #0 discriminator Discord records'
     p2idAddress({ identityType: 'discord', identityValue: 'alice', factory: FACTORY }),
     p2idAddress({ identityType: 'discord', identityValue: 'alice#0', factory: FACTORY }),
   );
+});
+
+
+test('deprecated email-provider types keep their IDs but cannot generate identities or addresses', () => {
+  for (const [name, type, id] of [
+    ['google', IdentityType.Google, 2],
+    ['linkedin', IdentityType.Linkedin, 6],
+    ['apple', IdentityType.Apple, 7],
+  ] as const) {
+    assert.equal(type, id);
+    assert.equal(identityTypeName(type), name);
+    assert.equal(isDeprecatedIdentityType(type), true);
+    const error = /is deprecated; use "email" for new identities/;
+    for (const input of [name, type]) {
+      assert.throws(() => resolveIdentityType(input), error);
+      assert.throws(() => identityHash(input, 'you@example.com'), error);
+      assert.throws(() => p2idAddress({ identityType: input, identityValue: 'you@example.com', factory: FACTORY }), error);
+    }
+    // The lower-level hashing implementation must not bypass the public API guard.
+    assert.throws(() => rawIdentityHash(type, 'you@example.com'), error);
+  }
+  for (const type of [IdentityType.Email, IdentityType.Phone, IdentityType.X, IdentityType.Discord,
+    IdentityType.Github, IdentityType.Telegram, IdentityType.Tiktok, IdentityType.Instagram,
+    IdentityType.Farcaster, IdentityType.Wallet]) {
+    assert.equal(isDeprecatedIdentityType(type), false);
+    assert.equal(resolveIdentityType(type), type);
+    assert.match(identityHash(type, type === IdentityType.Phone ? '+15551234567' : 'example'), /^0x[0-9a-f]{64}$/);
+  }
 });
