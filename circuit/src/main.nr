@@ -88,6 +88,8 @@ struct AccountRef {
     type_idx: u32,
     value_idx: u32,
     value_len: u32,
+    /// Account source (row of `identity::TYPE_NAMES`) the value is read from.
+    source: u8,
 }
 
 fn main(
@@ -115,6 +117,9 @@ fn main(
     value_idx: u32,
     // Byte length of the identity value.
     value_len: u32,
+    // Account source holding the value (see `identity.nr`): `identity_type` itself, or for an
+    // email a `google_oauth`, `linkedin_oauth` or `apple_oauth` account carrying the address.
+    source_type: u8,
     // Optional second slot: a `wallet` account from the same token. All zero = unused.
     wallet_acct_start: u32,
     wallet_acct_end: u32,
@@ -209,7 +214,7 @@ fn main(
         payload_len,
         in_string,
         la_value_start,
-        AccountRef { acct_start, acct_end, type_idx, value_idx, value_len },
+        AccountRef { acct_start, acct_end, type_idx, value_idx, value_len, source: source_type },
         identity_type,
         true,
     )
@@ -226,6 +231,7 @@ fn main(
             type_idx: wallet_type_idx,
             value_idx: wallet_value_idx,
             value_len: wallet_value_len,
+            source: identity::WALLET,
         },
         identity::WALLET,
         has_wallet,
@@ -276,7 +282,8 @@ struct ProvenAccount {
     evm_hex: bool,
 }
 
-/// Check that `a` points at a flat account object of type `identity_type` inside the
+/// Check that `a` points at a flat account object of source `a.source` (able to prove
+/// `identity_type`, see `identity::can_prove`) inside the
 /// `linked_accounts` string, and return `sha256(HASH_PREFIX || identity_type || normalize(value))`
 /// together with the normalized value. With `enabled == false` every check is a no-op and the
 /// result is all zeros; the effective offsets are forced to constants so no dynamic read can go
@@ -329,7 +336,10 @@ fn prove_account<let N: u32>(
     let after_obj = read_at(payload, acct_end + 1, enabled);
     assert(off | ((after_obj == COMMA) | (after_obj == RBRACKET)), "account object is not a direct member of the account array");
 
-    let spec = identity::spec(identity_type);
+    // The value comes from source `a.source` but is hashed under `identity_type`.
+    let source = if enabled { a.source } else { identity_type };
+    assert(off | identity::can_prove(source, identity_type), "account source cannot prove this identity type");
+    let spec = identity::spec(source);
 
     // `{` or `,` then `\"type\":\"<type>\"`
     assert(off | (type_idx > acct_start), "type outside account object");

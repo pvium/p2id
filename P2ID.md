@@ -83,7 +83,7 @@ separators, or a length prefix.
 
 | Id | Type | Value | Normalized |
 | --: | --- | --- | :---: |
-| 0 | `email` | email address | ASCII lowercase |
+| 0 | `email` | email address, proven by any account that holds it (see below) | ASCII lowercase |
 | 1 | `phone` | E.164 phone number | unchanged |
 | 2 | `google` (deprecated) | Google account email | ASCII lowercase |
 | 3 | `x` | X handle | ASCII lowercase |
@@ -96,6 +96,12 @@ separators, or a length prefix.
 | 10 | `instagram` | Instagram username | ASCII lowercase |
 | 11 | `farcaster` | Farcaster username | ASCII lowercase |
 | 12 | `wallet` | EVM or other wallet identifier | see normalization |
+
+An `email` identity is the address itself, not the way it was verified: a verifier SHOULD accept
+an address from any account that carries one (a verified email account, or a Google, LinkedIn or
+Apple login), and it is hashed with type id 0 in every case. Types 2, 6 and 7 identify an address
+through one provider only; payers SHOULD prefer `email` so the recipient can claim with any of
+those logins.
 
 The type table is append-only. A new type MUST receive an unused identifier. An existing
 identifier MUST NOT be reassigned or reused.

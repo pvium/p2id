@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { createPrivateKey, sign } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { authenticate, normalizeLowS, parseToken } from '../src/token.js';
@@ -16,9 +17,9 @@ const jwt = readFileSync(join(fixtures, 'sample_token.jwt'), 'utf8').trim();
 const pemFile = join(fixtures, 'privy_es256_public.pem');
 
 /** Reference output from the Python witness generator, for the same request. */
-function pythonToml(type: string, value: string, wallet?: string): string {
+function pythonToml(type: string, value: string, wallet?: string, token = jwt, pem = pemFile): string {
   const out = join(process.env.TMPDIR ?? '/tmp', `pvium-parity-${process.pid}.toml`);
-  const args = ['scripts/gen_prover.py', '--jwt', jwt, '--pubkey', pemFile, '--type', type, '--value', value, '-o', out];
+  const args = ['scripts/gen_prover.py', '--jwt', token, '--pubkey', pem, '--type', type, '--value', value, '-o', out];
   if (wallet) args.push('--wallet', wallet);
   execFileSync('python3', args, { cwd: circuitDir, stdio: 'pipe' });
   return readFileSync(out, 'utf8');
@@ -72,4 +73,44 @@ test('low-s normalisation is idempotent and keeps r', () => {
   assert.deepEqual(normalizeLowS(once), once);
   assert.deepEqual(once.subarray(0, 32), token.signature.subarray(0, 32));
   assert.ok(BigInt('0x' + once.subarray(32).toString('hex')) <= 0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551n / 2n);
+});
+
+// An email is proven from whichever account carries it: the Python and TypeScript generators
+// must pick the same source and emit identical witnesses for each (dummy tokens, test key).
+const testPem = join(fixtures, 'test_es256_public.pem');
+const DUMMY_EMAIL = 'Dummy.User@Example.com';
+const DUMMY_WALLET = '0x1111111111111111111111111111111111111111';
+function dummyToken(accounts: object[]): string {
+  const payload = JSON.parse(readFileSync(join(fixtures, 'sample_payload.json'), 'utf8'));
+  payload.linked_accounts = JSON.stringify(accounts);
+  const b64u = (b: string | Buffer) => Buffer.from(b).toString('base64url');
+  const input = `${b64u(JSON.stringify({ alg: 'ES256', typ: 'JWT' }))}.${b64u(JSON.stringify(payload))}`;
+  const key = createPrivateKey(readFileSync(join(fixtures, 'test_es256_private.pem')));
+  return `${input}.${b64u(sign('sha256', Buffer.from(input), { key, dsaEncoding: 'ieee-p1363' }))}`;
+}
+for (const [source, account, sourceId] of [
+  ['email', { type: 'email', address: DUMMY_EMAIL }, 0],
+  ['google_oauth', { type: 'google_oauth', subject: '1', email: DUMMY_EMAIL, name: 'Dummy User' }, 2],
+  ['linkedin_oauth', { type: 'linkedin_oauth', subject: 'a', email: DUMMY_EMAIL, name: 'Dummy User' }, 6],
+  ['apple_oauth', { type: 'apple_oauth', subject: 'b', email: DUMMY_EMAIL }, 7],
+] as const) {
+  test(`email proven from a ${source} account: identity type 0, source ${sourceId}, same witness as gen_prover.py`, async () => {
+    const token = dummyToken([{ type: 'wallet', address: DUMMY_WALLET }, account]);
+    const parsed = parseToken(token);
+    const signer = await authenticate(parsed, { pemFile: testPem });
+    const built = buildWitness({ token: parsed, signer, identityType: 'email', identityValue: DUMMY_EMAIL, wallet: DUMMY_WALLET }, normalizeLowS(parsed.signature));
+    assert.equal(built.inputs.identity_type, '0');
+    assert.equal(built.inputs.source_type, String(sourceId));
+    assert.equal(toProverToml(built.inputs), pythonToml('email', DUMMY_EMAIL, DUMMY_WALLET, token, testPem));
+  });
+}
+
+test('only email reads other sources: a google account does not prove a linkedin identity', async () => {
+  const token = dummyToken([{ type: 'google_oauth', subject: '1', email: DUMMY_EMAIL }]);
+  const parsed = parseToken(token);
+  const signer = await authenticate(parsed, { pemFile: testPem });
+  await assert.rejects(
+    async () => buildWitness({ token: parsed, signer, identityType: 'linkedin_oauth', identityValue: DUMMY_EMAIL }, normalizeLowS(parsed.signature)),
+    (e: unknown) => e instanceof InputError && /no linked account/.test(e.message),
+  );
 });

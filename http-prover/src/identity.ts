@@ -17,6 +17,12 @@ export const TYPES = {
 
 export type IdentityTypeName = keyof typeof TYPES;
 
+/** Account sources that can prove each identity type (circuit/src/identity.nr can_prove), in
+ *  search order: an email may be read from a Google, LinkedIn or Apple login as well. */
+export function sourcesFor(type: IdentityTypeName): IdentityTypeName[] {
+  return type === 'email' ? ['email', 'google_oauth', 'linkedin_oauth', 'apple_oauth'] : [type];
+}
+
 /** Circuit limits. Must match the globals in circuit/src/main.nr. */
 export const LIMITS = {
   MAX_HEADER_B64_LEN: 128,
