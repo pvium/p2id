@@ -6,19 +6,35 @@ import { sha256 } from '@noble/hashes/sha256';
 export enum IdentityType {
   Email = 0,
   Phone = 1,
+  /** @deprecated Use Email for new identities. This ID remains reserved for legacy proofs. */
   Google = 2,
   Twitter = 3,
   /** Alias of `Twitter`: the platform's current name. Same id, same addresses. */
   X = 3,
   Discord = 4,
   Github = 5,
+  /** @deprecated Use Email for new identities. This ID remains reserved for legacy proofs. */
   Linkedin = 6,
+  /** @deprecated Use Email for new identities. This ID remains reserved for legacy proofs. */
   Apple = 7,
   Telegram = 8,
   Tiktok = 9,
   Instagram = 10,
   Farcaster = 11,
   Wallet = 12,
+}
+
+/** Whether a provider-specific email type is deprecated for new identities. */
+export function isDeprecatedIdentityType(type: IdentityType): boolean {
+  return type === IdentityType.Google || type === IdentityType.Linkedin || type === IdentityType.Apple;
+}
+
+/** Reject deprecated provider-specific namespaces without changing their reserved IDs. */
+export function assertIdentityTypeSupported(type: IdentityType): void {
+  if (isDeprecatedIdentityType(type)) {
+    const name = type === IdentityType.Google ? 'google' : type === IdentityType.Linkedin ? 'linkedin' : 'apple';
+    throw new Error(`identity type "${name}" (id ${type}) is deprecated; use "email" for new identities`);
+  }
 }
 
 /** Domain-separation prefix baked into the circuit's identity hash. */
@@ -57,6 +73,7 @@ export function normalizeIdentityValue(type: IdentityType, value: string): strin
  * `identityHash` output is compared against.
  */
 export function identityHash(type: IdentityType, value: string, domain: string = HASH_PREFIX): `0x${string}` {
+  assertIdentityTypeSupported(type);
   const enc = new TextEncoder();
   const prefix = enc.encode(domain);
   const body = enc.encode(normalizeIdentityValue(type, value));

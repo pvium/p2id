@@ -9,9 +9,9 @@ interface IP2IDVerifier {
 
     /// @notice A funding constraint and the evidence that it is satisfied.
     /// @param commitment bytes32(0) = no constraint; otherwise the commitment a deposit was funded with.
-    /// @param signature  Evidence for `commitment`; for PviumVerifier, the registered signer's
-    ///                   EIP-712 signature over Constraint(bytes32 commitment) in the verifier's
-    ///                   domain. Empty when commitment is zero.
+    /// @param signature  Evidence for `commitment`, in the verifier's format (for PviumVerifier: the
+    ///                   commitment's revealed signer, policyHash and salt plus an EIP-712 signature).
+    ///                   Empty when commitment is zero.
     struct Constraint {
         bytes32 commitment;
         bytes signature;

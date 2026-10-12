@@ -94,9 +94,12 @@ Startup requires the pinned `bb` version and checks the verification key's SHA-2
 
 ## Running
 
+Run these commands from `http-prover/`. The repository includes the compiled circuit,
+verification key, and version metadata; startup extracts the compressed circuit automatically.
+You do not need to compile or copy circuit artifacts to run the committed build.
+
 ```sh
 yarn install
-yarn sync          # copy circuit/target/pvium_identity.json and the vk from ../circuit
 cp .env.example .env && $EDITOR .env
 yarn build && yarn start        # node --env-file=.env dist/server.js
 ```
@@ -134,13 +137,12 @@ Set **Root Directory** to `/http-prover` and **Watch Paths** to `/http-prover/**
 
 The image includes the committed artifacts in `circuit/`. `pvium_identity.json.gz` contains the
 compiled circuit without source maps, approximately 4.6 MB compressed. Startup extracts it when
-the uncompressed file is absent. After a circuit change, run `yarn sync` and commit the updated
-`.gz`, `vk` and `version.json` with the version bump.
+the uncompressed file is absent.
 
 ### Docker
 
 ```sh
-yarn sync && docker build -t pvium-prover .
+docker build -t pvium-prover .
 docker run --env-file .env -p 8787:8787 --shm-size=1g -v prover-data:/app/data pvium-prover
 ```
 
@@ -188,6 +190,12 @@ on a VPS, use `pm2-logrotate` to limit log growth.
 - Callback records contain identity values, wallets and results; protect the outbox database.
 
 ## Development
+
+If you change and rebuild the circuit, run `yarn sync` from `http-prover/`. This copies the
+compiled circuit, verification key, and version metadata from `../circuit/` into the service
+and refreshes the compressed circuit artifact. Commit the updated `.gz`, `vk`, and
+`version.json` with the circuit version bump. This step is only needed when updating the
+service to a rebuilt circuit.
 
 ```sh
 yarn test

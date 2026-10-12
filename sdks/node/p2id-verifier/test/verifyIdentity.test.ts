@@ -5,7 +5,9 @@ import { createServer } from 'node:http';
 import { createPublicKey } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { AttestationSigner, CIRCUIT_VERSION, IdentityType, shutdown, verifyIdentity, type Attestation } from '../src/index.js';
+import { AttestationSigner, CIRCUIT_VERSION, CIRCUIT_VERSIONS, IdentityType, shutdown, verifyIdentity, type Attestation } from '../src/index.js';
+import * as V1 from '../src/v1.js';
+import * as V2 from '../src/v2.js';
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), 'fixtures');
 const proof = new Uint8Array(readFileSync(join(fixtures, 'email.proof')));
@@ -18,7 +20,7 @@ after(() => shutdown());
 
 test('returns the wallet and issuedAt for a matching identity', async () => {
   const r = await verifyIdentity({ attestation, signer: pem, identityType: 'email', identityValue: 'test-9988@privy.io' });
-  assert.deepEqual(r, { valid: true, wallet: WALLET, issuedAt: 1789240094 });
+  assert.deepEqual(r, { valid: true, wallet: WALLET, issuedAt: 1789240094, circuitVersion: CIRCUIT_VERSION });
 });
 
 test('accepts the enum, base64 transport, and any casing of the identity value', async () => {
@@ -71,9 +73,44 @@ test('accepts its own circuit version and rejects others by name', async () => {
   assert.equal(same.valid, true);
   const next = CIRCUIT_VERSION + 1;
   const other = await verifyIdentity({ attestation: { ...attestation, circuitVersion: next }, signer: pem, identityType: 'email', identityValue: 'test-9988@privy.io' });
-  assert.deepEqual(other, { valid: false, reason: `attestation is for circuit version ${next}; this SDK verifies version ${CIRCUIT_VERSION}` });
+  assert.deepEqual(other, { valid: false, reason: `attestation is for circuit version ${next}; this verifier supports versions ${CIRCUIT_VERSIONS.join(', ')}` });
   const build = await verifyIdentity({ attestation: { ...attestation, vkHash: '0x' + 'ab'.repeat(32) }, signer: pem, identityType: 'email', identityValue: 'test-9988@privy.io' });
   assert.equal(build.valid, false);
+});
+
+// Every shipped circuit version stays verifiable from one install: a version 1 attestation (proof
+// from circuit v1, vk embedded) next to the current one. The two proofs share public inputs.
+const proofV1 = new Uint8Array(readFileSync(join(fixtures, 'v1', 'email.proof')));
+const publicInputsV1 = new Uint8Array(readFileSync(join(fixtures, 'v1', 'email.public_inputs')));
+const attestationV1: Attestation = { proof: proofV1, publicInputs: publicInputsV1, wallet: WALLET };
+const EMAIL = { signer: pem, identityType: 'email', identityValue: 'test-9988@privy.io' } as const;
+
+test('the root entry verifies both circuit versions, selected by circuitVersion, vkHash or by trying each', async () => {
+  assert.deepEqual([...CIRCUIT_VERSIONS], [1, 2]);
+  for (const [att, version] of [[attestationV1, 1], [attestation, 2]] as const) {
+    const expected = { valid: true, wallet: WALLET, issuedAt: 1789240094, circuitVersion: version };
+    assert.deepEqual(await verifyIdentity({ ...EMAIL, attestation: { ...att, circuitVersion: version } }), expected);
+    assert.deepEqual(await verifyIdentity({ ...EMAIL, attestation: { ...att, vkHash: version === 1 ? V1.VK_SHA256 : V2.VK_SHA256 } }), expected);
+    assert.deepEqual(await verifyIdentity({ ...EMAIL, attestation: att }), expected); // no metadata
+  }
+});
+
+test('a proof checked against the wrong version is invalid, and metadata naming the wrong vk is refused', async () => {
+  assert.deepEqual(await verifyIdentity({ ...EMAIL, attestation: { ...attestationV1, circuitVersion: 2 } }), { valid: false, reason: 'invalid proof' });
+  assert.deepEqual(await verifyIdentity({ ...EMAIL, attestation: { ...attestation, circuitVersion: 1 } }), { valid: false, reason: 'invalid proof' });
+  const mixed = await verifyIdentity({ ...EMAIL, attestation: { ...attestation, circuitVersion: 2, vkHash: V1.VK_SHA256 } });
+  assert.equal(mixed.valid, false);
+});
+
+test('the /v1 and /v2 entry points accept only their own version', async () => {
+  assert.equal(V1.CIRCUIT_VERSION, 1);
+  assert.equal(V2.CIRCUIT_VERSION, 2);
+  assert.notEqual(V1.VK_SHA256, V2.VK_SHA256);
+  assert.equal((await V1.verifyIdentity({ ...EMAIL, attestation: attestationV1 })).valid, true);
+  assert.equal((await V2.verifyIdentity({ ...EMAIL, attestation })).valid, true);
+  assert.deepEqual(await V1.verifyIdentity({ ...EMAIL, attestation: { ...attestation, circuitVersion: 2 } }),
+    { valid: false, reason: 'attestation is for circuit version 2; this verifier supports version 1' });
+  assert.deepEqual(await V2.verifyIdentity({ ...EMAIL, attestation: attestationV1 }), { valid: false, reason: 'invalid proof' });
 });
 
 test('rejects a wallet the proof does not bind', async () => {

@@ -1,5 +1,5 @@
 import { InputError } from './errors.js';
-import { LIMITS, TYPES, type IdentityTypeName } from './identity.js';
+import { LIMITS, TYPES, sourcesFor, type IdentityTypeName } from './identity.js';
 import type { ParsedToken, SignerKey } from './token.js';
 
 /** Circuit inputs in the form noir_js accepts. Byte arrays are number[]; scalars are strings. */
@@ -75,15 +75,13 @@ export function locateAccount(
   typeName: string,
   key: string,
   value: string,
-): AccountRef {
+): AccountRef | null {
   const typePat = Buffer.from(`${esc('type')}:${esc(typeName)}`);
   const valuePat = Buffer.from(`${esc(key)}:${esc(value)}`);
   let pos = laValueStart;
   for (;;) {
     const acctStart = payload.indexOf(0x7b, pos);
-    if (acctStart === -1 || acctStart >= laEnd) {
-      throw new InputError(`no linked account with type=${typeName} and ${key}=${value}`);
-    }
+    if (acctStart === -1 || acctStart >= laEnd) return null;
     const acctEnd = payload.indexOf(0x7d, acctStart);
     if (acctEnd === -1 || acctEnd >= laEnd) throw new InputError('unterminated account object');
     const obj = payload.subarray(acctStart, acctEnd + 1);
@@ -97,6 +95,21 @@ export function locateAccount(
     }
     pos = acctEnd + 1;
   }
+}
+
+/** The first account source (in search order) holding `value` for identity type `type`. */
+export function locateIdentity(
+  payload: Buffer,
+  laValueStart: number,
+  laEnd: number,
+  type: IdentityTypeName,
+  value: string,
+): AccountRef & { source: number } {
+  for (const source of sourcesFor(type)) {
+    const ref = locateAccount(payload, laValueStart, laEnd, source, TYPES[source].key, value);
+    if (ref) return { ...ref, source: TYPES[source].id };
+  }
+  throw new InputError(`no linked account with type=${type} and value=${value}`);
 }
 
 // ---- witness assembly -----------------------------------------------------------------------
@@ -125,13 +138,14 @@ export function buildWitness(req: WitnessRequest, lowSSignature: Buffer): BuiltW
   let laEnd = laValueStart;
   while (laEnd < payload.length && inString[laEnd]) laEnd++;
 
-  const acct = locateAccount(payload, laValueStart, laEnd, req.identityType, spec.key, req.identityValue);
+  const acct = locateIdentity(payload, laValueStart, laEnd, req.identityType, req.identityValue);
 
   let wallet: [number, number, number, number, number] = [0, 0, 0, 0, 0];
   if (req.wallet) {
     const w = Buffer.from(req.wallet, 'utf8');
     if (w.length < 1 || w.length > LIMITS.MAX_VALUE_LEN) throw new InputError('wallet length out of range');
     const ref = locateAccount(payload, laValueStart, laEnd, 'wallet', TYPES.wallet.key, req.wallet);
+    if (!ref) throw new InputError(`no linked account with type=wallet and address=${req.wallet}`);
     wallet = [ref.acctStart, ref.acctEnd, ref.typeIdx, ref.valueIdx, w.length];
   }
 
@@ -155,6 +169,7 @@ export function buildWitness(req: WitnessRequest, lowSSignature: Buffer): BuiltW
     type_idx: String(acct.typeIdx),
     value_idx: String(acct.valueIdx),
     value_len: String(value.length),
+    source_type: String(acct.source),
     wallet_acct_start: String(wallet[0]),
     wallet_acct_end: String(wallet[1]),
     wallet_type_idx: String(wallet[2]),

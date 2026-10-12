@@ -36,10 +36,25 @@ Install with `yarn install`, run scripts with `yarn <script>`, run binaries with
   in `sdks/node/` (`yarn workspace @pvium/p2id-verifier sync`) to refresh its bundled vk and fixtures.
 - **Circuit versioning**: `circuit/version.json` names the current build (`circuitVersion`, vk sha256).
   Bump `circuitVersion` whenever the compiled circuit changes, then sync all consumers (`yarn fixtures`
-  in contracts, `yarn sync` in sdks/node and http-prover). Each consumer is pinned to one version:
-  the SDK release embeds one vk and rejects other versions by name; the prover serves one version and
-  echoes it in every attestation; `PviumIdentity` is deployed once per version. Old attestations stay
-  valid against their own version's SDK release and contract; they are not regenerated in bulk.
+  in contracts, `yarn sync` in sdks/node and http-prover). The prover serves one version and echoes it
+  in every attestation (one release branch and prover deployment per version, e.g.
+  `releases/circuit/v1`); `PviumIdentity` is deployed once per version. `@pvium/p2id-verifier`
+  bundles every shipped version's vk side by side (`src/circuits/v<N>.{vk,json}`; `yarn sync` adds
+  or refreshes the current one and never removes older ones), selects the vk from the attestation's
+  `circuitVersion`/`vkHash`, and exposes a pinned entry point per version
+  (`@pvium/p2id-verifier/v<N>`, `src/v<N>.ts` plus a `package.json` export). Old attestations stay
+  valid; they are not regenerated in bulk.
+- **Deploying a new circuit version** never touches the factory, policy or any P2ID address.
+  In `contracts/`: `yarn deploy:verifier --network <chain>` (`PREDICT=1` first) deploys only that
+  version's `PviumZKVerifier`, `PviumIdentity` and `PviumVerifier` next to the chain's recorded
+  stack, reads them back and writes `deployments/<scheme>.<env>.circuit-v<N>.<chainId>.json` with
+  their activation status; it sends no owner transaction. `yarn verifier:activate --network <chain>`
+  shows the status and the owner's next transactions; `STEPS=approve[,release-alpha,propose-default,activate-default]`
+  sends them from the owner key, or (production: the policy and factory owner is a Safe) writes a
+  Safe Transaction Builder batch under `deployments/safe/`. Rerun it after the Safe executes to
+  record the new status. Do not use `deploy-deterministic.ts` for this: with a new verifier compiled
+  in it targets a new factory and refuses. Keep the previous version's verifier approved and its
+  prover (`releases/circuit/v<N>`) running until its deposits are claimed or refunded.
 - The Solidity sources in `contracts/src` are the source of truth; `sdks/node/p2id-core/scripts/sync-contracts.sh`
   copies them into the npm package at build time (gitignored there). Never edit `sdks/node/p2id-core/contracts/`.
 - `http-prover/src/witness.ts` is a port of `circuit/scripts/gen_prover.py`; `http-prover/test/witness.test.ts`

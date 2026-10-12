@@ -1,7 +1,9 @@
 //! Identity type registry.
 //!
-//! Maps the public `identity_type` id to the Privy `linked_accounts` entry shape:
-//! which `"type"` string the entry must carry and which key holds the identity value.
+//! Maps each account source (a row below, numbered like the identity type it normally proves)
+//! to the Privy `linked_accounts` entry shape: which `"type"` string the entry must carry and
+//! which key holds the value. A source proves its own type; an email address may also be proven
+//! from a Google, LinkedIn or Apple login (`can_prove`), hashed as `email` either way.
 //! The verifier contract only needs to know the numeric id; the pairing is enforced here.
 
 pub global NUM_TYPES: u32 = 13;
@@ -84,9 +86,17 @@ pub struct IdentitySpec {
     pub case_insensitive: bool,
 }
 
-pub fn spec(identity_type: u8) -> IdentitySpec {
-    let i = identity_type as u32;
-    assert(i < NUM_TYPES, "unknown identity type");
+/// Whether account source `source` can prove identity type `identity_type`: its own type, or
+/// `email` from an account that carries the user's email address (Google, LinkedIn, Apple).
+pub fn can_prove(source: u8, identity_type: u8) -> bool {
+    (source == identity_type)
+        | ((identity_type == EMAIL) & ((source == GOOGLE) | (source == LINKEDIN) | (source == APPLE)))
+}
+
+/// Entry shape of account source `source`.
+pub fn spec(source: u8) -> IdentitySpec {
+    let i = source as u32;
+    assert(i < NUM_TYPES, "unknown account source");
     IdentitySpec {
         type_name: TYPE_NAMES[i],
         type_len: TYPE_LENS[i],
@@ -94,6 +104,22 @@ pub fn spec(identity_type: u8) -> IdentitySpec {
         key_len: KEY_LENS[i],
         case_insensitive: CASE_INSENSITIVE[i],
     }
+}
+
+#[test]
+fn email_is_provable_from_every_email_bearing_source() {
+    for source in [EMAIL, GOOGLE, LINKEDIN, APPLE] {
+        assert(can_prove(source, EMAIL));
+    }
+    for t in 0..NUM_TYPES {
+        let t = t as u8;
+        assert(can_prove(t, t)); // every source proves its own type
+        if (t != EMAIL) & (t != GOOGLE) & (t != LINKEDIN) & (t != APPLE) {
+            assert(!can_prove(t, EMAIL)); // e.g. a GitHub username is not an email
+        }
+    }
+    assert(!can_prove(EMAIL, GOOGLE)); // only towards email, never from it
+    assert(!can_prove(GOOGLE, LINKEDIN));
 }
 
 #[test]

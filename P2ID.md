@@ -83,22 +83,35 @@ separators, or a length prefix.
 
 | Id | Type | Value | Normalized |
 | --: | --- | --- | :---: |
-| 0 | `email` | email address | ASCII lowercase |
+| 0 | `email` | email address, proven by any account that holds it (see below) | ASCII lowercase |
 | 1 | `phone` | E.164 phone number | unchanged |
-| 2 | `google` | Google account email | ASCII lowercase |
+| 2 | `google` (deprecated) | Google account email | ASCII lowercase |
 | 3 | `x` | X handle | ASCII lowercase |
 | 4 | `discord` | Discord username with discriminator (`alice#0`) | ASCII lowercase |
 | 5 | `github` | GitHub username | ASCII lowercase |
-| 6 | `linkedin` | LinkedIn account email | ASCII lowercase |
-| 7 | `apple` | Apple ID email | ASCII lowercase |
+| 6 | `linkedin` (deprecated) | LinkedIn account email | ASCII lowercase |
+| 7 | `apple` (deprecated) | Apple ID email | ASCII lowercase |
 | 8 | `telegram` | Telegram username | ASCII lowercase |
 | 9 | `tiktok` | TikTok username | ASCII lowercase |
 | 10 | `instagram` | Instagram username | ASCII lowercase |
 | 11 | `farcaster` | Farcaster username | ASCII lowercase |
 | 12 | `wallet` | EVM or other wallet identifier | see normalization |
 
+An `email` identity is the address itself, not the way it was verified: a verifier SHOULD accept
+an address from any account that carries one (a verified email account, or a Google, LinkedIn or
+Apple login), and it is hashed with type id 0 in every case. Types 2, 6 and 7 identify an address
+through one provider only; payers SHOULD prefer `email` so the recipient can claim with any of
+those logins.
+
 The type table is append-only. A new type MUST receive an unused identifier. An existing
 identifier MUST NOT be reassigned or reused.
+
+`google` (2), `linkedin` (6), and `apple` (7) are deprecated for new identities. Use `email`
+(0) for an email address regardless of the authentication provider. The verifier determines
+which evidence authenticates that address. The deprecated IDs remain reserved for legacy
+commitments; they MUST NOT be reassigned or silently converted to `email`, which produces a
+different commitment and vault address. The Node SDK rejects these types for identity hashing
+and address generation.
 
 ## Vault address
 
@@ -164,6 +177,9 @@ The following parameters are defined when present:
 | `token` | `native`, a token symbol, or an ERC-20 address. |
 | `chain` | EIP-155 chain identifier. |
 | `constraint` | `bytes32` commitment supplied when funding. |
+| `constraintSigner` | Signer named in the constraint commitment; absent for any registered signer. |
+| `constraintPolicy` | `bytes32` policy hash in the constraint commitment. |
+| `constraintSalt` | `bytes32` salt in the constraint commitment. |
 | `verifier` | Verifier address selected when funding. |
 | `window` | Refund window in seconds. |
 | `ref` | Application-defined reference for the funding event. |
@@ -213,6 +229,38 @@ payout address.
 A vault MUST reject a proof whose issue time is earlier than the latest accepted issue time for
 that verifier and identity. A proof with the same issue time MUST NOT replace a previously
 recorded payout wallet.
+
+### Constraints
+
+A constraint makes a deposit claimable only with a signer's approval, for example that the payee
+completed a screening. A verifier that supports constraints SHOULD use this commitment:
+
+```text
+commitment = keccak256(abi.encode("p2id.constraint.v1", signer, policyHash, identityHash, salt))
+```
+
+`signer` is the address whose approval the payer requires. `address(0)` means any constraint
+signer the verifier itself recognizes. `policyHash` names what the signer must check; its meaning
+is defined by the signer. `identityHash` is the payee's identity commitment. `salt` makes the
+commitment unique per payment. The payer passes `commitment` as the funding call's `constraint`.
+
+The payer MUST make `signer`, `policyHash` and `salt` available to the payee, for example with
+the `constraintSigner`, `constraintPolicy` and `constraintSalt` URI parameters. The commitment
+cannot be inverted.
+
+To claim, the claimant supplies:
+
+```text
+Constraint.signature = abi.encode(address signer, bytes32 policyHash, bytes32 salt, bytes signature)
+```
+
+`signature` is the signer's EIP-712 signature over `Constraint(bytes32 commitment)` in the
+verifier's domain. The verifier MUST recompute the commitment from the revealed values and the
+`identityHash` the vault supplies, and MUST reject the claim when it differs from the deposit's
+commitment. It MUST then accept only a valid signature from `signer`: an ECDSA signature, or an
+ERC-1271 approval when `signer` is a contract. When `signer` is `address(0)`, it MUST accept only
+a signer it recognizes. A signature for one payee or verifier therefore cannot satisfy another
+payee's or verifier's constraint.
 
 ## Funding and refunds
 

@@ -5,6 +5,10 @@ Usage:
   gen_prover.py --jwt <token> --pubkey <signer.pem> --type email --value test-9988@privy.io [--wallet 0x..] [-o Prover.toml]
   gen_prover.py --jwt <token> --pubkey <signer.pem> --type github_oauth --value dephizee
 
+--type email is proven by whichever linked account carries the address: a Privy email account,
+or a Google, LinkedIn or Apple login (searched in that order); the hash is the email one either
+way. Every other type is read from its own account type only.
+
 The token must be a real ES256-signed JWT: the circuit verifies its signature against the
 P-256 public key in the PEM, so an unsigned or foreign-signed token will fail to prove.
 Prints the expected public outputs so `nargo execute` can be checked against them.
@@ -34,6 +38,12 @@ TYPES = {
     "farcaster": (11, "username", True),
     "wallet": (12, "address", False),
 }
+# Account sources that can prove each identity type (src/identity.nr can_prove), in search order.
+EMAIL_SOURCES = ["email", "google_oauth", "linkedin_oauth", "apple_oauth"]
+
+
+def sources_for(type_name: str):
+    return EMAIL_SOURCES if type_name == "email" else [type_name]
 
 
 def b64url(b: bytes) -> bytes:
@@ -75,6 +85,17 @@ def find_top_level(payload: bytes, in_string, key: bytes) -> int:
         pos = i + 1
 
 
+def locate_identity(payload: bytes, la_value_start: int, la_end: int, type_name: str, value: bytes):
+    """The first account source (in search order) holding `value` for `type_name`.
+    Returns (acct_start, acct_end, type_idx, value_idx, source_id)."""
+    for source in sources_for(type_name):
+        sid, key, _ = TYPES[source]
+        found = locate_account(payload, la_value_start, la_end, source, key, value)
+        if found:
+            return found + (sid,)
+    raise SystemExit(f"no linked account with type={type_name} and value={value.decode()}")
+
+
 def find_member(hay: bytes, key: bytes, start=0, end=None) -> int:
     """Index of `key` in hay[start:end] where the preceding byte is `{` or `,`."""
     end = len(hay) if end is None else end
@@ -100,14 +121,15 @@ def identity_hash(type_id: int, value: str, ci: bool) -> bytes:
 
 def locate_account(payload: bytes, la_value_start: int, la_end: int, type_name: str, key: str, value: bytes):
     """Offsets of the flat account object inside linked_accounts whose escaped `type` and
-    `<key>` members equal the given values. Returns (acct_start, acct_end, type_idx, value_idx)."""
+    `<key>` members equal the given values. Returns (acct_start, acct_end, type_idx, value_idx),
+    or None when no such object exists."""
     type_pat = b'\\"type\\":\\"' + type_name.encode() + b'\\"'
     value_pat = b'\\"' + key.encode() + b'\\":\\"' + value + b'\\"'
     pos = la_value_start
     while True:
         acct_start = payload.find(b"{", pos, la_end)
         if acct_start == -1:
-            raise SystemExit(f"no linked account with type={type_name} and {key}={value.decode()}")
+            return None
         acct_end = payload.find(b"}", acct_start, la_end)
         if acct_end == -1:
             raise SystemExit("unterminated account object")
@@ -189,7 +211,7 @@ def main():
         la_end += 1  # first byte no longer inside the string = its closing quote
 
     # Locate the identity's account object, and optionally the wallet's, inside that string.
-    acct_start, acct_end, type_idx, value_idx = locate_account(payload, la_value_start, la_end, a.type, key, value)
+    acct_start, acct_end, type_idx, value_idx, source_id = locate_identity(payload, la_value_start, la_end, a.type, value)
     wallet = (0, 0, 0, 0, 0)
     # Public `wallet` input: the EVM address as a field, which the circuit checks against the
     # 0x-hex value it reads from the token. Zero for base58 wallets or no wallet slot.
@@ -199,7 +221,10 @@ def main():
         wv = a.wallet.encode()
         if not 1 <= len(wv) <= MAX_VALUE_LEN:
             raise SystemExit("wallet length out of range")
-        wallet = locate_account(payload, la_value_start, la_end, "wallet", wkey, wv) + (len(wv),)
+        found = locate_account(payload, la_value_start, la_end, "wallet", wkey, wv)
+        if not found:
+            raise SystemExit(f"no linked account with type=wallet and address={a.wallet}")
+        wallet = found + (len(wv),)
         if a.wallet.lower().startswith("0x"):
             if len(a.wallet) != 42:
                 raise SystemExit("EVM wallet must be 0x + 40 hex chars")
@@ -223,6 +248,7 @@ def main():
         f'type_idx = "{type_idx}"',
         f'value_idx = "{value_idx}"',
         f'value_len = "{len(value)}"',
+        f'source_type = "{source_id}"',
         f'wallet_acct_start = "{wallet[0]}"',
         f'wallet_acct_end = "{wallet[1]}"',
         f'wallet_type_idx = "{wallet[2]}"',

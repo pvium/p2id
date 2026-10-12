@@ -39,6 +39,29 @@ export function p2idScheme(name: P2IDSchemeName | string = P2ID_SCHEME): P2IDSch
   return s;
 }
 
+/**
+ * The verifier new payments should fund under (`fundWith`) in an environment: the approved
+ * verifier of the newest circuit version recorded for the scheme. Null when none is recorded.
+ * Deposits funded under a verifier are claimed through that verifier, so record it with the payment.
+ */
+export function p2idFundingVerifier(
+  options: { environment?: P2IDEnvironment; scheme?: P2IDSchemeName | string } = {},
+): { circuitVersion: number; verifier: `0x${string}` } | null {
+  const env = options.environment ?? 'production';
+  if (env !== 'production' && env !== 'sandbox') throw new Error(`unknown environment "${env}"`);
+  const recorded = p2idScheme(options.scheme).verifiers[env];
+  const newest = Object.keys(recorded).map(Number).sort((a, b) => b - a)[0];
+  return newest === undefined ? null : { circuitVersion: newest, verifier: recorded[String(newest)] };
+}
+
+/** The approved verifier of one circuit version in an environment, or null when not recorded. */
+export function p2idVerifier(
+  circuitVersion: number,
+  options: { environment?: P2IDEnvironment; scheme?: P2IDSchemeName | string } = {},
+): `0x${string}` | null {
+  return p2idScheme(options.scheme).verifiers[options.environment ?? 'production'][String(circuitVersion)] ?? null;
+}
+
 /** The identity commitment: the CREATE2 salt of the identity's vault and the value proofs bind. */
 export function identityHash(
   type: IdentityType | IdentityTypeName,

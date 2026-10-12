@@ -3,7 +3,7 @@ import { decodeClaim, type P256PublicKey, type PublicInputs } from './publicInpu
 import { parseP256PublicKeyPem } from './signer.js';
 import { verifyProof } from './verify.js';
 import { AttestationSigner, PVIUM_ENVIRONMENTS, type PviumEnvironmentName } from './environments.js';
-import { CIRCUIT_VERSION, VK_SHA256 } from './vk.js';
+import { CIRCUITS, CIRCUIT_VERSIONS } from './vk.js';
 
 /** What Pvium's resolution API returns for an identity: the proof plus the address it binds. */
 export interface Attestation {
@@ -13,8 +13,11 @@ export interface Attestation {
   publicInputs: PublicInputs | string;
   /** The wallet address the proof binds to the identity, exactly as linked in Privy. */
   wallet: string;
-  /** Circuit version that produced the proof, as reported by the prover. Checked when present. */
+  /** Circuit version that produced the proof, as reported by the prover. Selects the
+   *  verification key; when absent, `vkHash` selects it, and failing both every supported
+   *  version is tried (newest first). */
   circuitVersion?: number;
+  /** sha256 of the vk the prover used; must match the version's bundled vk when present. */
   vkHash?: string;
 }
 
@@ -44,6 +47,8 @@ export type VerifyIdentityResult =
       wallet: string;
       /** When Privy issued the token the proof was made from (unix seconds). Freshness is your policy. */
       issuedAt: number;
+      /** The circuit version whose verification key accepted the proof. */
+      circuitVersion: number;
     }
   | { valid: false; reason: string };
 
@@ -53,6 +58,30 @@ export type VerifyIdentityResult =
  * trusted value together with the attestation time.
  */
 export async function verifyIdentity(input: VerifyIdentityInput): Promise<VerifyIdentityResult> {
+  return verifyIdentityFor(input, CIRCUIT_VERSIONS);
+}
+
+/** Which bundled circuit versions may have produced `att`, or why none can. */
+function candidateVersions(att: Attestation, supported: readonly number[]): number[] | string {
+  const describe = supported.length === 1 ? `version ${supported[0]}` : `versions ${supported.join(', ')}`;
+  if (att.circuitVersion !== undefined) {
+    if (!supported.includes(att.circuitVersion)) {
+      return `attestation is for circuit version ${att.circuitVersion}; this verifier supports ${describe}`;
+    }
+    if (att.vkHash !== undefined && att.vkHash.toLowerCase() !== CIRCUITS[att.circuitVersion].vkSha256) {
+      return `attestation was produced by a different build of circuit version ${att.circuitVersion} than this SDK verifies`;
+    }
+    return [att.circuitVersion];
+  }
+  if (att.vkHash !== undefined) {
+    const v = supported.find((n) => CIRCUITS[n].vkSha256 === att.vkHash!.toLowerCase());
+    return v === undefined ? `attestation was produced by a circuit build this verifier does not support (${describe})` : [v];
+  }
+  return [...supported].reverse(); // no metadata: try each, newest first
+}
+
+/** verifyIdentity, restricted to the given bundled circuit versions. */
+export async function verifyIdentityFor(input: VerifyIdentityInput, supported: readonly number[]): Promise<VerifyIdentityResult> {
   let type: IdentityType;
   try {
     type = resolveIdentityType(input.identityType);
@@ -61,12 +90,8 @@ export async function verifyIdentity(input: VerifyIdentityInput): Promise<Verify
   }
 
   const att = input.attestation;
-  if (att.circuitVersion !== undefined && att.circuitVersion !== CIRCUIT_VERSION) {
-    return { valid: false, reason: `attestation is for circuit version ${att.circuitVersion}; this SDK verifies version ${CIRCUIT_VERSION}` };
-  }
-  if (att.vkHash !== undefined && att.vkHash.toLowerCase() !== VK_SHA256) {
-    return { valid: false, reason: 'attestation was produced by a different circuit build than this SDK verifies' };
-  }
+  const versions = candidateVersions(att, supported);
+  if (typeof versions === 'string') return { valid: false, reason: versions };
   const proof = typeof input.attestation.proof === 'string' ? fromBase64(input.attestation.proof) : input.attestation.proof;
   const publicInputs =
     typeof input.attestation.publicInputs === 'string' ? fromBase64(input.attestation.publicInputs) : input.attestation.publicInputs;
@@ -100,15 +125,20 @@ export async function verifyIdentity(input: VerifyIdentityInput): Promise<Verify
   if (w.toLowerCase().startsWith('0x') && claim.wallet !== w.toLowerCase()) {
     return { valid: false, reason: 'wallet mismatch' };
   }
-  let proofOk: boolean;
+  let proven: number | undefined;
   try {
-    proofOk = await verifyProof({ proof, publicInputs });
+    for (const version of versions) {
+      if (await verifyProof({ proof, publicInputs }, version)) {
+        proven = version;
+        break;
+      }
+    }
   } catch (e) {
     return { valid: false, reason: (e as Error).message }; // the backend failed; says so, not "invalid proof"
   }
-  if (!proofOk) return { valid: false, reason: 'invalid proof' };
+  if (proven === undefined) return { valid: false, reason: 'invalid proof' };
 
-  return { valid: true, wallet: input.attestation.wallet, issuedAt: claim.iat };
+  return { valid: true, wallet: input.attestation.wallet, issuedAt: claim.iat, circuitVersion: proven };
 }
 
 async function trustedKeys(signer: Signer, claimSigner?: P256PublicKey): Promise<P256PublicKey[]> {

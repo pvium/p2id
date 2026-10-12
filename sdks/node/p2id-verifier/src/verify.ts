@@ -1,5 +1,5 @@
 import { Barretenberg, UltraHonkVerifierBackend } from '@aztec/bb.js';
-import { VK_BASE64 } from './vk.js';
+import { CIRCUITS, CIRCUIT_VERSION } from './vk.js';
 import { toPublicInputFields, type PublicInputs } from './publicInputs.js';
 
 export interface ProofBundle {
@@ -8,11 +8,17 @@ export interface ProofBundle {
   publicInputs: PublicInputs;
 }
 
-let vkCache: Uint8Array | undefined;
-/** The circuit's UltraHonk verification key (EVM / keccak transcript), bundled with the package. */
-export function verificationKey(): Uint8Array {
-  if (!vkCache) vkCache = Uint8Array.from(atob(VK_BASE64), (c) => c.charCodeAt(0));
-  return vkCache;
+const vkCache = new Map<number, Uint8Array>();
+/** A circuit version's UltraHonk verification key (EVM / keccak transcript), bundled with the package. */
+export function verificationKey(circuitVersion: number = CIRCUIT_VERSION): Uint8Array {
+  let vk = vkCache.get(circuitVersion);
+  if (!vk) {
+    const entry = CIRCUITS[circuitVersion];
+    if (!entry) throw new Error(`circuit version ${circuitVersion} is not bundled with this release`);
+    vk = Uint8Array.from(atob(entry.vkBase64), (c) => c.charCodeAt(0));
+    vkCache.set(circuitVersion, vk);
+  }
+  return vk;
 }
 
 let apiPromise: Promise<Barretenberg> | undefined;
@@ -31,11 +37,13 @@ export async function shutdown(): Promise<void> {
 }
 
 /**
- * Cryptographic check only: is this a valid proof for the Pvium identity circuit with these
- * public inputs? Says nothing about who signed the token or whether it has expired.
+ * Cryptographic check only: is this a valid proof for the given version of the Pvium identity
+ * circuit (default: the newest) with these public inputs? Says nothing about who signed the
+ * token or whether it has expired.
  */
-export async function verifyProof(bundle: ProofBundle): Promise<boolean> {
+export async function verifyProof(bundle: ProofBundle, circuitVersion: number = CIRCUIT_VERSION): Promise<boolean> {
   const publicInputs = toPublicInputFields(bundle.publicInputs);
+  const verificationKey_ = verificationKey(circuitVersion);
   let v: UltraHonkVerifierBackend;
   try {
     v = await backend();
@@ -44,7 +52,7 @@ export async function verifyProof(bundle: ProofBundle): Promise<boolean> {
   }
   try {
     return await v.verifyProof(
-      { proof: bundle.proof, publicInputs, verificationKey: verificationKey() },
+      { proof: bundle.proof, publicInputs, verificationKey: verificationKey_ },
       { verifierTarget: 'evm' },
     );
   } catch {

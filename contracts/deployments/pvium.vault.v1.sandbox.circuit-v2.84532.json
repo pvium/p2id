@@ -1,0 +1,41 @@
+{
+  "kind": "verifier-set",
+  "scheme": "pvium.vault.v1",
+  "environment": "sandbox",
+  "network": "baseSepolia",
+  "chainId": 84532,
+  "circuitVersion": 2,
+  "vkHash": "0x6c6f145bd929a5e3a8ca1e3c875f3c0e13e7be11f71fc8ad7bbaad9ddb5e9a78",
+  "privyKeys": [
+    {
+      "kid": "Lp_q4NY6tg5jSdiD790AIm01JR7GIJ_xmDVZZ6MVAfM",
+      "x": "0x487140ed4fa91d71559b5e015286c9b76c270883f59a5ae9febac9b291584cd1",
+      "y": "0xd4cf5625205d28cbe6c8108a695929208c08f3bdc7790ab7023abe17dcdefc04"
+    },
+    {
+      "kid": "1NtmKuIrWxOltnhgo5yNIyuFFmi-cQDW1Ucqv2185Og",
+      "x": "0x84e87db1d90fb3ef5079e6fbe8a50e8f2aee7f8ad66c13b837cc93e016e2b9aa",
+      "y": "0x27a0949bf003bb64d5a622a05737d2547efa8980267daf35cc75276cb30c9de5"
+    }
+  ],
+  "config": {
+    "owner": "0x59fD8f94dDd1Fe6066d300F74afD5E3a01970e43",
+    "attester": "0x59fD8f94dDd1Fe6066d300F74afD5E3a01970e43",
+    "circuitVersion": 2,
+    "vkHash": "0x6c6f145bd929a5e3a8ca1e3c875f3c0e13e7be11f71fc8ad7bbaad9ddb5e9a78"
+  },
+  "relationsLib": "0x8339dBA6607687A1810BF2C7f50C36977317D0a6",
+  "transcriptLib": "0x0fF89f21E57B020F50e8F737E2762B33b49f7A5B",
+  "zkVerifier": "0x1416c2c999DF3a3af455A60cAfd78b0419B94A2a",
+  "pviumIdentity": "0xfc6F8e0caF322D0012065cd36eB3d657C771e86A",
+  "pviumVerifier": "0xBAd220346ba9800627f83009234F955eB1738110",
+  "factory": "0x06663e26Fd76A9D075a83D9a987ADD6d08a85A98",
+  "policy": "0x7D915675295772A4bEAEfc05Ef5BB0c4ECaC33B7",
+  "status": {
+    "checkedAt": "2026-10-11T23:15:45.185Z",
+    "approved": true,
+    "alpha": true,
+    "isDefault": false,
+    "defaultProposedEta": null
+  }
+}

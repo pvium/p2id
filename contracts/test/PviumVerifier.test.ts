@@ -22,6 +22,12 @@ function proofBytes(name: string): string {
 
 const NO_CONSTRAINT = { commitment: ethers.ZeroHash, signature: '0x' };
 const constraintOf = (commitment: string, signature = '0x') => ({ commitment, signature });
+/** Claim-time constraint signature: the commitment's preimage (signer, policyHash, salt) plus the EIP-712 signature. */
+const chosen = (signer: string, policyHash: string, salt: string, sig: string) =>
+  ethers.AbiCoder.defaultAbiCoder().encode(['address', 'bytes32', 'bytes32', 'bytes'], [signer, policyHash, salt, sig]);
+const SALT1 = ethers.id('salt');
+/** Registered-signer mode (signer address(0)) for the sample payee, POLICY and SALT1. */
+const registered = (sig: string) => chosen(ethers.ZeroAddress, POLICY, SALT1, sig);
 
 describe('PviumVerifier: real ZK proof + signed constraint commitment', function () {
   this.timeout(180_000);
@@ -110,7 +116,7 @@ describe('PviumVerifier: real ZK proof + signed constraint commitment', function
   });
 
   it('a constrained deposit needs the proof and the registered signer over the commitment', async () => {
-    const commitment = await verifier.screeningCommitment(POLICY, EMAIL_COMMITMENT, ethers.id('salt'));
+    const commitment = await verifier.constraintCommitment(ethers.ZeroAddress, POLICY, EMAIL_COMMITMENT, SALT1);
     await token.mint(payer.address, 100n);
     await token.connect(payer).approve(await vault.getAddress(), 100n);
     await vault.connect(payer).fund(await token.getAddress(), 100n, commitment, DAY, ethers.ZeroHash);
@@ -121,28 +127,30 @@ describe('PviumVerifier: real ZK proof + signed constraint commitment', function
     const good = await signConstraint(attester, verifier, commitment);
     const bad = await signConstraint(stranger, verifier, commitment);
     expect(ethers.recoverAddress(await verifier.constraintDigest(commitment), good)).to.equal(attester.address);
-    await expect(vault.sweepBucket(await verifier.getAddress(), constraintOf(commitment, bad), await token.getAddress(), proofBytes('email'), 0))
+    await expect(vault.sweepBucket(await verifier.getAddress(), constraintOf(commitment, registered(bad)), await token.getAddress(), proofBytes('email'), 0))
       .to.be.revertedWithCustomError(verifier, 'InvalidConstraintSigner');
     await expect(vault.sweepBucket(await verifier.getAddress(), constraintOf(commitment), await token.getAddress(), proofBytes('email'), 0))
       .to.be.revertedWithCustomError(verifier, 'MalformedSignature');
-    await expect(vault.sweepBucket(await verifier.getAddress(), constraintOf(ethers.id('other-commitment'), good), await token.getAddress(), proofBytes('email'), 0))
-      .to.be.revertedWithCustomError(verifier, 'InvalidConstraintSigner'); // signature is over a different commitment
+    await expect(vault.sweepBucket(await verifier.getAddress(), constraintOf(commitment, good), await token.getAddress(), proofBytes('email'), 0))
+      .to.be.revertedWithCustomError(verifier, 'MalformedSignature'); // a bare signature without the preimage
+    await expect(vault.sweepBucket(await verifier.getAddress(), constraintOf(ethers.id('other-commitment'), registered(good)), await token.getAddress(), proofBytes('email'), 0))
+      .to.be.revertedWithCustomError(verifier, 'ConstraintMismatch'); // the preimage is for a different commitment
 
-    await vault.connect(stranger).sweepBucket(await verifier.getAddress(), constraintOf(commitment, good), await token.getAddress(), proofBytes('email'), 0);
+    await vault.connect(stranger).sweepBucket(await verifier.getAddress(), constraintOf(commitment, registered(good)), await token.getAddress(), proofBytes('email'), 0);
     expect(await token.balanceOf(LINKED_WALLET)).to.equal(100n);
   });
 
   it('a constraint signature is bound to the chain and the verifier', async () => {
-    const commitment = await verifier.screeningCommitment(POLICY, EMAIL_COMMITMENT, ethers.id('salt'));
+    const commitment = await verifier.constraintCommitment(ethers.ZeroAddress, POLICY, EMAIL_COMMITMENT, SALT1);
     const otherChain = await signConstraint(attester, verifier, commitment, 8453n);
-    await expect(verifier.getIdentityWallet(EMAIL_COMMITMENT, proofBytes('email'), constraintOf(commitment, otherChain)))
+    await expect(verifier.getIdentityWallet(EMAIL_COMMITMENT, proofBytes('email'), constraintOf(commitment, registered(otherChain))))
       .to.be.revertedWithCustomError(verifier, 'InvalidConstraintSigner');
     const otherVerifier = await ethers.deployContract('PviumVerifier', [await pviumIdentity.getAddress(), admin.address, [attester.address]]);
     const forOther = await signConstraint(attester, otherVerifier, commitment);
-    await expect(verifier.getIdentityWallet(EMAIL_COMMITMENT, proofBytes('email'), constraintOf(commitment, forOther)))
+    await expect(verifier.getIdentityWallet(EMAIL_COMMITMENT, proofBytes('email'), constraintOf(commitment, registered(forOther))))
       .to.be.revertedWithCustomError(verifier, 'InvalidConstraintSigner');
     const personalSign = await attester.signMessage(ethers.getBytes(commitment)); // the old scheme
-    await expect(verifier.getIdentityWallet(EMAIL_COMMITMENT, proofBytes('email'), constraintOf(commitment, personalSign)))
+    await expect(verifier.getIdentityWallet(EMAIL_COMMITMENT, proofBytes('email'), constraintOf(commitment, registered(personalSign))))
       .to.be.revertedWithCustomError(verifier, 'InvalidConstraintSigner');
   });
 
@@ -150,26 +158,28 @@ describe('PviumVerifier: real ZK proof + signed constraint commitment', function
     expect(await verifier.owner()).to.equal(admin.address);
     expect(await verifier.isConstraintSigner(attester.address)).to.equal(true);
     expect(await verifier.constraintSignerCount()).to.equal(1n);
-    const commitment = await verifier.screeningCommitment(POLICY, EMAIL_COMMITMENT, ethers.id('salt'));
+    const commitment = await verifier.constraintCommitment(ethers.ZeroAddress, POLICY, EMAIL_COMMITMENT, SALT1);
     // a second signer, then the first is revoked
     await expect(verifier.connect(stranger).setConstraintSigner(stranger.address, true)).to.be.revertedWithCustomError(verifier, 'NotOwner');
     await expect(verifier.connect(admin).setConstraintSigner(stranger.address, true)).to.emit(verifier, 'ConstraintSignerSet').withArgs(stranger.address, true);
     await verifier.connect(admin).setConstraintSigner(attester.address, false);
     expect(await verifier.constraintSignerCount()).to.equal(1n);
     const byOld = await signConstraint(attester, verifier, commitment);
-    await expect(verifier.getIdentityWallet(EMAIL_COMMITMENT, proofBytes('email'), constraintOf(commitment, byOld)))
+    await expect(verifier.getIdentityWallet(EMAIL_COMMITMENT, proofBytes('email'), constraintOf(commitment, registered(byOld))))
       .to.be.revertedWithCustomError(verifier, 'InvalidConstraintSigner');
     const byNew = await signConstraint(stranger, verifier, commitment);
-    const [wallet] = await verifier.getIdentityWallet(EMAIL_COMMITMENT, proofBytes('email'), constraintOf(commitment, byNew));
+    const [wallet] = await verifier.getIdentityWallet(EMAIL_COMMITMENT, proofBytes('email'), constraintOf(commitment, registered(byNew)));
     expect(wallet).to.equal(LINKED_WALLET); // whoever signs, the wallet comes from the proof
-    // revoking the last signer turns constraints off; re-adding turns them back on
+    // revoking the last signer leaves registered-signer commitments unclaimable until one is
+    // added again; constraints stay supported, since a payer can always name its own signer
     await verifier.connect(admin).setConstraintSigner(stranger.address, false);
-    expect(await verifier.supportsConstraints()).to.equal(false);
-    await expect(verifier.getIdentityWallet(EMAIL_COMMITMENT, proofBytes('email'), constraintOf(commitment, byNew)))
+    expect(await verifier.supportsConstraints()).to.equal(true);
+    await expect(verifier.getIdentityWallet(EMAIL_COMMITMENT, proofBytes('email'), constraintOf(commitment, registered(byNew))))
       .to.be.revertedWithCustomError(verifier, 'ConstraintsUnsupported');
     await expect(verifier.connect(admin).setConstraintSigner(ethers.ZeroAddress, true)).to.be.revertedWithCustomError(verifier, 'InvalidSigner');
     await verifier.connect(admin).setConstraintSigner(attester.address, true);
-    expect(await verifier.supportsConstraints()).to.equal(true);
+    const [again] = await verifier.getIdentityWallet(EMAIL_COMMITMENT, proofBytes('email'), constraintOf(commitment, registered(await signConstraint(attester, verifier, commitment))));
+    expect(again).to.equal(LINKED_WALLET);
   });
 
   it('ownership moves in two steps, and address(0) as owner freezes the signer set', async () => {
@@ -187,21 +197,143 @@ describe('PviumVerifier: real ZK proof + signed constraint commitment', function
     await expect(frozen.connect(stranger).acceptOwnership()).to.be.revertedWithCustomError(frozen, 'NotPendingOwner');
   });
 
-  it('supportsConstraints reflects whether an attester is set, and a vault refuses constrained deposits otherwise', async () => {
+  it('constraints are always supported: a verifier with no registered signer still takes payer-chosen-signer deposits', async () => {
     expect(await verifier.supportsConstraints()).to.equal(true);
-    expect(await verifierNoSigner.supportsConstraints()).to.equal(false);
+    expect(await verifierNoSigner.supportsConstraints()).to.equal(true);
     await token.mint(payer.address, 10n);
     await token.connect(payer).approve(await vault.getAddress(), 10n);
-    const commitment = await verifier.screeningCommitment(POLICY, EMAIL_COMMITMENT, ethers.id('salt'));
-    await expect(vault.connect(payer).fundWith(await verifierNoSigner.getAddress(), await token.getAddress(), 10n, commitment, DAY, ethers.ZeroHash))
-      .to.be.revertedWithCustomError(vault, 'ConstraintsUnsupported');
-    await vault.connect(payer).fundWith(await verifierNoSigner.getAddress(), await token.getAddress(), 10n, ethers.ZeroHash, DAY, ethers.ZeroHash); // unconstrained is fine
+    const commitment = await verifierNoSigner.constraintCommitment(stranger.address, POLICY, EMAIL_COMMITMENT, ethers.id('salt'));
+    await vault.connect(payer).fundWith(await verifierNoSigner.getAddress(), await token.getAddress(), 10n, commitment, DAY, ethers.ZeroHash);
+    const sig = await signConstraint(stranger, verifierNoSigner, commitment);
+    await vault.sweepBucket(await verifierNoSigner.getAddress(), constraintOf(commitment, chosen(stranger.address, POLICY, ethers.id('salt'), sig)),
+      await token.getAddress(), proofBytes('email'), 0);
+    expect(await token.balanceOf(LINKED_WALLET)).to.equal(10n);
   });
 
-  it('a verifier without a constraint signer refuses constrained sweeps but still proves identity', async () => {
+  it('a verifier without a constraint signer refuses registered-signer constraints but still proves identity', async () => {
     const [wallet] = await verifierNoSigner.getIdentityWallet(EMAIL_COMMITMENT, proofBytes('email'), NO_CONSTRAINT);
     expect(wallet).to.equal(LINKED_WALLET);
-    await expect(verifierNoSigner.getIdentityWallet(EMAIL_COMMITMENT, proofBytes('email'), constraintOf(ethers.id('c'))))
+    const c = await verifierNoSigner.constraintCommitment(ethers.ZeroAddress, POLICY, EMAIL_COMMITMENT, SALT1);
+    await expect(verifierNoSigner.getIdentityWallet(EMAIL_COMMITMENT, proofBytes('email'), constraintOf(c, registered(await signConstraint(attester, verifierNoSigner, c)))))
       .to.be.revertedWithCustomError(verifierNoSigner, 'ConstraintsUnsupported');
+  });
+
+  describe('payer-chosen signer: the commitment names its signer', () => {
+    const SALT = ethers.id('payment-42');
+    async function fundConstrained(commitment: string, amount = 100n) {
+      await token.mint(payer.address, amount);
+      await token.connect(payer).approve(await vault.getAddress(), amount);
+      await vault.connect(payer).fund(await token.getAddress(), amount, commitment, DAY, ethers.ZeroHash);
+    }
+
+    it('the commitment is keccak256(abi.encode("p2id.constraint.v1", signer, policyHash, identityHash, salt))', async () => {
+      const expected = ethers.keccak256(ethers.AbiCoder.defaultAbiCoder().encode(
+        ['string', 'address', 'bytes32', 'bytes32', 'bytes32'], ['p2id.constraint.v1', stranger.address, POLICY, EMAIL_COMMITMENT, SALT]));
+      expect(await verifier.constraintCommitment(stranger.address, POLICY, EMAIL_COMMITMENT, SALT)).to.equal(expected);
+      expect(await verifier.CONSTRAINT_DOMAIN()).to.equal('p2id.constraint.v1');
+    });
+
+    it('releases to the proven wallet with the chosen signer, who needs no registration', async () => {
+      expect(await verifier.isConstraintSigner(stranger.address)).to.equal(false);
+      const commitment = await verifier.constraintCommitment(stranger.address, POLICY, EMAIL_COMMITMENT, SALT);
+      await fundConstrained(commitment);
+      const sig = await signConstraint(stranger, verifier, commitment);
+      await vault.connect(attester).sweepBucket(await verifier.getAddress(), constraintOf(commitment, chosen(stranger.address, POLICY, SALT, sig)),
+        await token.getAddress(), proofBytes('email'), 0);
+      expect(await token.balanceOf(LINKED_WALLET)).to.equal(100n);
+    });
+
+    it('no other signer can satisfy it: not a registered signer, not a different chosen signer', async () => {
+      const commitment = await verifier.constraintCommitment(stranger.address, POLICY, EMAIL_COMMITMENT, SALT);
+      // a registered signer's bare signature, and its signature presented as registered-signer mode:
+      // the commitment names `stranger`, so the address(0) preimage cannot reproduce it
+      const byRegistered = await signConstraint(attester, verifier, commitment);
+      await expect(verifier.getIdentityWallet(EMAIL_COMMITMENT, proofBytes('email'), constraintOf(commitment, byRegistered)))
+        .to.be.revertedWithCustomError(verifier, 'MalformedSignature');
+      await expect(verifier.getIdentityWallet(EMAIL_COMMITMENT, proofBytes('email'), constraintOf(commitment, chosen(ethers.ZeroAddress, POLICY, SALT, byRegistered))))
+        .to.be.revertedWithCustomError(verifier, 'ConstraintMismatch');
+      // the registered signer claiming to be the chosen one: the preimage no longer matches
+      const byAttester = await signConstraint(attester, verifier, commitment);
+      await expect(verifier.getIdentityWallet(EMAIL_COMMITMENT, proofBytes('email'), constraintOf(commitment, chosen(attester.address, POLICY, SALT, byAttester))))
+        .to.be.revertedWithCustomError(verifier, 'ConstraintMismatch');
+      // the right preimage with someone else's signature
+      await expect(verifier.getIdentityWallet(EMAIL_COMMITMENT, proofBytes('email'), constraintOf(commitment, chosen(stranger.address, POLICY, SALT, byAttester))))
+        .to.be.revertedWithCustomError(verifier, 'InvalidConstraintSigner');
+    });
+
+    it('the commitment binds the payee, the policy and the salt', async () => {
+      const otherPayee = await verifier.constraintCommitment(stranger.address, POLICY, ethers.id('someone-else'), SALT);
+      const sig = await signConstraint(stranger, verifier, otherPayee);
+      // the verifier recomputes with the vault's identityHash, so another payee's approval does not match
+      await expect(verifier.getIdentityWallet(EMAIL_COMMITMENT, proofBytes('email'), constraintOf(otherPayee, chosen(stranger.address, POLICY, SALT, sig))))
+        .to.be.revertedWithCustomError(verifier, 'ConstraintMismatch');
+      const commitment = await verifier.constraintCommitment(stranger.address, POLICY, EMAIL_COMMITMENT, SALT);
+      const good = await signConstraint(stranger, verifier, commitment);
+      for (const [policy, salt] of [[ethers.id('other policy'), SALT], [POLICY, ethers.id('other salt')]]) {
+        await expect(verifier.getIdentityWallet(EMAIL_COMMITMENT, proofBytes('email'), constraintOf(commitment, chosen(stranger.address, policy, salt, good))))
+          .to.be.revertedWithCustomError(verifier, 'ConstraintMismatch');
+      }
+    });
+
+    it('a contract signer approves through ERC-1271', async () => {
+      const wallet1271 = await ethers.deployContract('MockERC1271Signer', [stranger.address]);
+      const signerAddr = await wallet1271.getAddress();
+      const commitment = await verifier.constraintCommitment(signerAddr, POLICY, EMAIL_COMMITMENT, SALT);
+      const sig = await signConstraint(stranger, verifier, commitment); // the contract accepts its owner's signature
+      const [wallet] = await verifier.getIdentityWallet(EMAIL_COMMITMENT, proofBytes('email'), constraintOf(commitment, chosen(signerAddr, POLICY, SALT, sig)));
+      expect(wallet).to.equal(LINKED_WALLET);
+      const byOther = await signConstraint(attester, verifier, commitment);
+      await expect(verifier.getIdentityWallet(EMAIL_COMMITMENT, proofBytes('email'), constraintOf(commitment, chosen(signerAddr, POLICY, SALT, byOther))))
+        .to.be.revertedWithCustomError(verifier, 'InvalidConstraintSigner');
+    });
+
+    it('a registered contract signer approves registered-signer constraints by naming itself (ERC-1271)', async () => {
+      const safe = await ethers.deployContract('MockERC1271Signer', [stranger.address]);
+      const safeAddr = await safe.getAddress();
+      await verifier.connect(admin).setConstraintSigner(safeAddr, true);
+      const commitment = await verifier.constraintCommitment(ethers.ZeroAddress, POLICY, EMAIL_COMMITMENT, SALT1);
+      const approval = await signConstraint(stranger, verifier, commitment); // the contract accepts its owner's signature
+      const named = (approver: string, sig: string) => ethers.AbiCoder.defaultAbiCoder().encode(['address', 'bytes'], [approver, sig]);
+      const [wallet] = await verifier.getIdentityWallet(EMAIL_COMMITMENT, proofBytes('email'), constraintOf(commitment, registered(named(safeAddr, approval))));
+      expect(wallet).to.equal(LINKED_WALLET);
+      // the same approval naming a contract that is not registered, or a registered one that did not approve
+      const unregistered = await ethers.deployContract('MockERC1271Signer', [stranger.address]);
+      await expect(verifier.getIdentityWallet(EMAIL_COMMITMENT, proofBytes('email'), constraintOf(commitment, registered(named(await unregistered.getAddress(), approval)))))
+        .to.be.revertedWithCustomError(verifier, 'InvalidConstraintSigner');
+      await expect(verifier.getIdentityWallet(EMAIL_COMMITMENT, proofBytes('email'), constraintOf(commitment, registered(named(safeAddr, await signConstraint(payer, verifier, commitment))))))
+        .to.be.revertedWithCustomError(verifier, 'InvalidConstraintSigner');
+      // an EOA signer may also name itself
+      const [w2] = await verifier.getIdentityWallet(EMAIL_COMMITMENT, proofBytes('email'),
+        constraintOf(commitment, registered(named(attester.address, await signConstraint(attester, verifier, commitment)))));
+      expect(w2).to.equal(LINKED_WALLET);
+      // once revoked, it can no longer approve
+      await verifier.connect(admin).setConstraintSigner(safeAddr, false);
+      await expect(verifier.getIdentityWallet(EMAIL_COMMITMENT, proofBytes('email'), constraintOf(commitment, registered(named(safeAddr, approval)))))
+        .to.be.revertedWithCustomError(verifier, 'InvalidConstraintSigner');
+    });
+
+    it('one approval covers every deposit funded with the same commitment: uniqueness is the payer\'s salt', async () => {
+      const commitment = await verifier.constraintCommitment(stranger.address, POLICY, EMAIL_COMMITMENT, SALT);
+      for (const funder of [payer, attester]) {
+        await token.mint(funder.address, 50n);
+        await token.connect(funder).approve(await vault.getAddress(), 50n);
+        await vault.connect(funder).fund(await token.getAddress(), 50n, commitment, DAY, ethers.ZeroHash);
+      }
+      const sig = await signConstraint(stranger, verifier, commitment);
+      await vault.sweepBucket(await verifier.getAddress(), constraintOf(commitment, chosen(stranger.address, POLICY, SALT, sig)), await token.getAddress(), proofBytes('email'), 0);
+      expect(await token.balanceOf(LINKED_WALLET)).to.equal(100n);
+      // a different salt is a different commitment: the same approval does not carry over
+      const other = await verifier.constraintCommitment(stranger.address, POLICY, EMAIL_COMMITMENT, ethers.id('payment-43'));
+      await expect(verifier.getIdentityWallet(EMAIL_COMMITMENT, proofBytes('email'), constraintOf(other, chosen(stranger.address, POLICY, ethers.id('payment-43'), sig))))
+        .to.be.revertedWithCustomError(verifier, 'InvalidConstraintSigner');
+    });
+
+    it('malformed constraint signatures revert as malformed', async () => {
+      const commitment = await verifier.constraintCommitment(stranger.address, POLICY, EMAIL_COMMITMENT, SALT);
+      for (const bad of ['0x', '0x' + '11'.repeat(64), '0x' + '11'.repeat(66), '0x' + '11'.repeat(159)]) {
+        await expect(verifier.getIdentityWallet(EMAIL_COMMITMENT, proofBytes('email'), constraintOf(commitment, bad)))
+          .to.be.revertedWithCustomError(verifier, 'MalformedSignature');
+      }
+    });
   });
 });

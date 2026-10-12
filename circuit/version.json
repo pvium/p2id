@@ -1,6 +1,6 @@
 {
-  "circuitVersion": 1,
-  "vkSha256": "0x778f89fcdc8b42ebfdd63e6383ba0d2f7753d4e36dee86e711b55d0db7c0e7c3",
+  "circuitVersion": 2,
+  "vkSha256": "0x6c6f145bd929a5e3a8ca1e3c875f3c0e13e7be11f71fc8ad7bbaad9ddb5e9a78",
   "nargo": "1.0.0-beta.26",
   "barretenberg": "5.0.0",
   "publicInputCount": 11,

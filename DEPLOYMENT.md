@@ -1,278 +1,239 @@
-# Deployment runbook
+# Set up P2ID payments
 
-Order matters: **decide the configuration → predict → record → deploy contracts → prover → SDK →
-API**. Each step says how to confirm it worked. Do a full pass on the sandbox environment before
-production.
+You can use Pvium's reference deployment or deploy your own P2ID contracts. Both support
+payments that name a verifier with `fundWith`; the difference is who controls verifier
+approval and which vault addresses your application uses.
 
-## Environments
+Deploying your own factory at a different address creates a new set of deterministic vault
+addresses for the same identities, comparable to operating in a separate payment namespace.
+Payers must derive addresses for the chosen deployment; funds sent to Pvium's vaults and
+funds sent to your vaults belong to separate contracts.
 
-Pvium has two environments, and each is a separate stack at separate addresses:
-
-| Environment | Privy app | Networks (`deploy.config.ts`) | Settings in `.env` |
-| --- | --- | --- | --- |
-| `sandbox` | `cmhc6t92u001tju0cxkxg34on` | `baseSepolia` | `*_SANDBOX` |
-| `production` | `cmjzq9okg01kwjm0cq4b0xs74` | `base`, `bsc` | `*_PROD` |
-
-The network you pass picks the environment, and the script reads only that environment's values:
-its Privy JWKS, owner and attester. There is no way for a testnet run to pick up production
-settings, and `P2ID_ENV` cannot override a network's configured environment. Within an
-environment every chain gets the same configuration and therefore the same addresses. Adding a
-chain is one line in `deploy.config.ts`.
-
-Three facts to keep in mind throughout:
-
-- **The constructor configuration is permanent for a scheme and environment.** The owner, the Privy
-  key set, the initial attester and the *initial* delay and refund windows are constructor values;
-  with deterministic deployment they decide the factory address, and the factory address decides
-  every identity's P2ID address. Deploy every chain with the same values. Afterwards the attesters
-  (by the verifier's owner) and the delay and refund windows (by the factory owner, through the
-  timelocked `proposeConfig` → `activateConfig`) can change per chain without moving any address.
-- **The initial Privy key set is pinned in configuration.** `PRIVY_SIGNER_KEYS_SANDBOX` / `_PROD`
-  (in `.env`, with the same values committed in `.env.example`) list every key in each app's JWKS
-  as `kid:0x<x>:0x<y>`. Privy publishes two keys per app and may sign with either, so
-  `PviumIdentity` accepts the whole set; the PEM the dashboard shows is only one of them, so never
-  deploy from it alone. Never change these values once a stack is deployed from them: every later
-  chain of that environment must start from the same keys to get the same addresses (the script
-  refuses a mismatch, see step 4). `PRIVY_JWKS_URL_*` is only a fallback when the keys are unset. Keys Privy adds later are proposed by the owner and accepted
-  after 7 days' public notice (`proposeSignerKey` → `activateSignerKey`), with no redeployment.
-- **Proofs made before the circuit's public inputs changed (the `recipient` input became the checked
-  `wallet`) no longer verify.** Nothing was deployed, so the circuit is still version 1, but any
-  attestation stored from the earlier build has a different verification key and must be regenerated (step 7).
-
-## 0. Prerequisites
-
-- Node 22.13+ and yarn; `nargo 1.0.0-beta.26` and `bb 5.0.0` only if you rebuild
-  the circuit (not needed to deploy what is committed).
-- All suites green on the commit you deploy: `contracts` (`yarn test`), `sdks/node` (both packages)
-  (`yarn test`), `http-prover` (`yarn test`), `circuit` (`sh test/e2e.sh && sh test/adversarial.sh`).
-- A **Safe that exists at the same address on every target chain**, to own the factory registry.
-  Create it first (Safe's deterministic deployment gives the same address everywhere when the
-  owners, threshold and salt nonce match). An EOA works mechanically but is a single key holding
-  the verifier registry.
-- The two Privy key sets, already filled in `.env.example` (`PRIVY_SIGNER_KEYS_*`).
-- A funded deployer account on each chain. It receives no privileges and does not affect addresses.
-
-## Trying it locally first
-
-No `.env` is needed on a local chain; unset values default to the sandbox Privy JWKS, the first
-local account as owner, and no attester.
-
-```sh
-yarn hardhat run scripts/deploy-deterministic.ts --network hardhat     # throwaway: gone when it exits
-yarn hardhat node                                                      # or keep one running…
-yarn hardhat run scripts/deploy-deterministic.ts --network localhost   # …and deploy to it
-```
-
-## 1. Configure
-
-```sh
-cd contracts
-cp .env.example .env      # git-ignored
-```
-
-Fill in, per environment, `OWNER_SANDBOX` / `OWNER_PROD` (the Safe), `ATTESTER_SANDBOX` /
-`ATTESTER_PROD` (the address whose EIP-712 signatures satisfy screening constraints, or `none`),
-optional `ALPHA_ATTESTER_SANDBOX` / `ALPHA_ATTESTER_PROD` (the factory alpha signer;
-omitted or blank uses that environment's owner), and the deployer key. Set both attester
-variables to the same address if the roles should share a key. The factory alpha signer
-is a single address; constraint signers remain a verifier-managed set. Signer changes
-are immediate. The JWKS URLs are prefilled. The defaults (7-day policy-change notice, 1–90 day
-refund windows) are starting values: the factory owner can change them later through the
-timelock, within limits fixed in the factory (delay 1–30 days, refund windows 1 hour–365 days). A default-verifier change
-always needs 14 days' notice; that is fixed in the factory.
-
-## 2. Predict the addresses (no transactions)
-
-```sh
-PREDICT=1 yarn hardhat run scripts/deploy-deterministic.ts --network baseSepolia   # sandbox
-PREDICT=1 P2ID_ENV=production yarn hardhat run scripts/deploy-deterministic.ts   # production, offline
-```
-
-Prints the environment, the Privy keys it fetched (with their `kid`), the configuration, and the
-seven addresses it will have on every chain of that environment. Nothing is sent.
-
-## 3. Record the factory; the production one freezes the scheme
-
-The deploy script records the factory itself: after a successful run whose wiring checks pass, if
-`sdks/node/p2id-core/src/p2id.json` has no factory yet for that environment under the current
-scheme (`pvium.vault.v1`), it writes the deployed address into `factories.sandbox` or
-`factories.production`. Rebuild the SDK (`yarn build` in `sdks/node`) and commit the file; pushing
-then publishes an SDK that derives against it. (Recording the predicted address by hand before
-deploying is equivalent, and the script refuses to deploy if its configuration would produce a
-different one.)
-
-Recording the sandbox factory freezes nothing: while `production` is `null` the vault proxy may
-still change, and the deploy script refreshes `vaultInitCodeHash` from the build it deploys
-(dropping a sandbox factory recorded under the old hash, then recording the new one);
-`node scripts/embed-p2id.mjs --update` in `sdks/node/p2id-core` does the same by hand. From the commit that records the production factory, a
-change to the proxy creation code fails the init-code-hash consistency check until a new scheme
-(a new scheme entry with its own salt name) is added. Changes to the factory or its embedded base
-implementation also change the predicted factory address. Deploying a standalone registered vault
-implementation for an existing factory does not change its vault addresses. The deploy script
-refuses to run if its configuration no longer produces the recorded factory.
-
-(Deploying to one testnet first and recording the address from its output is equivalent.)
-
-## 4. Deploy the contracts, once per chain
-
-```sh
-yarn hardhat run scripts/deploy-deterministic.ts --network baseSepolia   # sandbox
-yarn hardhat run scripts/deploy-deterministic.ts --network base          # production
-yarn hardhat run scripts/deploy-deterministic.ts --network bsc           # production, same addresses as base
-```
-
-The script
-
-1. requires the deterministic deployment proxy `0x4e59b44847b379578588920cA78FbF26c0B4956C` on the
-   chain (it is on Base, Ethereum, Optimism, Arbitrum, Polygon and most others; if it is missing,
-   stop: deploy it first or addresses will not match),
-2. deploys `RelationsLib`, `ZKTranscriptLib`, `PviumZKVerifier`, `PviumIdentity`, `PviumVerifier`,
-   `PviumP2IDPolicy` (the launch policy: allowlist containing that verifier, no fee) and
-   `PviumP2IdVaultFactory`, skipping any that already exist, so it is safe to re-run after an
-   interruption,
-3. reads everything back and checks the wiring: code at every address, every Privy key, the
-   circuit version, pinned vkHash from circuit/version.json and the owner in `PviumIdentity`, the attester in `PviumVerifier`, the policy's owner and
-   allowlist, and the factory's owner, policy, default verifier, namespace, delays, refund bounds,
-   base implementation address/code/factory binding/registration, and vault init-code hash against `p2id.json`,
-4. calls `policy.setFactory(factory)` when the deployer is the owner; otherwise prints the calldata
-   for the owner (a Safe) to send. Until it is sent the policy refuses every fee and recipients are
-   paid in full, so nothing breaks if it waits, but it must be done before a fee policy is activated,
-5. writes `contracts/deployments/<scheme>.<environment>.<chainId>.json`, including the Privy keys
-   and their `kid`s. Commit it.
-
-Before sending anything it compares its predicted factory with `p2id.json` and with every earlier
-deployment record of the same scheme and environment, and stops if they differ, naming the likely
-cause (for example, the Privy JWKS changed since the first chain was deployed).
-
-**Confirm:** it ends with `wiring checks passed (<environment>)`, and `factory` equals the recorded
-one on every chain of that environment. Expect roughly 9–10M gas in total; the Honk verifier is most of it.
-
-Verify sources on the explorer (optional, recommended). `scripts/verify-deployments.ts` reads the
-chain's deployment record, asks the explorer which addresses are already verified, and submits
-the rest with the constructor arguments the record holds. One `ETHERSCAN_API_KEY` in `.env`
-covers every chain (Etherscan V2 API):
-
-```sh
-yarn verify --network base                                   # every deployments/*.<chainId>.json for the chain
-DEPLOYMENT=deployments/pvium.vault.v1.production.8453.json yarn verify --network base
-VAULTS=0x…,0x… yarn verify --network bsc                     # vaults the factory has deployed (no constructor args)
-DRY_RUN=1 yarn verify --network base                         # print the plan, call nothing
-```
-
-Run it from the commit that produced the record: the explorer compares the compiled bytecode with
-what is on chain, so a record from an older build verifies only with that build checked out.
-
-Nothing needs to be handed over afterwards: the factory and the launch policy were given `OWNER`
-at construction, and no other contract has an admin.
-
-## 5. Deploy the prover
-
-The prover must serve the circuit version the contracts and SDK verify (currently 1).
-
-- **Railway:** redeploy from the commit. The Dockerfile ships `http-prover/circuit/` as committed.
-- **VPS workflow:** tag `prover-vX.Y.Z` on that commit, or run "Deploy http-prover" manually from
-  `main`. It rebuilds the circuit and fails if the verification key does not match
-  `circuit/version.json`. The VPS needs glibc ≥ 2.34 for `bb`.
-
-**Confirm:** `GET /healthz` reports `circuitVersion: 1` and `vkSha256` starting `0x1c7991`. Then
-request one attestation with a real token and verify it with the SDK built from this commit.
-
-## 6. Publish the SDK
-
-```sh
-cd sdks/node
-yarn install && yarn test   # both packages: embeds the P2ID schemes and the vk, checks them against the build
-# publish core first: the verifier depends on it
-(cd p2id-core && npm version <x.y.z> && npm publish --access public)
-(cd p2id-verifier && npm version <x.y.z> && npm publish --access public)
-```
-
-**Confirm:** `p2idAddress({ identityType: 'email', identityValue: … })` returns the same address as
-`factory.vaultFor(identityHash)` on a production chain, and adding `environment: 'sandbox'` matches
-the sandbox factory on the testnet.
-
-## 7. Point the API at it
-
-- Set the prover URL and token (`service.prover.*`) if they changed, and upgrade `@pvium/p2id-verifier` (and `@pvium/p2id-core` where addresses are derived).
-- Mark every user `proofSynced: false` so the worker regenerates attestations under the current
-  verification key. Until a user is regenerated, resolution for them has no valid attestation.
-- The worker must prove the wallet the user has chosen to receive to, not a fixed index: the
-  newest proof presented to a vault sets its owner, so proving another wallet later would move it.
-
-## 8. First live check
-
-On a testnet, with a test identity you control:
-
-1. `p2idAddress(...)` → send a small ERC-20 amount to it.
-2. `factory.deploy(identityHash)`.
-3. `vault.refreshProofAndSweep(pviumVerifier, abi.encode(proof, publicInputs), token, 0)`.
-   The linked wallet receives the amount, and `OwnerRefreshed` is emitted.
-4. Fund through `factory.fund(...)` with a short refund window and confirm `refund` works after it.
-
-## Changing things later
-
-| Change | What to do | Addresses |
+| | Use Pvium's deployment | Deploy your own setup |
 | --- | --- | --- |
-| Privy adds or retires a key | `PviumIdentity.proposeSignerKey(x, y, jwksUrl, kid)` → wait 7 days → `activateSignerKey`; `removeSignerKey` for a retired one, at once. Existing deposits stay claimable | unchanged |
-| A new circuit version | Deploy a new `PviumIdentity` + `PviumVerifier`, `policy.approveVerifier` it (payers can opt in with `fundWith` at once), then `proposeDefaultVerifier` → wait 14 days → `activateDefaultVerifier`. Owners need a fresh proof under the new default before direct transfers follow | unchanged |
-| New attester, or turning screening on | `PviumVerifier.setConstraintSigner(attester, true)` from the verifier's owner; revoke old ones the same way. No new deployment | unchanged |
-| A third party's verifier | `policy.approveVerifier`; payers opt in with `fundWith` | unchanged |
-| Policy-change delay or refund-window bounds | `factory.proposeConfig(key, value)` (`0` delay, `1` min window, `2` max window) → wait the current delay → `activateConfig(key)`; `cancelConfig(key)` before then. Limits are fixed in the factory; existing vaults follow at once, existing deposits keep their window. Per chain: send it on every chain of the environment | unchanged |
-| A verifier is found unsafe | `policy.approveVerifier(v, false)`: claims under it freeze, refunds still work | unchanged |
-| Protocol fees, or permissionless verifier registration (staking) | Deploy a new `IP2IDPolicy`, then `factory.proposePolicy` → wait the delay → `activatePolicy`. Fees stay capped at the factory's fixed `MAX_FEE_BPS` (1%) and apply only to deposits made after the switch; the new policy's `collectFee` receives each fee at claim time, with the claimer's address, and decides who gets it (e.g. a verifier operator's share, a claim relayer's reward) | unchanged |
-| Vault, factory or launch-policy code changes before release | While no factory is recorded in `p2id.json`: rebuild, `embed-p2id.mjs --update`, deploy again (a superseded testnet record in `deployments/` must be moved aside first) | new addresses for the changed contracts |
-| Compatible vault implementation for an existing factory | `IMPLEMENTATION=<Contract> yarn implementation --network <chain>`: runs the `yarn layout` checks (storage layout against `storage/P2IDVault.layout.json`, the owner-proof hook, no `delegatecall`/`selfdestruct`, no proxy-reserved selectors), deploys through `factory.deployVaultImplementation` at the same CREATE2 address on every chain, and proposes it (`MAKE_DEFAULT=1` to also make new vaults start on it; prints calldata when the owner is a multisig); after 14 days `REGISTER=1 yarn implementation`. Verify it with `IMPLEMENTATIONS=src/X.sol:X@0x… yarn verify`. Each vault owner opts in with `upgradeTo` and an identity proof | vault addresses unchanged; new vaults use the current default |
-| Revoke an implementation | `revokeImplementation` removes it as an upgrade target immediately; installed copies continue executing. The original implementation and current default cannot be revoked | unchanged |
-| Factory or proxy code changes after release | Add a new scheme entry to `p2id.json`, deploy the new stack and release the SDK. Existing vaults remain on their original factory/proxy | **new scheme, new addresses** |
+| Factory and vaults | Use the existing Pvium factory and its identity vaults | Deploy a factory that creates your identity vaults |
+| Policy | Managed by Pvium | Managed by you |
+| Your own verifier | Contact Pvium to register it before accepting payments through it | Approve it through your policy |
+| Vault addresses | Pvium's addresses for the selected environment | Different addresses when your factory address differs |
 
+A policy is attached to a factory and controls verifier approval and fee quotes for that
+factory's vaults. One policy can approve multiple verifiers. A verifier authenticates
+proofs; it does not choose the factory's policy.
 
-## Deterministic vault implementations
+## Option 1: Use Pvium's reference deployment
 
-This workflow requires a factory deployed with `deployVaultImplementation`. Existing deployed
-factories cannot acquire this API: the factory itself is not upgradeable. Changing the factory
-bytecode changes the address predicted by the stack deployment script. Existing deployment records
-and SDK factory addresses must be handled as a separate rollout; this workflow does not overwrite them.
+Use the factory deployed on your target chain. The core SDK derives addresses for Pvium's
+production deployment by default; select `environment: 'sandbox'` for its testnet deployment.
+Confirm the factory exists on the chain before sending funds.
 
-The factory owner calls `deployVaultImplementation(creationCode, makeDefault)`. Creation code
-includes constructor arguments. CREATE2 uses the factory as deployer and
-`keccak256("pvium.vault.implementation.v1")` as salt. The bytecode hash determines the address;
-the default flag does not. Solidity requires the boolean argument; the script defaults it to false.
+You can use Pvium's reference verifier and its Privy-based proof system, or implement your
+own verifier using the interface below. To use your own verifier, deploy it and contact
+Pvium to register its address on each supported chain. Provide its source code, proof
+format, and trusted identity sources for review. The current policy permits only its owner
+to approve verifiers; deployment alone does not register one.
 
-Deployment and proposal are atomic. A fresh implementation is not registered immediately.
-After 14 days, the owner calls `registerImplementation()`. With `makeDefault=true`, that call
-also sets the implementation used when future vault proxies are deployed. Existing vaults keep
-their implementation until their owners authorize an upgrade. Counterfactual vaults funded before
-deployment receive whichever default is active when they are deployed.
+Once your verifier is approved, use its address in the `fundWith` example below. This
+uses the existing identity vault address and records your verifier for that deposit.
 
-From `contracts/`, with the configured network and owner signer:
+If you need to host Pvium's prover yourself, follow
+[http-prover/README.md](http-prover/README.md). Its output is for Pvium's reference verifier;
+a different verifier may need its own proof-generation service.
 
-```sh
-# Review a plan; writes owner transaction calldata without broadcasting.
-FACTORY=0x... CANDIDATE=src/MyVaultV2.sol:MyVaultV2 MAKE_DEFAULT=true OUT=/tmp/vault-v2-plan.json yarn deploy:implementation --network baseSepolia
+## Option 2: Deploy your own setup
 
-# Deploy through the factory and immediately propose registration.
-FACTORY=0x... CANDIDATE=src/MyVaultV2.sol:MyVaultV2 MAKE_DEFAULT=true EXECUTE=1 yarn deploy:implementation --network baseSepolia
+Deploy your own verifier, policy, and factory when you want to control verifier admission
+and operate a separate set of identity vaults. You can reuse the reference Solidity
+contracts or implement the interfaces in [P2ID.md](P2ID.md).
 
-# Once the on-chain ETA is reached, activate that exact candidate and flag.
-FACTORY=0x... CANDIDATE=src/MyVaultV2.sol:MyVaultV2 MAKE_DEFAULT=true ACTION=activate EXECUTE=1 yarn deploy:implementation --network baseSepolia
+With the reference contracts, the setup order is:
+
+1. Deploy a verifier implementing `IP2IDVerifier`. Set up the proof-generation tooling
+   that recipients will use with it.
+2. Deploy `PviumP2IDPolicy(owner, [verifier])`. This policy approves the supplied verifier
+   addresses and quotes zero fees. Its owner can later add or remove verifiers with
+   `approveVerifier(verifier, true/false)`. A custom policy implements
+   [IP2IDPolicy](contracts/src/interfaces/IP2IDPolicy.sol) and defines its own admission
+   and fee rules.
+3. Deploy `PviumP2IdVaultFactory` with your owner, namespace hash, policy, initial verifier,
+   policy-change delay, refund-window bounds, and alpha signer. The initial verifier must
+   already be approved by the policy and report a nonzero `vkHash()`. The factory deploys
+   the starting vault implementation itself; individual identity vaults are created as needed.
+4. From the reference policy's owner account, call `policy.setFactory(factoryAddress)`
+   to bind it to your factory. Confirm `factory.policy()` and `policy.factory()` point
+   to the intended contracts.
+5. Publish your chain IDs, factory and verifier addresses, vault creation-code hash, and
+   proof instructions. Configure payers and recipients to use those values.
+
+See the [factory constructor](contracts/src/PviumP2IdVaultFactory.sol) for the exact argument
+order and limits. Policy-change delays must be 1–30 days; refund-window bounds must be
+between 1 hour and 365 days, with the minimum no greater than the maximum. These are
+requirements of the reference implementation.
+
+The repository's `deploy-deterministic.ts` script is configured for Pvium's own deployment
+and recorded addresses. For an independent setup, write a deployment script for your chosen
+contracts and configuration rather than replacing Pvium's SDK records. Run your script with
+`yarn hardhat run scripts/<your-script>.ts --network <network>` from your Hardhat project.
+
+### Derive addresses for your factory
+
+Changing the factory address changes the vault address for the same identity. Reusing
+Pvium's hashing rules does not make your vaults share Pvium's addresses. Funds already sent
+to one deployment remain there; a new deployment does not move them.
+
+Read `factory.vaultFor(identityHash)` to obtain your deployment's vault address. For local
+calculation, the protocol uses both your factory address and its vault creation-code hash.
+If you reuse the exact proxy bytecode bundled with the core SDK, you can override the factory:
+
+```ts
+import { IdentityType, p2idAddress } from '@pvium/p2id-core';
+
+const vaultAddress = p2idAddress({
+  identityType: IdentityType.Email,
+  identityValue: 'you@example.com',
+  factory: yourFactoryAddress,
+});
 ```
 
-The script supports implementations with `constructor(address factory)`, checks the candidate
-against the committed original storage layout, predicts the address and simulates the owner call.
-For multisig ownership, submit the plan's `to` and `data` from the owner account.
-`OUT` refuses to overwrite an existing file. Keep the same source, compiler settings and constructor
-arguments for activation. Verify the deployed implementation on the explorer with its factory
-constructor argument.
+Check that `factory.initCodeHash()` matches the selected SDK scheme's `vaultInitCodeHash`
+and that the result equals `factory.vaultFor(identityHash)`. If your proxy bytecode differs,
+use your actual creation-code hash with the [protocol address formula](P2ID.md#vault-address)
+or obtain the address directly from your factory.
 
-Repeating an identical pending deployment request reuses the code and preserves its ETA.
-A different pending proposal must be cancelled before this deployment API can proceed.
-Repeating an already registered opt-in deployment is a no-op. Changing it to the default starts
-a new 14-day proposal. `proposeDefaultImplementation(address)` can also select an already
-registered implementation, including the original fallback, after the same delay.
-Manual `proposeImplementation(address)` replaces a pending proposal and clears its default flag.
+## Implement a verifier
 
-The factory checks code presence and raw factory binding on deterministic deployment and default
-activation; it cannot prove storage compatibility or safe delegatecall behavior. Review each
-candidate against every implementation users may upgrade from, including appended storage.
-The original fallback preserves only its known fields and may not interpret data introduced by
-later versions. No live deployment is performed by the dry-run command.
+Implement [IP2IDVerifier](contracts/src/interfaces/IP2IDVerifier.sol) and follow the
+[protocol's verification requirements](P2ID.md#verification-and-claims):
+
+| Method | Required behavior |
+| --- | --- |
+| `getIdentityWallet(identityHash, proof, constraint)` | Authenticate the supplied identity commitment and its linked wallet. Return a nonzero wallet and the attestation issue time in Unix seconds. Revert for an invalid proof, a different identity, or an unsatisfied nonzero constraint |
+| `supportsConstraints()` | Return whether the verifier supports nonzero funding constraints |
+| `revision()` | Change the revision when previously accepted identity proofs may no longer be trusted, so vaults invalidate cached wallets. A constant is appropriate only when trust cannot be revoked |
+| `vkHash()` | Return the verifier's pinned verification-key artifact SHA-256, read from trusted verifier configuration rather than caller-supplied proof metadata |
+
+Use the identity normalization and commitment formula in [P2ID.md](P2ID.md#identity-commitments).
+Your proof must authenticate both that commitment and the returned wallet. The wallet must
+come from verified evidence; accepting an arbitrary payout address would let a caller claim
+someone else's funds.
+
+The `proof` argument is opaque bytes. Define and document your encoding, proof-generation
+procedure, trusted sources, and revocation behavior. The standard does not require Privy
+or Pvium's proof format. [PviumVerifier.sol](contracts/src/PviumVerifier.sol) is one example:
+it decodes a zero-knowledge proof and public inputs, verifies them through `PviumIdentity`,
+and checks the identity and wallet commitments.
+
+If constraints are unsupported, return false from `supportsConstraints()` and reject nonzero
+commitments. If supported, validate the commitment and its evidence before returning a wallet.
+
+## Confirm your verifier is ready for payments
+
+On each target chain, confirm the verifier has deployed code and that the factory's current
+policy returns true from `isVerifierAllowed(verifier)`. On Pvium's deployment, contact Pvium
+if approval is missing. On your own deployment with the reference policy, its owner calls
+`approveVerifier(verifier, true)`.
+
+Each recorded deposit keeps the verifier selected at funding. Selecting a different
+verifier does not change the identity's vault address.
+
+## Fund a payment with your verifier
+
+Use your selected factory's `fundWith` method. It deploys the identity vault if necessary
+and records the caller as the funder:
+
+```solidity
+function fundWith(
+    bytes32 identityHash,
+    address verifier,
+    address token,
+    uint256 amount,
+    bytes32 constraint,
+    uint64 refundWindow,
+    bytes32 ref
+) external payable returns (address vault, uint256 depositId);
+```
+
+For an ERC-20 payment, approve the factory to spend the amount before calling `fundWith`.
+The following ethers v6 example uses addresses supplied by your application:
+
+```ts
+import { Contract, ZeroHash } from 'ethers';
+import { IdentityType, identityHash } from '@pvium/p2id-core';
+
+// signer is the payer's ethers Signer on the target chain.
+// factoryAddress, verifierAddress, and tokenAddress are deployed on that chain.
+const factory = new Contract(factoryAddress, [
+  'function minRefundWindow() view returns (uint64)',
+  'function fundWith(bytes32 identityHash, address verifier, address token, uint256 amount, bytes32 constraint, uint64 refundWindow, bytes32 ref) payable returns (address vault, uint256 depositId)',
+], signer);
+const token = new Contract(tokenAddress, [
+  'function approve(address spender, uint256 amount) returns (bool)',
+], signer);
+
+const recipient = identityHash(IdentityType.Email, 'you@example.com');
+const amount = 1_000_000n; // One token if this ERC-20 uses six decimals.
+const refundWindow = await factory.minRefundWindow();
+
+await (await token.approve(factoryAddress, amount)).wait();
+const receipt = await (await factory.fundWith(
+  recipient,
+  verifierAddress,
+  tokenAddress,
+  amount,
+  ZeroHash,      // No additional claim constraint.
+  refundWindow, // Seconds; must be within the factory's current bounds.
+  ZeroHash,      // No application reference.
+)).wait();
+```
+
+Read the vault's `Funded` event from the receipt to obtain the deposit ID and credited
+amount. A transaction receipt does not expose the Solidity return values. With a
+fee-on-transfer token, the credited amount can be less than the requested amount.
+
+For native currency, pass `ZeroAddress` as the token and send the same amount as transaction
+value. With the factory and recipient from the example above:
+
+```ts
+import { ZeroAddress, parseEther } from 'ethers';
+
+const nativeAmount = parseEther('0.001');
+await (await factory.fundWith(
+  recipient, verifierAddress, ZeroAddress, nativeAmount,
+  ZeroHash, refundWindow, ZeroHash,
+  { value: nativeAmount },
+)).wait();
+```
+
+An ERC-20 call must send no native value. `ref` is an optional application reference emitted
+in the funding event; it does not affect eligibility or the payout wallet.
+
+A direct transfer to the vault does not select your verifier or create a refundable deposit.
+Use `fundWith` when the payment must be claimed through your verifier.
+
+## Claim and test the payment
+
+The recipient generates a proof in your verifier's format. For an unconstrained deposit,
+present it to the vault with `refreshProofAndSweep(verifier, proof, token, depositCountLimit)`.
+For a constrained deposit, use `sweepBucket` or `sweepBucketDeposits` with the matching
+constraint and evidence. See [IP2IDVault](contracts/src/interfaces/IP2IDVault.sol) for the
+method signatures. The vault pays the authenticated wallet returned by your verifier.
+
+Before accepting real payments, test a successful claim, an invalid proof, an identity
+mismatch, and an attempt to substitute the payout wallet. Test stale proofs and revision
+changes, and constraint rejection if applicable. For a separate unclaimed deposit, confirm
+that the original funder can call `refund(depositId)` after its refund window. Refunds remain
+available even if the policy stops approving the verifier.
+
+### Alpha testing with the Pvium reference implementation
+
+Alpha authorization is an extension of Pvium's reference implementation, separate from the
+standard verifier interface. It can provide an additional signed approval during alpha testing.
+
+On that implementation, new key hashes require alpha authorization until released by the
+factory owner. Read `factory.isAlpha(verifier.vkHash())` before testing claims. While enabled,
+use the corresponding `*WithAttestation` claim method with an authorization from the factory's
+configured alpha signer. The authorization binds the vault, caller, action, nonce, deadline,
+and factory epoch; it does not replace the identity proof or policy approval.
+
+For Pvium's deployment, coordinate with Pvium for testing authorizations or release of the
+verifier's key hash. For your own deployment using these contracts, configure an alpha signer
+and issue test authorizations; when ready, the factory owner can call `setAlpha(vkHash, false)`. Funding a deposit through `fundWith` does not itself require an alpha authorization.
