@@ -16,7 +16,8 @@
       },
       "verifiers": {
         "production": {
-          "1": "0x310020527Bc13a765F85976217A34c394bF2F1f2"
+          "1": "0x310020527Bc13a765F85976217A34c394bF2F1f2",
+          "2": "0x08766Fb58780AF3C6b6747AbbB8EeD87dC9FbaA1"
         },
         "sandbox": {
           "1": "0x2BF1c5Addbf202dB65779829Bb9deC183409ec48",
