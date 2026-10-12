@@ -32,8 +32,8 @@
   "factory": "0x06663e26Fd76A9D075a83D9a987ADD6d08a85A98",
   "policy": "0x7D915675295772A4bEAEfc05Ef5BB0c4ECaC33B7",
   "status": {
-    "checkedAt": "2026-10-11T22:40:08.355Z",
-    "approved": false,
+    "checkedAt": "2026-10-11T23:15:45.185Z",
+    "approved": true,
     "alpha": true,
     "isDefault": false,
     "defaultProposedEta": null

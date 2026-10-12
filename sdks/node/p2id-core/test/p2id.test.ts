@@ -122,3 +122,19 @@ test('deprecated email-provider types keep their IDs but cannot generate identit
     assert.match(identityHash(type, type === IdentityType.Phone ? '+15551234567' : 'example'), /^0x[0-9a-f]{64}$/);
   }
 });
+
+test('funding verifier: the newest recorded circuit version per environment', async () => {
+  const { p2idFundingVerifier, p2idVerifier } = await import('../src/p2id.js');
+  // circuit v1's verifiers, as deployed with the stacks
+  assert.equal(p2idVerifier(1, { environment: 'production' }), '0x310020527Bc13a765F85976217A34c394bF2F1f2');
+  assert.equal(p2idVerifier(1, { environment: 'sandbox' }), '0x2BF1c5Addbf202dB65779829Bb9deC183409ec48');
+  assert.equal(p2idVerifier(99), null);
+  for (const environment of ['production', 'sandbox'] as const) {
+    const f = p2idFundingVerifier({ environment });
+    assert.ok(f, `a funding verifier is recorded for ${environment}`);
+    const versions = Object.keys(p2idScheme().verifiers[environment]).map(Number);
+    assert.equal(f.circuitVersion, Math.max(...versions));
+    assert.equal(f.verifier, p2idVerifier(f.circuitVersion, { environment }));
+  }
+  assert.throws(() => p2idFundingVerifier({ environment: 'staging' as any }), /unknown environment "staging"/);
+});

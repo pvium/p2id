@@ -107,6 +107,31 @@ export function safeBatchFile(record: any, label: string): string {
   return join(DEPLOYMENTS, 'safe', `${record.scheme}.${record.environment}.circuit-v${record.circuitVersion}.${record.chainId}.${label}.json`);
 }
 
+const P2ID_JSON = join(__dirname, '..', '..', '..', 'sdks', 'node', 'p2id-core', 'src', 'p2id.json');
+
+/**
+ * Once the policy approves a verifier, record it in the core SDK's p2id.json (verifiers.<env>.<N>),
+ * so clients fund new payments under it (p2idFundingVerifier). Every chain of an environment must
+ * give the same address; a different one already recorded is an error. Returns what it did.
+ */
+export function recordApprovedVerifier(record: any): string {
+  if (!record.status?.approved) return 'not approved in the policy yet: not recorded in p2id.json';
+  const cfg = JSON.parse(readFileSync(P2ID_JSON, 'utf8'));
+  const scheme = cfg.schemes[record.scheme];
+  if (!scheme) throw new Error(`p2id.json has no scheme ${record.scheme}`);
+  scheme.verifiers ??= { production: {}, sandbox: {} };
+  const env = (scheme.verifiers[record.environment] ??= {});
+  const key = String(record.circuitVersion);
+  const existing: string | undefined = env[key];
+  if (existing && existing.toLowerCase() !== record.pviumVerifier.toLowerCase()) {
+    throw new Error(`p2id.json records ${existing} as the ${record.environment} circuit v${key} verifier, not ${record.pviumVerifier}: every chain of an environment must match`);
+  }
+  if (existing) return `p2id.json already records it as the ${record.environment} circuit v${key} verifier`;
+  env[key] = record.pviumVerifier;
+  writeFileSync(P2ID_JSON, JSON.stringify(cfg, null, 2) + '\n');
+  return `recorded in sdks/node/p2id-core/src/p2id.json as the ${record.environment} circuit v${key} verifier: rebuild the SDK and commit it`;
+}
+
 export function printStatus(s: VerifierStatus): void {
   console.log(`  approved in policy: ${s.approved ? 'yes' : 'no'}`);
   console.log(`  alpha:              ${s.alpha ? 'yes (claims need an alpha attestation)' : 'released'}`);

@@ -12,17 +12,33 @@
 // are sent; otherwise (a Safe) nothing is sent: the raw transactions are printed and written as one
 // Safe Transaction Builder batch to propose and sign in the Safe app. Either way the status in
 // deployments/<scheme>.<environment>.circuit-v<N>.<chainId>.json is refreshed from the chain.
-// CIRCUIT_VERSION selects the verifier set (default: circuit/version.json).
+// Once approved, the verifier is recorded in sdks/node/p2id-core/src/p2id.json (verifiers.<env>.<N>):
+// clients then fund new payments under it (p2idFundingVerifier). CIRCUIT_VERSION selects the
+// verifier set (default: circuit/version.json).
 import { ethers, network } from 'hardhat';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { environmentOf } from '../deploy.config';
 import {
-  STEPS, ownerTx, printStatus, readRecord, readStatus, safeBatchFile, verifierSetFile, writeRecord, writeSafeBatch,
-  type ActivationStep, type OwnerTx,
+  STEPS, ownerTx, printStatus, readRecord, readStatus, recordApprovedVerifier, safeBatchFile, verifierSetFile, writeRecord, writeSafeBatch,
+  type ActivationStep, type OwnerTx, type VerifierStatus,
 } from './lib/verifierSet';
 
 const ROOT = join(__dirname, '..', '..');
+
+/** Re-read the status until `step`'s effect is visible (up to a minute). */
+async function waitForStep(record: any, step: ActivationStep): Promise<VerifierStatus> {
+  const applied = (s: VerifierStatus) =>
+    step === 'approve' ? s.approved
+      : step === 'release-alpha' ? !s.alpha
+        : step === 'propose-default' ? s.defaultProposedEta !== null
+          : s.isDefault;
+  for (let i = 0; ; i++) {
+    const s = await readStatus(record);
+    if (applied(s) || i >= 30) return s;
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+}
 
 async function main() {
   const environment = environmentOf(network.name);
@@ -57,7 +73,9 @@ async function main() {
     if (requested.length && signer && signer.address.toLowerCase() === owner.toLowerCase()) {
       console.log(`\n${step}: sending from the owner key ${owner}\n  ${tx.description}`);
       await (await signer.sendTransaction({ to: tx.to, data: tx.data })).wait();
-      status = await readStatus(record); // later steps depend on earlier ones (propose needs approve)
+      // Later steps depend on earlier ones (propose needs approve), and a load-balanced RPC can
+      // answer reads from a node that has not seen the block yet: wait until the step shows.
+      status = await waitForStep(record, step);
       console.log('  done');
     } else {
       console.log(`\n${step}: owner ${owner} sends\n  ${tx.description}\n  to    ${tx.to}\n  value 0\n  data  ${tx.data}`);
@@ -78,6 +96,7 @@ async function main() {
   if (chainId !== 31337) writeRecord(file, record);
   console.log(`\nrecorded status in ${file}`);
   printStatus(record.status);
+  if (chainId !== 31337) console.log(`  ${recordApprovedVerifier(record)}`);
 }
 
 main().catch((e) => {
