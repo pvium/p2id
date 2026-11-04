@@ -58,7 +58,7 @@ describe('single vault: pre-alpha behavior regression', () => {
     const token = await ethers.deployContract('MockERC20');
     const T = await token.getAddress();
     const policy = await ethers.deployContract('PviumP2IDPolicy', [admin.address, [V]]);
-    const factory = await ethers.deployContract('PviumP2IdVaultFactory', [admin.address, ethers.id('pvium.vault.v1'), await policy.getAddress(), V, 86400, 3600, 86400, ethers.ZeroAddress]);
+    const factory = await ethers.deployContract('PviumP2IdVaultFactory', [admin.address, ethers.id('pvium.vault.v1'), await policy.getAddress(), V, 86400, 3600, 86400, ethers.ZeroAddress, 14 * 86400]);
     await factory.setAlpha(await (await ethers.getContractAt('IP2IDVerifier', await factory.defaultVerifier())).vkHash(), false); // this suite exercises the ordinary (post-alpha) paths
     expect(await factory.isAlpha(await (await ethers.getContractAt('IP2IDVerifier', await factory.defaultVerifier())).vkHash())).to.equal(false);
     const identity = ethers.id('parity identity');

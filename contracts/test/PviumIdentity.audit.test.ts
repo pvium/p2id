@@ -50,7 +50,7 @@ describe('PviumIdentity audit: signer revocation', function () {
     const policy = await ethers.deployContract('PviumP2IDPolicy', [admin.address, [v]]);
     const factory = await ethers.deployContract('PviumP2IdVaultFactory', [
       admin.address, ethers.id('audit.revocation'), await policy.getAddress(), v, DAY, DAY, 90 * DAY,
-     ethers.ZeroAddress]);
+     ethers.ZeroAddress, 14 * DAY]);
     await factory.setAlpha(await (await ethers.getContractAt('IP2IDVerifier', await factory.defaultVerifier())).vkHash(), false); // this suite exercises the ordinary (post-alpha) paths
     await factory.deploy(identity);
     const vault = await ethers.getContractAt('P2IDVault', await factory.vaultFor(identity));
@@ -142,7 +142,7 @@ describe('Signer revision recovery: follow-up audit', function () {
     const policy = await ethers.deployContract('PviumP2IDPolicy', [admin.address, [v]]);
     const factory = await ethers.deployContract('PviumP2IdVaultFactory', [
       admin.address, ethers.id('audit.revision'), await policy.getAddress(), v, DAY, DAY, 90 * DAY,
-     ethers.ZeroAddress]);
+     ethers.ZeroAddress, 14 * DAY]);
     await factory.setAlpha(await (await ethers.getContractAt('IP2IDVerifier', await factory.defaultVerifier())).vkHash(), false); // this suite exercises the ordinary (post-alpha) paths
     const identity = ethers.id('revision-recipient');
     await factory.deploy(identity);

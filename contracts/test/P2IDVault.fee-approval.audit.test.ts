@@ -13,7 +13,7 @@ describe('P2IDVault fee approval audit reproductions', function () {
     await policy.allow(v, true);
     await policy.setFee(100, treasury.address);
     const factory = await ethers.deployContract('PviumP2IdVaultFactory', [admin.address,
-      ethers.id('audit'), await policy.getAddress(), v, 86400, 86400, 86400, ethers.ZeroAddress]);
+      ethers.id('audit'), await policy.getAddress(), v, 86400, 86400, 86400, ethers.ZeroAddress, 14 * 86400]);
     await factory.setAlpha(await verifier.vkHash(), false);
     await factory.deploy(identity);
     const vault = await ethers.getContractAt('P2IDVault', await factory.vaultFor(identity));

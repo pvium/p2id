@@ -8,11 +8,13 @@
     "test": "hardhat test",
     "fixtures": "sh scripts/refresh-fixtures.sh",
     "deploy:verifier": "hardhat run scripts/deploy-verifier.ts",
-    "verifier:activate": "hardhat run scripts/verifier-activate.ts",
+    "verifier:activate": "hardhat run scripts/verifier-activate.ts --via-ir",
     "verify": "hardhat run scripts/verify-deployments.ts",
     "verify:vault": "VAULTS_ONLY=1 hardhat run scripts/verify-deployments.ts",
-    "layout": "hardhat run scripts/check-storage-layout.ts",
-    "deploy:implementation": "hardhat run scripts/deploy-vault-implementation.ts"
+    "verify:bytecode": "hardhat run scripts/verify-deployed-bytecode.ts",
+    "layout": "hardhat run scripts/check-storage-layout.ts ",
+    "deploy:implementation": "hardhat run scripts/deploy-vault-implementation.ts",
+    "rehearse:v2": "hardhat run scripts/v2-rehearsal.ts --network localhost"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-chai-matchers": "^2.0.0",

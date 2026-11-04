@@ -50,7 +50,7 @@ export function targetsOf(r: any): Target[] {
     { name: 'PviumP2IDPolicy', contract: 'src/PviumP2IDPolicy.sol:PviumP2IDPolicy', address: r.policy, args: [r.config.owner, [r.pviumVerifier]] },
     {
       name: 'PviumP2IdVaultFactory', contract: 'src/PviumP2IdVaultFactory.sol:PviumP2IdVaultFactory', address: r.factory,
-      args: [r.config.owner, ethers.id(r.scheme), r.policy, r.pviumVerifier, r.config.policyChangeDelay, r.config.minRefundWindow, r.config.maxRefundWindow, ...(r.config.alphaAttester === undefined ? [] : [r.config.alphaAttester])],
+      args: [r.config.owner, ethers.id(r.scheme), r.policy, r.pviumVerifier, r.config.policyChangeDelay, r.config.minRefundWindow, r.config.maxRefundWindow, ...(r.config.alphaAttester === undefined ? [] : [r.config.alphaAttester]), ...(r.config.defaultVerifierDelay === undefined ? [] : [r.config.defaultVerifierDelay])],
     },
     {
       name: 'P2IDVault', contract: r.baseImplementationContract ?? 'src/P2IDVault.sol:P2IDVault',

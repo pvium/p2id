@@ -44,7 +44,7 @@ describe('PviumP2IdVaultFactory', function () {
       7 * DAY,
       DAY,
       30 * DAY,
-     ethers.ZeroAddress]);
+     ethers.ZeroAddress, 14 * DAY]);
     await factory.setAlpha(await (await ethers.getContractAt('IP2IDVerifier', await factory.defaultVerifier())).vkHash(), false); // this suite exercises the ordinary (post-alpha) paths
   });
 
@@ -92,7 +92,7 @@ describe('PviumP2IdVaultFactory', function () {
 
   it('the constructor refuses initial settings outside the limits proposeConfig enforces (audit)', async () => {
     const args = async (delay: number, min: number, max: number) =>
-      [deployer.address, NS, await policy.getAddress(), await idv.getAddress(), delay, min, max, ethers.ZeroAddress];
+      [deployer.address, NS, await policy.getAddress(), await idv.getAddress(), delay, min, max, ethers.ZeroAddress, 14 * DAY];
     const F = await ethers.getContractFactory('PviumP2IdVaultFactory');
     for (const [delay, min, max, key] of [[0, DAY, 30 * DAY, 0], [31 * DAY, DAY, 30 * DAY, 0], [7 * DAY, 0, 30 * DAY, 1], [7 * DAY, DAY, 400 * DAY, 2], [7 * DAY, 3599, DAY, 1]]) {
       await expect(F.deploy(...await args(delay, min, max))).to.be.revertedWithCustomError(F, 'InvalidConfig').withArgs(key, key === 0 ? delay : key === 1 ? min : max);
@@ -264,9 +264,9 @@ describe('PviumP2IdVaultFactory', function () {
   it('the constructor requires a policy that allows the default verifier', async () => {
     const F = await ethers.getContractFactory('PviumP2IdVaultFactory');
     const empty = await ethers.deployContract('PviumP2IDPolicy', [deployer.address, []]);
-    await expect(F.deploy(deployer.address, NS, await empty.getAddress(), await idv.getAddress(), 7 * DAY, DAY, 30 * DAY, ethers.ZeroAddress))
+    await expect(F.deploy(deployer.address, NS, await empty.getAddress(), await idv.getAddress(), 7 * DAY, DAY, 30 * DAY, ethers.ZeroAddress, 14 * DAY))
       .to.be.revertedWithCustomError(F, 'VerifierNotApproved');
-    await expect(F.deploy(deployer.address, NS, payer.address, await idv.getAddress(), 7 * DAY, DAY, 30 * DAY, ethers.ZeroAddress))
+    await expect(F.deploy(deployer.address, NS, payer.address, await idv.getAddress(), 7 * DAY, DAY, 30 * DAY, ethers.ZeroAddress, 14 * DAY))
       .to.be.revertedWithCustomError(F, 'InvalidPolicy');
   });
 

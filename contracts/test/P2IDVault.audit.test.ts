@@ -18,7 +18,7 @@ describe('P2IDVault audit findings', function () {
     const policy = await ethers.deployContract('PviumP2IDPolicy', [admin.address, [a1, a2]]);
     const factory = await ethers.deployContract('PviumP2IdVaultFactory', [
       admin.address, ethers.id('audit'), await policy.getAddress(), a1, day, day, 30 * day,
-     ethers.ZeroAddress]);
+     ethers.ZeroAddress, 14 * day]);
     await factory.setAlpha(await (await ethers.getContractAt('IP2IDVerifier', await factory.defaultVerifier())).vkHash(), false); // this suite exercises the ordinary (post-alpha) paths
     await factory.deploy(identity);
     const vault = await ethers.getContractAt('P2IDVault', await factory.vaultFor(identity));
@@ -46,7 +46,12 @@ describe('P2IDVault audit findings', function () {
     await vault.refreshProof(a2, proof(oldWallet.address, 1000));
     await expect(vault.sweepUntracked(await token.getAddress())).to.be.revertedWithCustomError(vault, 'ProofTooOld');
     expect(await vault.sweepable(a2, await token.getAddress())).to.equal(0n);
-    await vault.sweep(a2, await token.getAddress(), 0); // B's own deposits (none) only; direct transfers stay
+    // A successful transaction and a Swept event do not imply direct funds were paid.
+    await expect(vault.sweep(a2, await token.getAddress(), 0))
+      .to.emit(vault, 'Swept').withArgs(a2, await token.getAddress(), 0, 0, oldWallet.address, 0)
+      .and.not.to.emit(vault, 'Claimed');
+    expect(await token.balanceOf(vault.target)).to.equal(100n);
+    expect(await vault.untrackedBalance(await token.getAddress())).to.equal(100n);
     expect(await token.balanceOf(oldWallet.address)).to.equal(0n);
 
     // The owner proves under the new default with a fresh token: direct transfers follow.
@@ -54,6 +59,29 @@ describe('P2IDVault audit findings', function () {
     await vault.sweepUntracked(await token.getAddress());
     expect(await token.balanceOf(newWallet.address)).to.equal(100n);
     expect(await token.balanceOf(oldWallet.address)).to.equal(0n);
+  });
+
+  it('a successful sweep through a non-default verifier leaves direct transfers untouched', async () => {
+    const { payer, oldWallet, newWallet, a1, a2, vault, token } = await setup();
+    await vault.refreshProof(a1, proof(newWallet.address, 2000));
+    await vault.refreshProof(a2, proof(oldWallet.address, 3000));
+    await token.mint(payer.address, 100n);
+    await token.connect(payer).transfer(vault.target, 100n);
+    await payer.sendTransaction({ to: vault.target, value: 100n });
+    for (const tokenAddress of [await token.getAddress(), ethers.ZeroAddress]) {
+      await expect(vault.sweep(a2, tokenAddress, 0))
+        .to.emit(vault, 'Swept').withArgs(a2, tokenAddress, 0, 0, oldWallet.address, 0)
+        .and.not.to.emit(vault, 'Claimed');
+      expect(await vault.untrackedBalance(tokenAddress)).to.equal(100n);
+    }
+    expect(await token.balanceOf(oldWallet.address)).to.equal(0n);
+    const nativeBefore = await ethers.provider.getBalance(newWallet.address);
+    await vault.connect(payer).sweepUntracked(ethers.ZeroAddress);
+    await vault.connect(payer).sweepUntracked(await token.getAddress());
+    expect((await ethers.provider.getBalance(newWallet.address)) - nativeBefore).to.equal(100n);
+    expect(await token.balanceOf(newWallet.address)).to.equal(100n);
+    expect(await token.balanceOf(vault.target)).to.equal(0n);
+    expect(await ethers.provider.getBalance(vault.target)).to.equal(0n);
   });
 
   it('a verifier payers merely opted into cannot raise the direct-transfer floor', async () => {

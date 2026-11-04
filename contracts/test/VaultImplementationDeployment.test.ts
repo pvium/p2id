@@ -13,7 +13,7 @@ describe('Deterministic implementation deployment', () => {
     const policy = await ethers.deployContract('PviumP2IDPolicy', [admin.address, [await verifier.getAddress()]]);
     factory = await ethers.deployContract('PviumP2IdVaultFactory', [
       admin.address, ethers.id('pvium.vault.v1'), await policy.getAddress(), await verifier.getAddress(), 86400, 3600, 86400,
-     ethers.ZeroAddress]);
+     ethers.ZeroAddress, 14 * 86400]);
     await factory.setAlpha(await (await ethers.getContractAt('IP2IDVerifier', await factory.defaultVerifier())).vkHash(), false); // this suite exercises the ordinary (post-alpha) paths
     code = (await (await ethers.getContractFactory('MockVaultV2')).getDeployTransaction(await factory.getAddress())).data;
     target = ethers.getCreate2Address(await factory.getAddress(),

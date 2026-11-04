@@ -21,7 +21,7 @@ describe('PviumP2IDVaultProxy', function () {
     V = await idv.getAddress();
     policy = await ethers.deployContract('MockFeePolicy');
     await policy.allow(V, true);
-    factory = await ethers.deployContract('PviumP2IdVaultFactory', [deployer.address, NS, await policy.getAddress(), V, 7 * DAY, DAY, 30 * DAY, ethers.ZeroAddress]);
+    factory = await ethers.deployContract('PviumP2IdVaultFactory', [deployer.address, NS, await policy.getAddress(), V, 7 * DAY, DAY, 30 * DAY, ethers.ZeroAddress, 14 * DAY]);
     await factory.setAlpha(await (await ethers.getContractAt('IP2IDVerifier', await factory.defaultVerifier())).vkHash(), false); // this suite exercises the ordinary (post-alpha) paths
     token = await ethers.deployContract('MockERC20');
     await factory.deploy(ID);
@@ -88,7 +88,7 @@ describe('PviumP2IDVaultProxy', function () {
   });
 
   it('an implementation bound to another factory, or to none, cannot be proposed', async () => {
-    const otherFactory = await ethers.deployContract('PviumP2IdVaultFactory', [deployer.address, NS, await policy.getAddress(), V, 7 * DAY, DAY, 30 * DAY, ethers.ZeroAddress]);
+    const otherFactory = await ethers.deployContract('PviumP2IdVaultFactory', [deployer.address, NS, await policy.getAddress(), V, 7 * DAY, DAY, 30 * DAY, ethers.ZeroAddress, 14 * DAY]);
     await otherFactory.setAlpha(await (await ethers.getContractAt('IP2IDVerifier', await otherFactory.defaultVerifier())).vkHash(), false); // this suite exercises the ordinary (post-alpha) paths
     const foreign = await ethers.deployContract('MockVaultV2', [await otherFactory.getAddress()]);
     await expect(factory.proposeImplementation(await foreign.getAddress())).to.be.revertedWithCustomError(factory, 'InvalidImplementation');

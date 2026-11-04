@@ -141,6 +141,7 @@ async function configFor(environment: P2IDEnvironment, scheme: string, circuitVe
     policyChangeDelay: num('POLICY_CHANGE_DELAY', 7 * DAY),
     minRefundWindow: num('MIN_REFUND_WINDOW', DAY),
     maxRefundWindow: num('MAX_REFUND_WINDOW', 90 * DAY),
+    defaultVerifierDelay: num('DEFAULT_VERIFIER_DELAY', 14 * DAY),
   };
   return { params, keys, jwks };
 }
@@ -198,6 +199,7 @@ async function main() {
       policyChangeDelay: params.policyChangeDelay,
       minRefundWindow: params.minRefundWindow,
       maxRefundWindow: params.maxRefundWindow,
+      defaultVerifierDelay: params.defaultVerifierDelay,
     },
   };
   if (process.env.PREDICT) {

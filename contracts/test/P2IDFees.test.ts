@@ -34,7 +34,7 @@ describe('P2IDVault fees and policy limits', function () {
     token = await ethers.deployContract('MockERC20');
     policy = await ethers.deployContract('MockFeePolicy');
     await policy.allow(V, true);
-    factory = await ethers.deployContract('PviumP2IdVaultFactory', [deployer.address, NS, await policy.getAddress(), V, 7 * DAY, DAY, 30 * DAY, ethers.ZeroAddress]);
+    factory = await ethers.deployContract('PviumP2IdVaultFactory', [deployer.address, NS, await policy.getAddress(), V, 7 * DAY, DAY, 30 * DAY, ethers.ZeroAddress, 14 * DAY]);
     await factory.setAlpha(await (await ethers.getContractAt('IP2IDVerifier', await factory.defaultVerifier())).vkHash(), false); // this suite exercises the ordinary (post-alpha) paths
     await factory.deploy(ID);
     vault = await ethers.getContractAt('P2IDVault', await factory.vaultFor(ID));
@@ -167,7 +167,7 @@ describe('P2IDVault fees and policy limits', function () {
 
   it('under the launch policy no fee is charged; it still accepts fees and lets its owner withdraw them', async () => {
     const launch = await ethers.deployContract('PviumP2IDPolicy', [deployer.address, [V]]);
-    const f = await ethers.deployContract('PviumP2IdVaultFactory', [deployer.address, NS, await launch.getAddress(), V, 7 * DAY, DAY, 30 * DAY, ethers.ZeroAddress]);
+    const f = await ethers.deployContract('PviumP2IdVaultFactory', [deployer.address, NS, await launch.getAddress(), V, 7 * DAY, DAY, 30 * DAY, ethers.ZeroAddress, 14 * DAY]);
     await f.setAlpha(await (await ethers.getContractAt('IP2IDVerifier', await f.defaultVerifier())).vkHash(), false); // this suite exercises the ordinary (post-alpha) paths
     await f.deploy(ID);
     const v = await ethers.getContractAt('P2IDVault', await f.vaultFor(ID));

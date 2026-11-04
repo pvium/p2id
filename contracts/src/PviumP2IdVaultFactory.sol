@@ -13,7 +13,8 @@ import {IP2IDVault} from "./interfaces/IP2IDVault.sol";
 ///         supplies policy and default-verifier settings. The proxy takes no constructor arguments;
 ///         its address is the low 160 bits of keccak256(0xff || factory || identityHash || initCodeHash()).
 /// @dev Policy-address and configuration changes wait policyChangeDelay. Default-verifier
-///      changes and implementation registration wait DEFAULT_VERIFIER_DELAY. Implementation
+///      changes and implementation registration wait DEFAULT_VERIFIER_DELAY, an immutable fixed
+///      per factory at deployment (14 days on the production factory). Implementation
 ///      revocation changes registry membership without changing installed proxy code. Proposal
 ///      and registration check code presence and reported factory, alpha support and vault version;
 ///      they do not validate storage layout or implementation behavior.
@@ -154,8 +155,11 @@ contract PviumP2IdVaultFactory is IP2IdVaultFactory {
     /// @notice Verifier used when a payer does not choose one. Changes only via the timelock below.
     address public defaultVerifier;
 
-    /// @notice Notice before a proposed default verifier can be activated. Fixed in this bytecode.
-    uint64 public constant DEFAULT_VERIFIER_DELAY = 14 days;
+    /// @notice Notice before a proposed default verifier or vault implementation can be activated.
+    ///         Fixed per factory at deployment: an immutable, never a setter, so the notice a stack
+    ///         gives is part of its deterministic address. Bounded by MAX_DEFAULT_VERIFIER_DELAY.
+    uint64 public immutable DEFAULT_VERIFIER_DELAY;
+    uint64 public constant MAX_DEFAULT_VERIFIER_DELAY = 30 days;
     /// @notice Notice before a proposed policy can be activated.
     uint64 public policyChangeDelay;
     /// @notice Bounds a configuration proposal must respect. Fixed in this bytecode.
@@ -207,7 +211,10 @@ contract PviumP2IdVaultFactory is IP2IdVaultFactory {
     error UnexpectedValue();
     error InvalidImplementation();
     error ImplementationProposalPending();
+    error InvalidDefaultVerifierDelay(uint64 value);
 
+    /// @param _defaultVerifierDelay Notice for default-verifier changes and implementation
+    ///        registration, in seconds; 1 to MAX_DEFAULT_VERIFIER_DELAY. Production uses 14 days.
     constructor(
         address _owner,
         bytes32 _nsHash,
@@ -216,9 +223,15 @@ contract PviumP2IdVaultFactory is IP2IdVaultFactory {
         uint64 _policyChangeDelay,
         uint64 _minRefundWindow,
         uint64 _maxRefundWindow,
-        address _alphaAttester
+        address _alphaAttester,
+        uint64 _defaultVerifierDelay
     ) {
         if (_owner == address(0)) revert InvalidOwner();
+        if (
+            _defaultVerifierDelay == 0 ||
+            _defaultVerifierDelay > MAX_DEFAULT_VERIFIER_DELAY
+        ) revert InvalidDefaultVerifierDelay(_defaultVerifierDelay);
+        DEFAULT_VERIFIER_DELAY = _defaultVerifierDelay;
         // The same limits proposeConfig enforces, so no deployment can start outside them.
         if (
             _policyChangeDelay < MIN_POLICY_CHANGE_DELAY ||
@@ -545,7 +558,7 @@ contract PviumP2IdVaultFactory is IP2IdVaultFactory {
     // ------------------------------------------------------------------ default verifier (timelocked)
 
     /// @notice Announce a new default verifier (must be allowed by the policy). Takes effect only
-    ///         after DEFAULT_VERIFIER_DELAY (14 days), via activateDefaultVerifier(). Replaces any
+    ///         after DEFAULT_VERIFIER_DELAY, via activateDefaultVerifier(). Replaces any
     ///         pending proposal.
     function proposeDefaultVerifier(address verifier) external onlyOwner {
         if (!IP2IDPolicy(policy).isVerifierAllowed(verifier))

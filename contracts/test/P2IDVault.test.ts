@@ -39,7 +39,7 @@ describe('P2IDVault', function () {
     token = await ethers.deployContract('MockERC20');
     other = await ethers.deployContract('MockERC20');
     policy = await ethers.deployContract('PviumP2IDPolicy', [deployer.address, [V]]);
-    factory = await ethers.deployContract('PviumP2IdVaultFactory', [deployer.address, NS, await policy.getAddress(), V, 7 * DAY, DAY, 30 * DAY, ethers.ZeroAddress]);
+    factory = await ethers.deployContract('PviumP2IdVaultFactory', [deployer.address, NS, await policy.getAddress(), V, 7 * DAY, DAY, 30 * DAY, ethers.ZeroAddress, 14 * DAY]);
     await factory.setAlpha(await (await ethers.getContractAt('IP2IDVerifier', await factory.defaultVerifier())).vkHash(), false); // this suite exercises the ordinary (post-alpha) paths
     await factory.deploy(COMMIT);
     vault = await ethers.getContractAt('P2IDVault', await factory.vaultFor(COMMIT));

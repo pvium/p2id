@@ -37,6 +37,12 @@ export interface StackParams {
   policyChangeDelay: number;
   minRefundWindow: number;
   maxRefundWindow: number;
+  /**
+   * Notice for default-verifier changes and vault implementation registration, in seconds
+   * (the factory's immutable DEFAULT_VERIFIER_DELAY). Omitted: DEFAULT_VERIFIER_DELAY (14 days),
+   * the production value. Part of the factory's constructor arguments, so part of its address.
+   */
+  defaultVerifierDelay?: number;
   /** Override the deployment salt (default keccak256(scheme)); only to deliberately get a separate stack. */
   salt?: string;
 }
@@ -54,6 +60,8 @@ export interface StackAddresses {
 }
 
 export const CURRENT_SCHEME = 'pvium.vault.v1';
+/** The production notice for default-verifier changes and implementation registration: 14 days. */
+export const DEFAULT_VERIFIER_DELAY = 14 * 24 * 3600;
 
 /** Make sure the proxy exists. On a local Hardhat network it is installed; elsewhere it must already be there. */
 export async function ensureDeterministicDeployer(): Promise<void> {
@@ -197,6 +205,7 @@ export async function deployStack(
       p.minRefundWindow,
       p.maxRefundWindow,
       !p.alphaAttester || p.alphaAttester === ethers.ZeroAddress ? p.owner : p.alphaAttester,
+      p.defaultVerifierDelay ?? DEFAULT_VERIFIER_DELAY,
     ]),
     salt,
     signer,
@@ -348,6 +357,8 @@ export async function checkStack(p: StackParams, a: StackAddresses, expectedVaul
   if (!(await policy.isVerifierAllowed(a.pviumVerifier))) fail('default verifier allowed by the policy', false, true);
   if ((await factory.nsHash()) !== ethers.id(p.scheme)) fail('factory.nsHash', await factory.nsHash(), ethers.id(p.scheme));
   if (Number(await factory.policyChangeDelay()) !== p.policyChangeDelay) fail('policyChangeDelay', await factory.policyChangeDelay(), p.policyChangeDelay);
+  const expectedNotice = p.defaultVerifierDelay ?? DEFAULT_VERIFIER_DELAY;
+  if (Number(await factory.DEFAULT_VERIFIER_DELAY()) !== expectedNotice) fail('DEFAULT_VERIFIER_DELAY', await factory.DEFAULT_VERIFIER_DELAY(), expectedNotice);
   if (expectedVaultInitCodeHash && (await factory.initCodeHash()) !== expectedVaultInitCodeHash) {
     fail('factory.initCodeHash', await factory.initCodeHash(), `${expectedVaultInitCodeHash} (sdks/node/p2id-core/src/p2id.json)`);
   }

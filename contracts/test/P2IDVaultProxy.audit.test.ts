@@ -19,7 +19,7 @@ describe('PviumP2IDVaultProxy audit', function () {
     await policy.allow(await verifier.getAddress(), true);
     factory = await ethers.deployContract('PviumP2IdVaultFactory', [admin.address,
       ethers.id('pvium.vault.v1'), await policy.getAddress(), await verifier.getAddress(),
-      7 * DAY, DAY, 30 * DAY, ethers.ZeroAddress]);
+      7 * DAY, DAY, 30 * DAY, ethers.ZeroAddress, 14 * DAY]);
     await factory.setAlpha(await (await ethers.getContractAt('IP2IDVerifier', await factory.defaultVerifier())).vkHash(), false); // this suite exercises the ordinary (post-alpha) paths
     await factory.deploy(ID);
     const address = await factory.vaultFor(ID);

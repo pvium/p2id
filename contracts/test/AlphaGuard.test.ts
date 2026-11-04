@@ -20,7 +20,7 @@ describe('alpha proof acceptance by verification key', () => {
     V = await verifier.getAddress(); K = await verifier.vkHash();
     token = await ethers.deployContract('MockERC20'); T = await token.getAddress();
     policy = await ethers.deployContract('PviumP2IDPolicy', [admin.address, [V]]);
-    factory = await ethers.deployContract('PviumP2IdVaultFactory', [admin.address, ethers.id('pvium.vault.v1'), policy.target, V, DAY, 3600, DAY, attester.address]);
+    factory = await ethers.deployContract('PviumP2IdVaultFactory', [admin.address, ethers.id('pvium.vault.v1'), policy.target, V, DAY, 3600, DAY, attester.address, 14 * DAY]);
     await factory.deploy(ID);
     vault = await ethers.getContractAt('P2IDVault', await factory.vaultFor(ID));
     proxy = await ethers.getContractAt('PviumP2IDVaultProxy', vault.target);
