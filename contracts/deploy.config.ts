@@ -22,6 +22,7 @@ export const DEPLOY_NETWORKS = {
   baseSepolia: { chainId: 84532, environment: 'sandbox', rpcEnv: 'BASE_SEPOLIA_RPC_URL', defaultRpc: 'https://sepolia.base.org' },
   base: { chainId: 8453, environment: 'production', rpcEnv: 'BASE_RPC_URL', defaultRpc: 'https://mainnet.base.org' },
   bsc: { chainId: 56, environment: 'production', rpcEnv: 'BSC_RPC_URL', defaultRpc: 'https://bsc-dataseed.bnbchain.org' },
+  ethereum: { chainId: 1, environment: 'production', rpcEnv: 'ETH_RPC_URL', defaultRpc: 'https://ethereum-rpc.publicnode.com' },
 } as const satisfies Record<string, DeployNetwork>;
 
 export const ENV_SUFFIX: Record<P2IDEnvironment, string> = { sandbox: 'SANDBOX', production: 'PROD' };
