@@ -172,13 +172,13 @@ describe('P2IDVaultV2 release: registration, new vaults, existing vaults upgradi
     await time.increase(DAY + 1);
 
     // a named refunder is the only account that can refund, and is the one paid; the funder gave the right away
-    await expect(vault.connect(stranger).refund(0)).to.be.revertedWithCustomError(vault, 'NotRefunder');
-    await expect(vault.connect(payer).refund(2)).to.be.revertedWithCustomError(vault, 'NotRefunder');
+    await expect(vault.connect(stranger).refund(0)).to.be.revertedWithCustomError(vault, 'NotFunderOrRefunder');
+    await expect(vault.connect(payer).refund(2)).to.be.revertedWithCustomError(vault, 'NotFunderOrRefunder');
     await expect(vault.connect(refunder).refund(0)).to.emit(vault, 'Refunded').withArgs(0, refunder.address, T, 100n);
     await expect(vault.connect(refunder).refund(2)).to.emit(vault, 'Refunded').withArgs(2, refunder.address, T, 50n);
     expect(await nativeDelta(refunder, () => vault.connect(refunder).refund(1))).to.equal(ethers.parseEther('1'));
     // a plain deposit refunds as in V1: the funder, nobody else
-    await expect(vault.connect(refunder).refund(4)).to.be.revertedWithCustomError(vault, 'NotRefunder');
+    await expect(vault.connect(refunder).refund(4)).to.be.revertedWithCustomError(vault, 'NotFunderOrRefunder');
     await expect(vault.connect(payer).refund(3)).to.be.revertedWithCustomError(vault, 'DepositConsumed'); // claimed
     await expect(vault.connect(payer).refund(4)).to.emit(vault, 'Refunded').withArgs(4, payer.address, T, 30n);
     await expect(vault.connect(payer).refund(5)).to.emit(vault, 'Refunded').withArgs(5, payer.address, T, 10n);
@@ -261,7 +261,7 @@ describe('P2IDVaultV2 release: registration, new vaults, existing vaults upgradi
     expect(await ethers.provider.getBalance(vault.target)).to.equal(ethers.parseEther('2'));
 
     // refunds of V1 deposits are unchanged: the funder, only the funder, after the window
-    await expect(vault.connect(stranger).refund(0)).to.be.revertedWithCustomError(vault, 'NotRefunder');
+    await expect(vault.connect(stranger).refund(0)).to.be.revertedWithCustomError(vault, 'NotFunderOrRefunder');
     await expect(vault.connect(payer).refund(0)).to.emit(vault, 'Refunded').withArgs(0, payer.address, T, 100n);
     expect(await token.balanceOf(payer.address)).to.equal(101n);
     // the owner cache carried over: a proofless sweep still pays the owner
@@ -329,7 +329,7 @@ describe('P2IDVaultV2 release: registration, new vaults, existing vaults upgradi
     const ownerTokens = await token.balanceOf(ownerWallet.address);
     const ownerNative = await ethers.provider.getBalance(ownerWallet.address);
     const feeRecipientTokens = await token.balanceOf(deployer.address);
-    await expect(vault.connect(stranger).refund(0)).to.be.revertedWithCustomError(vault, 'NotRefunder');
+    await expect(vault.connect(stranger).refund(0)).to.be.revertedWithCustomError(vault, 'NotFunderOrRefunder');
     await expect(vault.connect(payer).refund(0)).to.be.revertedWithCustomError(vault, 'DepositConsumed');
     await expect(vault.connect(payer).refund(3)).to.be.revertedWithCustomError(vault, 'DepositConsumed');
     await expect(vault.sweepBucket(V, { commitment: c, signature: '0x' }, T, proof, 0))
@@ -362,8 +362,8 @@ describe('P2IDVaultV2 release: registration, new vaults, existing vaults upgradi
     await releaseV2();
     await proxy.connect(ownerWallet).upgradeTo(ID, V2, proofFor(ownerWallet.address, 2000));
     // The payer has not asked for a refund. No third party, and not the owner either, can trigger one.
-    await expect(vault.connect(stranger).refund(0)).to.be.revertedWithCustomError(vault, 'NotRefunder');
-    await expect(vault.connect(ownerWallet).refund(0)).to.be.revertedWithCustomError(vault, 'NotRefunder');
+    await expect(vault.connect(stranger).refund(0)).to.be.revertedWithCustomError(vault, 'NotFunderOrRefunder');
+    await expect(vault.connect(ownerWallet).refund(0)).to.be.revertedWithCustomError(vault, 'NotFunderOrRefunder');
     await vault.connect(ownerWallet).sweepDeposits(V, T, [0]);
     expect(await token.balanceOf(ownerWallet.address)).to.equal(100n);
     expect(await token.balanceOf(payer.address)).to.equal(0n);
@@ -431,7 +431,7 @@ describe('P2IDVaultV2 release: registration, new vaults, existing vaults upgradi
     await vault.connect(stranger).sweepDeposits(V, T, [0]);
     expect(await token.balanceOf(ownerWallet.address)).to.equal(100n);
     await time.increase(DAY + 1);
-    await expect(vault.connect(stranger).refund(1)).to.be.revertedWithCustomError(vault, 'NotRefunder');
+    await expect(vault.connect(stranger).refund(1)).to.be.revertedWithCustomError(vault, 'NotFunderOrRefunder');
     await expect(vault.connect(refunder).refund(1)).to.emit(vault, 'Refunded').withArgs(1, refunder.address, T, 5n);
     expect(await token.balanceOf(refunder.address)).to.equal(5n);
   });
