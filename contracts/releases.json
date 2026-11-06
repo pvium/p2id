@@ -1,0 +1,38 @@
+{
+  "stackCircuit": {
+    "pvium.vault.v1": 1
+  },
+  "circuits": {
+    "1": {
+      "vkHash": "0x778f89fcdc8b42ebfdd63e6383ba0d2f7753d4e36dee86e711b55d0db7c0e7c3",
+      "zkVerifier": "src/PviumZKVerifier.sol:PviumZKVerifier",
+      "verifier": "src/PviumVerifier.sol:PviumVerifier"
+    },
+    "2": {
+      "vkHash": "0x6c6f145bd929a5e3a8ca1e3c875f3c0e13e7be11f71fc8ad7bbaad9ddb5e9a78",
+      "zkVerifier": "src/PviumZKVerifierV2.sol:PviumZKVerifierV2",
+      "verifier": "src/PviumVerifierV2.sol:PviumVerifierV2"
+    }
+  },
+  "vaultImplementations": {
+    "pvium.vault.v1": [
+      {
+        "contract": "P2IDVaultV2",
+        "label": "vault-v2",
+        "makeDefault": true
+      }
+    ]
+  },
+  "environments": {
+    "production": {
+      "alphaAttester": "0xF4D957297E6497781aCa1ea4F0046D6748c4B7a3",
+      "constraintSigners": [
+        "0xF4D957297E6497781aCa1ea4F0046D6748c4B7a3"
+      ],
+      "retiredConstraintSigners": [
+        "0x944039a5445A90384F908232177859f436456720"
+      ]
+    }
+  },
+  "notes": "What each address scheme's stack is built from, so any checkout reproduces the deployed addresses. stackCircuit: the circuit version whose verifier set the scheme's factory was deployed with (its first default verifier); it is part of the factory address and never changes. circuits: one entry per circuit version, naming the generated ZK verifier and the PviumVerifier it was released with (fully qualified, since every generated verifier file declares the same library names) and the sha256 of its verification key. vaultImplementations: implementations released after the factory's built-in P2IDVault, in order. A released source file is never edited: a new circuit version or a changed contract is a new file (PviumZKVerifierV3.sol, PviumVerifierV3.sol, P2IDVaultV3.sol) and a new entry here. environments: owner-managed settings every chain of an environment should have now, where they differ from what the stack was deployed with (the deployment values are part of the addresses and stay in contracts/.env): the factory alpha attester, the constraint signers every verifier should accept, and signers to remove. The deploy script turns any difference on a chain into owner transactions."
+}

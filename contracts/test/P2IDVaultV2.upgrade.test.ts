@@ -10,8 +10,8 @@ const ID_NEW = ethers.id('new-user');
 const DAY = 86400;
 const Z = ethers.ZeroHash;
 const NATIVE = ethers.ZeroAddress;
-/** The notice this factory is deployed with. Production factories use 14 days; the value is an immutable. */
-const NOTICE = 1;
+/** PviumP2IdVaultFactory.DEFAULT_VERIFIER_DELAY: the released factory, the one behind every production vault. */
+const NOTICE = 14 * DAY;
 const alphaTypes = { AlphaAuthorization: [
   { name: 'vault', type: 'address' }, { name: 'caller', type: 'address' },
   { name: 'callHash', type: 'bytes32' }, { name: 'nonce', type: 'uint256' },
@@ -41,7 +41,7 @@ describe('P2IDVaultV2 release: registration, new vaults, existing vaults upgradi
     V = await idv.getAddress(); K = await idv.vkHash();
     policy = await ethers.deployContract('MockFeePolicy');
     await policy.allow(V, true);
-    factory = await ethers.deployContract('PviumP2IdVaultFactory', [deployer.address, NS, await policy.getAddress(), V, 7 * DAY, DAY, 30 * DAY, attester.address, NOTICE]);
+    factory = await ethers.deployContract('PviumP2IdVaultFactory', [deployer.address, NS, await policy.getAddress(), V, 7 * DAY, DAY, 30 * DAY, attester.address]);
     token = await ethers.deployContract('MockERC20'); T = await token.getAddress();
     V1 = await factory.baseImplementation();
     // exactly what `IMPLEMENTATION=P2IDVaultV2 yarn implementation` sends: the creation code bound to this factory
@@ -90,15 +90,16 @@ describe('P2IDVaultV2 release: registration, new vaults, existing vaults upgradi
     expect(current[current.length - 1][0]).to.equal('ownerAlphaRevision');
   });
 
-  it('the notice is an immutable fixed at factory deployment, within [1 second, 30 days]', async () => {
-    expect(await factory.DEFAULT_VERIFIER_DELAY()).to.equal(BigInt(NOTICE));
-    expect(await factory.MAX_DEFAULT_VERIFIER_DELAY()).to.equal(BigInt(30 * DAY));
-    const F = await ethers.getContractFactory('PviumP2IdVaultFactory');
+  it('the released factory has a 14-day constant notice; PviumP2IdVaultFactoryV2 takes it at deployment, within [1 second, 30 days]', async () => {
+    expect(await factory.DEFAULT_VERIFIER_DELAY()).to.equal(BigInt(14 * DAY));
+    const F = await ethers.getContractFactory('PviumP2IdVaultFactoryV2');
+    expect(F.bytecode).to.not.equal((await ethers.getContractFactory('PviumP2IdVaultFactory')).bytecode); // a different factory: different addresses
     const args = (notice: number) => [deployer.address, NS, policy.target, V, 7 * DAY, DAY, 30 * DAY, attester.address, notice];
     await expect(F.deploy(...args(0))).to.be.revertedWithCustomError(F, 'InvalidDefaultVerifierDelay').withArgs(0);
     await expect(F.deploy(...args(30 * DAY + 1))).to.be.revertedWithCustomError(F, 'InvalidDefaultVerifierDelay').withArgs(30 * DAY + 1);
-    const production = await F.deploy(...args(14 * DAY));
-    expect(await production.DEFAULT_VERIFIER_DELAY()).to.equal(BigInt(14 * DAY));
+    const short = await F.deploy(...args(1));
+    expect(await short.DEFAULT_VERIFIER_DELAY()).to.equal(1n);
+    expect(await short.MAX_DEFAULT_VERIFIER_DELAY()).to.equal(BigInt(30 * DAY));
     expect(F.interface.getFunction('setDefaultVerifierDelay')).to.equal(null); // no setter, ever
   });
 
@@ -107,12 +108,12 @@ describe('P2IDVaultV2 release: registration, new vaults, existing vaults upgradi
       .to.emit(factory, 'ImplementationDeployed').withArgs(V2, ethers.keccak256(v2Code))
       .and.to.emit(factory, 'ImplementationProposed');
     expect(await factory.proposedImplementation()).to.equal(V2);
-    // the ETA is proposal time + the factory's immutable notice (with one second, the next block already satisfies it;
-    // P2IDVaultProxy.test.ts covers TimelockNotElapsed on a 14-day factory)
+    // the ETA is proposal time + the factory's 14-day notice
     const proposedAt = (await ethers.provider.getBlock('latest'))!.timestamp;
     expect(await factory.proposedImplementationEta()).to.equal(BigInt(proposedAt + NOTICE));
     expect(await factory.isRegisteredImplementation(V2)).to.equal(false);
     expect(await factory.baseImplementation()).to.equal(V1); // nothing changes during the notice
+    await expect(factory.registerImplementation()).to.be.revertedWithCustomError(factory, 'TimelockNotElapsed');
 
     await time.increase(NOTICE + 1);
     await expect(factory.connect(stranger).registerImplementation()).to.be.revertedWithCustomError(factory, 'NotOwner');

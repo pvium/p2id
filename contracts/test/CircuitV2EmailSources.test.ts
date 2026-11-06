@@ -3,7 +3,7 @@ import { ethers } from 'hardhat';
 import { createHash, createPublicKey } from 'crypto';
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { deployIdentityProof, deployVerifier } from './helpers/deployVerifier';
+import { CURRENT, deployIdentityProof, deployVerifier } from './helpers/deployVerifier';
 
 /**
  * Circuit version 2: an email identity can be proven from a Google, LinkedIn or Apple login, not
@@ -42,7 +42,7 @@ describe('circuit v2: email proven from a Google login, verified on chain', func
     const { verifier: zk } = await deployVerifier();
     identity = await deployIdentityProof(await zk.getAddress(), testKey.x, testKey.y, 2);
     const [admin] = await ethers.getSigners();
-    verifier = await ethers.deployContract('PviumVerifier', [await identity.getAddress(), admin.address, []]);
+    verifier = await ethers.deployContract(CURRENT.verifier, [await identity.getAddress(), admin.address, []]);
   });
 
   it('PviumIdentity accepts it as an email identity (type 0) and returns its issue time', async () => {

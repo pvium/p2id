@@ -3,7 +3,7 @@ import { ethers, network } from 'hardhat';
 import { createPublicKey } from 'crypto';
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { CURRENT_SCHEME, checkStack, deployDeterministic, deployStack, ensureDeterministicDeployer, predictStack, stackStatus, type StackParams } from '../scripts/lib/deterministic';
+import { CURRENT_SCHEME, checkStack, circuitRelease, deployDeterministic, deployStack, ensureDeterministicDeployer, predictStack, stackStatus, type StackParams } from '../scripts/lib/deterministic';
 
 const DAY = 24 * 3600;
 const EMAIL_COMMITMENT = '0xbcda0f09fa9732b2bfdea38199486b654a84e8e06085d7e364af8137f8d7deaf';
@@ -20,7 +20,7 @@ describe('Deterministic deployment: chain-agnostic P2ID addresses', function () 
       owner: '0x00000000000000000000000000000000000A11CE',
       scheme: CURRENT_SCHEME,
       circuitVersion: 1,
-      vkHash: require('../../circuit/version.json').vkSha256,
+      vkHash: circuitRelease(1).vkHash,
       signerKeys: [
         { x: BigInt('0x' + Buffer.from(jwk.x!, 'base64url').toString('hex')), y: BigInt('0x' + Buffer.from(jwk.y!, 'base64url').toString('hex')) },
         { x: GX, y: GY },
@@ -124,7 +124,7 @@ describe('Deterministic deployment: chain-agnostic P2ID addresses', function () 
 
     // An earlier run deployed RelationsLib and then stopped (the state seen on Base Sepolia).
     await ensureDeterministicDeployer();
-    const relationsInit = (await (await ethers.getContractFactory('RelationsLib')).getDeployTransaction()).data as string;
+    const relationsInit = (await (await ethers.getContractFactory('src/PviumZKVerifier.sol:RelationsLib')).getDeployTransaction()).data as string;
     await deployDeterministic(relationsInit, p.salt, a);
     const before = await stackStatus(target);
     expect(before.relationsLib).to.equal(true);

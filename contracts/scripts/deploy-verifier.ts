@@ -5,13 +5,14 @@
 //   yarn deploy:verifier --network base             # deploy, read back, record
 //
 // Reads the chain's stack record (deployments/<scheme>.<environment>.<chainId>.json) for the factory
-// and policy, and circuit/version.json for the circuit version and vk hash being deployed. Owner,
+// and policy, and circuit/version.json for the circuit version being deployed (CIRCUIT_VERSION picks
+// another released one); its contracts and vk hash come from contracts/releases.json. Owner,
 // constraint attester and Privy keys come from contracts/.env (OWNER_*, ATTESTER_*,
 // PRIVY_SIGNER_KEYS_*), falling back to the stack record's values; use the same values on every
 // chain of an environment so the verifier set gets the same addresses everywhere.
 //
-// Deploys (deterministically, skipping anything already there): RelationsLib, ZKTranscriptLib,
-// PviumZKVerifier (this build's vk compiled in), PviumIdentity, PviumVerifier; reads them back;
+// Deploys (deterministically, skipping anything already there): RelationsLib, ZKTranscriptLib, that
+// version's generated ZK verifier (its vk compiled in), PviumIdentity and its PviumVerifier; reads them back;
 // writes deployments/<scheme>.<environment>.circuit-v<N>.<chainId>.json with the addresses and the
 // verifier's activation status. Activation is the owner's (`yarn verifier:activate`): this script
 // prints the approval transaction and writes it as a Safe Transaction Builder batch.
@@ -19,8 +20,8 @@ import { ethers, network } from 'hardhat';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { envFor, environmentOf } from '../deploy.config';
-import { deployVerifierSet, hasCode, sortedKeys, type VerifierSetParams } from './lib/deterministic';
-import { ownerTx, printStatus, readStatus, safeBatchFile, verifierSetFile, writeRecord, writeSafeBatch } from './lib/verifierSet';
+import { circuitRelease, deployVerifierSet, type VerifierSetParams } from './lib/deterministic';
+import { deployRecordedVerifierSet, ownerTx, printStatus, safeBatchFile, writeSafeBatch } from './lib/verifierSet';
 
 const ROOT = join(__dirname, '..', '..');
 const DEPLOYMENTS = join(__dirname, '..', 'deployments');
@@ -43,8 +44,11 @@ async function main() {
   const stack = JSON.parse(readFileSync(stackFile, 'utf8'));
 
   const version = JSON.parse(readFileSync(join(ROOT, 'circuit', 'version.json'), 'utf8'));
-  const circuitVersion: number = version.circuitVersion;
-  const vkHash: string = version.vkSha256;
+  const circuitVersion = Number(process.env.CIRCUIT_VERSION ?? version.circuitVersion);
+  const vkHash: string = circuitRelease(circuitVersion).vkHash;
+  if (circuitVersion === version.circuitVersion && vkHash.toLowerCase() !== String(version.vkSha256).toLowerCase()) {
+    throw new Error(`circuit/version.json gives vk ${version.vkSha256} for circuit v${circuitVersion}, but contracts/releases.json records ${vkHash}: a changed circuit is a new circuitVersion with its own entry`);
+  }
   if (circuitVersion === stack.config.circuitVersion || vkHash === stack.config.vkHash) {
     throw new Error(`circuit version ${circuitVersion} is the stack's own verifier (${stack.pviumVerifier}); nothing to deploy`);
   }
@@ -70,35 +74,9 @@ async function main() {
 
   const [signer] = await ethers.getSigners();
   if (!signer) throw new Error(`no deployer key for ${environment} (DEPLOYER_KEY_${environment === 'sandbox' ? 'SANDBOX' : 'PROD'})`);
-  const set = await deployVerifierSet(params, signer, (m) => console.log(m));
-
-  // Read back what was deployed.
-  const fail = (what: string, got: unknown, want: unknown) => { throw new Error(`deployment check failed: ${what} is ${got}, expected ${want}`); };
-  const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
-  for (const [name, address] of Object.entries(set)) if (!(await hasCode(address))) fail(`code at ${name}`, 'empty', address);
-  const identity = await ethers.getContractAt('PviumIdentity', set.pviumIdentity);
-  if (!same(await identity.vkHash(), vkHash)) fail('PviumIdentity.vkHash', await identity.vkHash(), vkHash);
-  if (Number(await identity.circuitVersion()) !== circuitVersion) fail('PviumIdentity.circuitVersion', await identity.circuitVersion(), circuitVersion);
-  if (!same(await identity.owner(), owner)) fail('PviumIdentity.owner', await identity.owner(), owner);
-  for (const k of sortedKeys(keys)) if (!(await identity.isSignerKey(k.x, k.y))) fail(`signer key ${k.x.toString(16).slice(0, 12)}…`, 'missing', 'accepted');
-  const verifier = await ethers.getContractAt('PviumVerifier', set.pviumVerifier);
-  if (!same(await verifier.pviumIdentity(), set.pviumIdentity)) fail('PviumVerifier.pviumIdentity', await verifier.pviumIdentity(), set.pviumIdentity);
-  if (!same(await verifier.owner(), owner)) fail('PviumVerifier.owner', await verifier.owner(), owner);
-  if (attester !== ethers.ZeroAddress && !(await verifier.isConstraintSigner(attester))) fail('constraint signer', 'not registered', attester);
-  console.log('verifier set checks passed');
-
-  const factory = await ethers.getContractAt('PviumP2IdVaultFactory', stack.factory);
-  if (!same(await factory.policy(), stack.policy)) fail('factory.policy', await factory.policy(), stack.policy);
-
-  const record: any = {
-    kind: 'verifier-set', scheme, environment, network: network.name, chainId, circuitVersion, vkHash,
-    privyKeys: sortedKeys(keys).map((k) => ({ kid: keys.find((q) => q.x === k.x && q.y === k.y)?.kid, x: ethers.toBeHex(k.x, 32), y: ethers.toBeHex(k.y, 32) })),
-    config: { owner, attester, circuitVersion, vkHash },
-    ...set, factory: stack.factory, policy: stack.policy,
-  };
-  record.status = await readStatus(record);
-  const file = verifierSetFile(scheme, environment, circuitVersion, chainId);
-  if (chainId !== 31337) writeRecord(file, record);
+  const record = await deployRecordedVerifierSet({
+    params, keys, stack, environment, networkName: network.name, chainId, signer, log: (m) => console.log(m),
+  });
   console.log(JSON.stringify(record, null, 2));
   console.log(`\nstatus of the circuit v${circuitVersion} verifier on ${network.name}:`);
   printStatus(record.status);

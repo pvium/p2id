@@ -3,7 +3,7 @@ import { ethers } from 'hardhat';
 import { loadFixture, time } from '@nomicfoundation/hardhat-network-helpers';
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { deployVerifier } from './helpers/deployVerifier';
+import { CURRENT, deployVerifier } from './helpers/deployVerifier';
 
 const DAY = 86400;
 const GX = 0x6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296n;
@@ -45,12 +45,12 @@ describe('PviumIdentity audit: signer revocation', function () {
 
   it('revoking a signer also voids the wallet a vault cached from its proofs; re-proving restores it', async () => {
     const { admin, payer, gate, proof, inputs, x, y, identity } = await loadFixture(fixture);
-    const adapter = await ethers.deployContract('PviumVerifier', [await gate.getAddress(), admin.address, []]);
+    const adapter = await ethers.deployContract(CURRENT.verifier, [await gate.getAddress(), admin.address, []]);
     const v = await adapter.getAddress();
     const policy = await ethers.deployContract('PviumP2IDPolicy', [admin.address, [v]]);
     const factory = await ethers.deployContract('PviumP2IdVaultFactory', [
       admin.address, ethers.id('audit.revocation'), await policy.getAddress(), v, DAY, DAY, 90 * DAY,
-     ethers.ZeroAddress, 14 * DAY]);
+     ethers.ZeroAddress]);
     await factory.setAlpha(await (await ethers.getContractAt('IP2IDVerifier', await factory.defaultVerifier())).vkHash(), false); // this suite exercises the ordinary (post-alpha) paths
     await factory.deploy(identity);
     const vault = await ethers.getContractAt('P2IDVault', await factory.vaultFor(identity));
@@ -142,7 +142,7 @@ describe('Signer revision recovery: follow-up audit', function () {
     const policy = await ethers.deployContract('PviumP2IDPolicy', [admin.address, [v]]);
     const factory = await ethers.deployContract('PviumP2IdVaultFactory', [
       admin.address, ethers.id('audit.revision'), await policy.getAddress(), v, DAY, DAY, 90 * DAY,
-     ethers.ZeroAddress, 14 * DAY]);
+     ethers.ZeroAddress]);
     await factory.setAlpha(await (await ethers.getContractAt('IP2IDVerifier', await factory.defaultVerifier())).vkHash(), false); // this suite exercises the ordinary (post-alpha) paths
     const identity = ethers.id('revision-recipient');
     await factory.deploy(identity);

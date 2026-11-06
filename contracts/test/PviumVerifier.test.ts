@@ -2,7 +2,7 @@ import { expect } from 'chai';
 import { ethers } from 'hardhat';
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { deployIdentityProof, deployVerifier } from './helpers/deployVerifier';
+import { CURRENT, deployIdentityProof, deployVerifier } from './helpers/deployVerifier';
 import { createPublicKey } from 'crypto';
 
 const NS = ethers.id('p2id.email.v1');
@@ -48,14 +48,14 @@ describe('PviumVerifier: real ZK proof + signed constraint commitment', function
     const x = BigInt('0x' + Buffer.from(jwk.x!, 'base64url').toString('hex'));
     const y = BigInt('0x' + Buffer.from(jwk.y!, 'base64url').toString('hex'));
     pviumIdentity = await deployIdentityProof(honk, x, y);
-    verifier = await ethers.deployContract('PviumVerifier', [await pviumIdentity.getAddress(), admin.address, [attester.address]]);
-    verifierNoSigner = await ethers.deployContract('PviumVerifier', [await pviumIdentity.getAddress(), ethers.ZeroAddress, []]);
+    verifier = await ethers.deployContract(CURRENT.verifier, [await pviumIdentity.getAddress(), admin.address, [attester.address]]);
+    verifierNoSigner = await ethers.deployContract(CURRENT.verifier, [await pviumIdentity.getAddress(), ethers.ZeroAddress, []]);
   });
 
   beforeEach(async () => {
     token = await ethers.deployContract('MockERC20');
     const policy = await ethers.deployContract('PviumP2IDPolicy', [admin.address, [await verifier.getAddress(), await verifierNoSigner.getAddress()]]);
-    factory = await ethers.deployContract('PviumP2IdVaultFactory', [admin.address, NS, await policy.getAddress(), await verifier.getAddress(), 7 * DAY, DAY, 30 * DAY, ethers.ZeroAddress, 14 * DAY]);
+    factory = await ethers.deployContract('PviumP2IdVaultFactory', [admin.address, NS, await policy.getAddress(), await verifier.getAddress(), 7 * DAY, DAY, 30 * DAY, ethers.ZeroAddress]);
     await factory.connect(admin).setAlpha(await (await ethers.getContractAt('IP2IDVerifier', await factory.defaultVerifier())).vkHash(), false); // this suite exercises the ordinary (post-alpha) paths
     await factory.deploy(EMAIL_COMMITMENT);
     vault = await ethers.getContractAt('P2IDVault', await factory.vaultFor(EMAIL_COMMITMENT));
@@ -145,7 +145,7 @@ describe('PviumVerifier: real ZK proof + signed constraint commitment', function
     const otherChain = await signConstraint(attester, verifier, commitment, 8453n);
     await expect(verifier.getIdentityWallet(EMAIL_COMMITMENT, proofBytes('email'), constraintOf(commitment, registered(otherChain))))
       .to.be.revertedWithCustomError(verifier, 'InvalidConstraintSigner');
-    const otherVerifier = await ethers.deployContract('PviumVerifier', [await pviumIdentity.getAddress(), admin.address, [attester.address]]);
+    const otherVerifier = await ethers.deployContract(CURRENT.verifier, [await pviumIdentity.getAddress(), admin.address, [attester.address]]);
     const forOther = await signConstraint(attester, otherVerifier, commitment);
     await expect(verifier.getIdentityWallet(EMAIL_COMMITMENT, proofBytes('email'), constraintOf(commitment, registered(forOther))))
       .to.be.revertedWithCustomError(verifier, 'InvalidConstraintSigner');
@@ -191,7 +191,7 @@ describe('PviumVerifier: real ZK proof + signed constraint commitment', function
     await verifier.connect(stranger).transferOwnership(admin.address);
     await verifier.connect(admin).acceptOwnership();
 
-    const frozen = await ethers.deployContract('PviumVerifier', [await pviumIdentity.getAddress(), ethers.ZeroAddress, [attester.address]]);
+    const frozen = await ethers.deployContract(CURRENT.verifier, [await pviumIdentity.getAddress(), ethers.ZeroAddress, [attester.address]]);
     expect(await frozen.supportsConstraints()).to.equal(true);
     await expect(frozen.connect(admin).setConstraintSigner(stranger.address, true)).to.be.revertedWithCustomError(frozen, 'NotOwner');
     await expect(frozen.connect(stranger).acceptOwnership()).to.be.revertedWithCustomError(frozen, 'NotPendingOwner');

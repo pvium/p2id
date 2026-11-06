@@ -4,7 +4,7 @@ import { time, setBalance } from '@nomicfoundation/hardhat-network-helpers';
 import { createPublicKey } from 'crypto';
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { deployIdentityProof, deployVerifier } from './helpers/deployVerifier';
+import { CURRENT, deployIdentityProof, deployVerifier } from './helpers/deployVerifier';
 
 describe('PviumP2IDVaultProxy real-proof upgrade cost and atomicity', function () {
   this.timeout(120_000);
@@ -24,13 +24,13 @@ describe('PviumP2IDVaultProxy real-proof upgrade cost and atomicity', function (
     const honk = await deployVerifier();
     const identity = await deployIdentityProof(await honk.verifier.getAddress(), x, y);
     const [admin] = await ethers.getSigners();
-    const verifier = await ethers.deployContract('PviumVerifier', [await identity.getAddress(), admin.address, []]);
+    const verifier = await ethers.deployContract(CURRENT.verifier, [await identity.getAddress(), admin.address, []]);
     const V = await verifier.getAddress();
     const policy = await ethers.deployContract('MockFeePolicy');
     await policy.allow(V, true);
     const DAY = 86400;
     const factory = await ethers.deployContract('PviumP2IdVaultFactory', [admin.address,
-      ethers.id('pvium.vault.v1'), await policy.getAddress(), V, 7 * DAY, DAY, 30 * DAY, ethers.ZeroAddress, 14 * DAY]);
+      ethers.id('pvium.vault.v1'), await policy.getAddress(), V, 7 * DAY, DAY, 30 * DAY, ethers.ZeroAddress]);
     await factory.setAlpha(await (await ethers.getContractAt('IP2IDVerifier', await factory.defaultVerifier())).vkHash(), false); // this suite exercises the ordinary (post-alpha) paths
     await factory.deploy(id);
     const address = await factory.vaultFor(id);

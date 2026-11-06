@@ -22,7 +22,7 @@ const FIX = join(ROOT, 'test', 'fixtures');
 const NATIVE = ethers.ZeroAddress;
 const Z = ethers.ZeroHash;
 const AMOUNT = ethers.parseEther('0.001');
-const NOTICE = 1;
+const NOTICE = 14 * 86400; // PviumP2IdVaultFactory.DEFAULT_VERIFIER_DELAY, a constant; local time is advanced past it
 const ALPHA_TYPES = { AlphaAuthorization: [
   { name: 'vault', type: 'address' }, { name: 'caller', type: 'address' }, { name: 'callHash', type: 'bytes32' },
   { name: 'nonce', type: 'uint256' }, { name: 'deadline', type: 'uint256' }, { name: 'epoch', type: 'uint256' },
@@ -64,7 +64,7 @@ async function main() {
   const stack = await deployStack({
     owner: owner.address, scheme: CURRENT_SCHEME, circuitVersion: version.circuitVersion, vkHash: version.vkSha256,
     signerKeys: [key], attester: ethers.ZeroAddress, policyChangeDelay: 7 * 86400, minRefundWindow: 86400, maxRefundWindow: 90 * 86400,
-    defaultVerifierDelay: NOTICE, salt: ethers.id(`v2-rehearsal-${Date.now()}`),
+    salt: ethers.id(`v2-rehearsal-${Date.now()}`),
   }, owner);
   const factory = await ethers.getContractAt('PviumP2IdVaultFactory', stack.factory);
   const V1 = await factory.baseImplementation();
@@ -80,7 +80,7 @@ async function main() {
       { vault, caller, callHash: ethers.keccak256(data), nonce, deadline, epoch: await factory.alphaEpoch() });
     return { nonce, deadline, signature };
   }
-  console.log(`${network.name}: factory ${stack.factory}, V1 ${V1}, notice ${NOTICE}s, circuit key in alpha`);
+  console.log(`${network.name}: factory ${stack.factory}, V1 ${V1}, notice ${NOTICE / 86400} days, circuit key in alpha`);
 
   // ------------------------------------------------------------ 2. pay the identity under V1
   const vaultAddress = await factory.vaultFor(identityHash);
@@ -110,7 +110,7 @@ async function main() {
   // ------------------------------------------------------------ 3. release V2
   const V2 = await deployImplementation(stack.factory, 'P2IDVaultV2', true, owner);
   check((await factory.proposedImplementation()) === V2, 'V2 should be proposed as the default');
-  step(`V2 deployed through the factory at ${V2} and proposed (notice ${NOTICE}s)`);
+  step(`V2 deployed through the factory at ${V2} and proposed (notice ${NOTICE / 86400} days, skipped by advancing local time)`);
   await time.increase(NOTICE + 1);
   await (await factory.registerImplementation()).wait();
   check(await factory.isRegisteredImplementation(V2), 'V2 should be registered');

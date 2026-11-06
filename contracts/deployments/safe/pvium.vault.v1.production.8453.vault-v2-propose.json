@@ -1,10 +1,10 @@
 {
   "version": "1.0",
   "chainId": "8453",
-  "createdAt": 1793979549302,
+  "createdAt": 1793997899911,
   "meta": {
-    "name": "Vault V2: deploy and propose",
-    "description": "factory.deployVaultImplementation(creationCode, true): deploys P2IDVaultV2 at 0x878310bC5433Cb087e6e32c895d6D15AB89B1d8C (creationCodeHash 0x11e47f48fd1a4450fe379747f87a206b4f15405d0616c3f94a2e12bc5b4fe981, source commit 5a11977) and proposes it as the default implementation for new vaults. Starts the 14-day notice; changes nothing until registerImplementation()."
+    "name": "P2IDVaultV2: deploy and propose",
+    "description": "factory.deployVaultImplementation(creationCode, true): deploys P2IDVaultV2 at 0x878310bC5433Cb087e6e32c895d6D15AB89B1d8C (creationCodeHash 0x11e47f48fd1a4450fe379747f87a206b4f15405d0616c3f94a2e12bc5b4fe981) and proposes it as the default implementation for new vaults. Starts the notice; changes nothing until registerImplementation()."
   },
   "transactions": [
     {
