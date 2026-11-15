@@ -25,6 +25,8 @@ test('bad requests fail fast without proving', async () => {
     await assert.rejects(() => service.generate({ identityType: 'email', identityValue: 'x', jwt: 'not.a.jwt.at.all', wallet: WALLET }), InputError);
     await assert.rejects(() => service.generate({ identityType: 'nope' as never, identityValue: 'x', jwt, wallet: WALLET }), InputError);
     await assert.rejects(() => service.generate({ identityType: 'email', identityValue: 'other@privy.io', jwt, wallet: WALLET }), InputError);
+    assert.throws(() => service.validateRequest({ identityType: 'email', identityValue: 'x', jwt, network: 'polygon' as never }), InputError);
+    assert.doesNotThrow(() => service.validateRequest({ identityType: 'email', identityValue: 'x', jwt, network: 'SOLANA' }));
   } finally {
     await service.close();
   }
@@ -113,6 +115,8 @@ test('generates an attestation the SDK verifies', { skip: !canProve && 'bb / cir
   assert.equal(a.issuedAt, 1789240094);
   assert.equal(a.wallet, WALLET);
   assert.equal(a.circuitVersion, SERVED_VERSION);
+  assert.equal(a.network, 'ethereum');
+  assert.equal(a.publicWitness, undefined);
   assert.match(a.vkHash, /^0x[0-9a-f]{64}$/);
   assert.equal(Buffer.from(a.publicInputs, 'base64').length, 11 * 32);
 

@@ -11,6 +11,8 @@ test('the key identifies the proof and its receiver, not the token or letter cas
   assert.equal(InFlightJobs.key({ ...req, jwt: 'a-newer-token' } as typeof req, url()), k);
   assert.notEqual(InFlightJobs.key({ ...req, identityValue: 'other@example.com' }, url()), k);
   assert.notEqual(InFlightJobs.key({ ...req, identityType: 'google_oauth' }, url()), k);
+  assert.notEqual(InFlightJobs.key({ ...req, network: 'solana' }, url()), k);
+  assert.equal(InFlightJobs.key({ ...req, network: 'SOLANA' }, url()), InFlightJobs.key({ ...req, network: 'solana' }, url()));
   assert.notEqual(InFlightJobs.key({ ...req, wallet: '0x899BA183F2c55BF9C627D9Af2984fbdED2E64311' }, url()), k);
   assert.notEqual(InFlightJobs.key({ ...req, wallet: undefined }, url()), k);
   // a different receiver must get its own job, or it would never be called back

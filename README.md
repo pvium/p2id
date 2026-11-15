@@ -31,13 +31,15 @@ if they remain unclaimed.
 
 ## Repository layout
 
-| Folder                     | Contents                                                                                                         |
-| -------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `circuit/`                 | Noir circuit, witness generator, and circuit tests                                                               |
-| `contracts/`               | Solidity verifier, vault factory, vault proxy and implementation, and policy                                     |
-| `sdks/node/p2id-core/`     | `@pvium/p2id-core`: identity hashing, vault address derivation, and bundled Solidity sources; usable in browsers |
-| `sdks/node/p2id-verifier/` | `@pvium/p2id-verifier`: off-chain attestation verification with a bundled verification key                       |
-| `http-prover/`             | HTTP service that generates attestations from Privy tokens using `noir_js` and native Barretenberg               |
+| Folder                     | Contents                                                                                                                   |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `circuit/`                 | Noir circuit, witness generator, and circuit tests                                                                         |
+| `contracts/`               | Solidity verifier, vault factory, vault proxy and implementation, and policy                                               |
+| `sdks/node/p2id-core/`     | `@pvium/p2id-core`: identity hashing, vault address derivation, and bundled Solidity sources; usable in browsers             |
+| `sdks/node/p2id-verifier/` | `@pvium/p2id-verifier`: off-chain Ethereum attestation verification with a bundled verification key                          |
+| `http-prover/`             | HTTP service that generates Ethereum proofs with Barretenberg or Solana proofs with Sunspot from Privy tokens                |
+| `solana-anchor/`           | Anchor CPI wrapper that forwards Sunspot proofs to a caller-selected Solana verifier program                                 |
+| `solana-test/`             | Local Solana clients for testing the verifier directly or through the Anchor wrapper                                         |
 
 ## Use the SDK
 
@@ -48,12 +50,12 @@ yarn add @pvium/p2id-core
 ```
 
 ```ts
-import { IdentityType, p2idAddress } from '@pvium/p2id-core';
+import { IdentityType, p2idAddress } from "@pvium/p2id-core";
 
 const address = p2idAddress({
   identityType: IdentityType.Email,
-  identityValue: 'you@example.com',
-  environment: 'sandbox',
+  identityValue: "you@example.com",
+  environment: "sandbox",
 });
 ```
 
@@ -72,9 +74,24 @@ CI uses Node 24. Install dependencies separately in `contracts/`, `sdks/node/`, 
 
 Run `yarn test` in each of those directories. The SDK workspace command tests both packages.
 Circuit tests run from `circuit/` with `sh test/e2e.sh` and `sh test/adversarial.sh`.
-See the [circuit guide](circuit/README.md) for build and proof-generation commands.
+The Anchor wrapper's Rust unit tests run with `cargo test --manifest-path solana-anchor/Cargo.toml`.
+See the [circuit guide](circuit/README.md) for circuit build and proof-generation commands.
 
 The pinned proof toolchain is `nargo 1.0.0-beta.26` with `bb 5.0.0`. The prover's
 `@noir-lang/noir_js` and the verifier SDK's `@aztec/bb.js` must match those versions.
 After changing the compiled circuit, bump `circuit/version.json` and refresh the contracts,
 SDK, and prover artifacts together as described in [AGENTS.md](AGENTS.md).
+
+## Test the Solana route locally
+
+The Solana proof route uses Sunspot to generate a proof, then the Anchor wrapper invokes the
+Sunspot verifier by CPI. Prepare the circuit artifacts and the Solana attestation first, then
+start a local validator with the generated Sunspot verifier, deploy the Anchor wrapper, and run
+the Anchor client. The ordered commands, environment setup, direct-verifier alternative, and
+local-only trusted-setup warning are in the [Solana route guide](SOLANA-ROUTE.md).
+
+The attestation response saved as `solana-test/data.json`, circuit witness inputs, and program
+keypairs are local test data and are ignored by Git. Never commit generated JWTs, witnesses,
+proof responses, environment files, or keypairs. The committed sample JWT, sample proof files, and
+throwaway signing key under the test fixture directories are intentional test fixtures only; do
+not use them in production.

@@ -1,0 +1,17 @@
+{
+  "name": "oi",
+  "version": "1.0.0",
+  "main": "verify-anchor.js",
+  "scripts": {
+    "verify": "node --env-file=.env verify-anchor.js",
+    "verify:anchor": "node --env-file=.env verify-anchor.js",
+    "verify:direct": "node --env-file=.env verify-direct.js"
+  },
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@solana/web3.js": "^3.1.1",
+    "base64url": "^3.0.1"
+  }
+}

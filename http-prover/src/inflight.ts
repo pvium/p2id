@@ -6,8 +6,9 @@ import { createHash } from 'node:crypto';
  * same proof instead of starting another ~3 GB, multi-second proving run.
  *
  * Two requests are the same job when they ask for the same fact (identity type, identity value,
- * wallet) to be delivered to the same callback URL. The URL is part of the key on purpose: a
- * different receiver would otherwise be handed a job id whose result is never delivered to it.
+ * wallet, network) to be delivered to the same callback URL. The URL is part of the key on
+ * purpose: a different receiver would otherwise be handed a job id whose result is never
+ * delivered to it.
  * The JWT is not part of the key: a retry may carry a fresher token for the same user, and the
  * proof in flight already establishes the same fact.
  */
@@ -16,12 +17,13 @@ export class InFlightJobs {
   private readonly byId = new Map<string, { key: string; startedAt: number }>();
 
   /** Key for a request. Values are normalised the way the identity hash is, so case does not split jobs. */
-  static key(req: { identityType: string; identityValue: string; wallet?: string }, callbackUrl: URL): string {
+  static key(req: { identityType: string; identityValue: string; wallet?: string; network?: string }, callbackUrl: URL): string {
     const value = req.identityType === 'phone' || (req.identityType === 'wallet' && !req.identityValue.startsWith('0x')) ? req.identityValue : req.identityValue.toLowerCase();
     const wallet = req.wallet === undefined ? '' : req.wallet.startsWith('0x') ? req.wallet.toLowerCase() : req.wallet;
     // Length-prefixed fields, so no value can be crafted to collide with another field split.
     const h = createHash('sha256');
-    for (const part of [req.identityType, value, wallet, callbackUrl.toString()]) h.update(`${Buffer.byteLength(part)}:${part}`);
+    const network = (req.network ?? 'ethereum').toLowerCase();
+    for (const part of [req.identityType, value, wallet, network, callbackUrl.toString()]) h.update(`${Buffer.byteLength(part)}:${part}`);
     return h.digest('hex');
   }
 

@@ -17,6 +17,10 @@ export interface ProverConfig {
   /** circuit/version.json copied next to the artifacts by `yarn sync`. */
   versionJson: string;
   bbBin: string;
+  sunspotBin: string;
+  sunspotAcirPath?: string;
+  sunspotCcsPath?: string;
+  sunspotPkPath?: string;
   workDir: string;
   maxConcurrency: number;
   /** Jobs allowed to wait for a slot before new requests get 503. */
@@ -46,6 +50,10 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): ProverConfi
     vkPath: env.VK_PATH ?? './circuit/vk',
     versionJson: env.CIRCUIT_VERSION_JSON ?? './circuit/version.json',
     bbBin: env.BB_BIN ?? defaultBb,
+    sunspotBin: env.SUNSPOT_BIN ?? 'sunspot',
+    sunspotAcirPath: env.SUNSPOT_ACIR_PATH,
+    sunspotCcsPath: env.SUNSPOT_CCS_PATH,
+    sunspotPkPath: env.SUNSPOT_PK_PATH,
     workDir: env.WORK_DIR ?? tmpdir(),
     maxConcurrency: Math.max(1, Number(env.MAX_CONCURRENCY ?? 1)),
     maxQueue: Math.max(0, Number(env.MAX_QUEUE ?? 20)),
