@@ -1,8 +1,10 @@
 // Shared by deploy-verifier.ts and verifier-activate.ts: a circuit version's verifier-set record,
 // its on-chain activation status, and the owner transactions that move it forward.
 import { ethers } from 'hardhat';
+import type { Signer } from 'ethers';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
+import { circuitRelease, deployVerifierSet, hasCode, sortedKeys, type VerifierSetParams } from './deterministic';
 
 export const DEPLOYMENTS = join(__dirname, '..', '..', 'deployments');
 
@@ -91,7 +93,7 @@ export async function ownerTx(r: any, status: VerifierStatus, step: ActivationSt
 }
 
 /** Write a Safe Transaction Builder batch (Safe app > Transaction Builder > drag the file in). */
-export function writeSafeBatch(file: string, chainId: number, name: string, txs: OwnerTx[]): void {
+export function writeSafeBatch(file: string, chainId: number, name: string, txs: { description: string; to: string; value: string; data: string }[]): void {
   mkdirSync(join(DEPLOYMENTS, 'safe'), { recursive: true });
   const batch = {
     version: '1.0',
@@ -136,4 +138,56 @@ export function printStatus(s: VerifierStatus): void {
   console.log(`  approved in policy: ${s.approved ? 'yes' : 'no'}`);
   console.log(`  alpha:              ${s.alpha ? 'yes (claims need an alpha attestation)' : 'released'}`);
   console.log(`  default verifier:   ${s.isDefault ? 'yes' : s.defaultProposedEta ? `proposed, activatable after ${new Date(s.defaultProposedEta * 1000).toISOString()}` : 'no'}`);
+}
+
+/**
+ * Deploy (or find) a circuit version's verifier set next to a stack, read it back, and record it
+ * with its activation status. No owner transaction is sent. Used by deploy-verifier.ts for one
+ * version and by deploy-deterministic.ts for every version released after the stack's own.
+ * With `signer === null` nothing is sent: the set must already be deployed, and it is read back.
+ * `write: false` leaves the record file alone.
+ */
+export async function deployRecordedVerifierSet(o: {
+  params: VerifierSetParams;
+  keys: { kid?: string; x: bigint; y: bigint }[];
+  stack: { factory: string; policy: string };
+  environment: string;
+  networkName: string;
+  chainId: number;
+  signer: Signer | null;
+  write?: boolean;
+  log?: (message: string) => void;
+}): Promise<any> {
+  const { params: p, keys, stack, chainId } = o;
+  const log = o.log ?? (() => {});
+  // Whether this run creates the verifier: its initial constraint signer is only guaranteed then (the owner may rotate it later).
+  const fresh = !(await hasCode((await deployVerifierSet(p, null)).pviumVerifier, { reads: 1 }));
+  const set = await deployVerifierSet(p, o.signer, log);
+
+  const fail = (what: string, got: unknown, want: unknown) => { throw new Error(`deployment check failed: ${what} is ${got}, expected ${want}`); };
+  const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+  for (const [name, address] of Object.entries(set)) if (!(await hasCode(address))) fail(`code at ${name}`, 'empty', address);
+  const identity = await ethers.getContractAt('PviumIdentity', set.pviumIdentity);
+  if (!same(await identity.vkHash(), p.vkHash)) fail('PviumIdentity.vkHash', await identity.vkHash(), p.vkHash);
+  if (Number(await identity.circuitVersion()) !== p.circuitVersion) fail('PviumIdentity.circuitVersion', await identity.circuitVersion(), p.circuitVersion);
+  if (!same(await identity.owner(), p.owner)) fail('PviumIdentity.owner', await identity.owner(), p.owner);
+  for (const k of sortedKeys(keys)) if (!(await identity.isSignerKey(k.x, k.y))) fail(`signer key ${k.x.toString(16).slice(0, 12)}…`, 'missing', 'accepted');
+  const verifier = await ethers.getContractAt(circuitRelease(p.circuitVersion).verifier, set.pviumVerifier);
+  if (!same(await verifier.pviumIdentity(), set.pviumIdentity)) fail('PviumVerifier.pviumIdentity', await verifier.pviumIdentity(), set.pviumIdentity);
+  if (!same(await verifier.owner(), p.owner)) fail('PviumVerifier.owner', await verifier.owner(), p.owner);
+  if (fresh && p.attester !== ethers.ZeroAddress && !(await verifier.isConstraintSigner(p.attester))) fail('constraint signer', 'not registered', p.attester);
+  const factory = await ethers.getContractAt('PviumP2IdVaultFactory', stack.factory);
+  if (!same(await factory.policy(), stack.policy)) fail('factory.policy', await factory.policy(), stack.policy);
+  log(`circuit v${p.circuitVersion} verifier set checks passed`);
+
+  const record: any = {
+    kind: 'verifier-set', scheme: p.scheme, environment: o.environment, network: o.networkName, chainId,
+    circuitVersion: p.circuitVersion, vkHash: p.vkHash,
+    privyKeys: sortedKeys(keys).map((k) => ({ kid: keys.find((q) => q.x === k.x && q.y === k.y)?.kid, x: ethers.toBeHex(k.x, 32), y: ethers.toBeHex(k.y, 32) })),
+    config: { owner: p.owner, attester: p.attester, circuitVersion: p.circuitVersion, vkHash: p.vkHash },
+    ...set, factory: stack.factory, policy: stack.policy,
+  };
+  record.status = await readStatus(record);
+  if (chainId !== 31337 && o.write !== false) writeRecord(verifierSetFile(p.scheme, o.environment, p.circuitVersion, chainId), record);
+  return record;
 }

@@ -1,0 +1,16 @@
+{
+  "version": "1.0",
+  "chainId": "1",
+  "createdAt": 1793997854841,
+  "meta": {
+    "name": "Bind the policy to its factory",
+    "description": "policy.setFactory(0x58982A37b8B0d48A10aB370e000a837cF916526a): the policy accepts fees from this factory's vaults"
+  },
+  "transactions": [
+    {
+      "to": "0x80f37ED47541C4097a28cbF3c90CDE400572ee3D",
+      "value": "0",
+      "data": "0x5bb4780800000000000000000000000058982a37b8b0d48a10ab370e000a837cf916526a"
+    }
+  ]
+}

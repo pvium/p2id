@@ -112,52 +112,15 @@ are only needed when a Solana request is made.
 
 ## Running
 
-### Quick local test
-
-From the repository root, install the service dependencies, create `.env` if you do not already
-have one, and start the development server:
+Run these commands from `http-prover/`. The repository includes the compiled circuit,
+verification key, and version metadata; startup extracts the compressed circuit automatically.
+You do not need to compile or copy circuit artifacts to run the committed build.
 
 ```sh
 cd http-prover
 yarn install
-test -f .env || cp .env.example .env
-yarn dev
-```
-
-The example config trusts the repository's local test signing key and uses the committed test
-JWT. These fixtures are for local testing only. Keep the server running, then open a second
-terminal in `http-prover/`. Check that it is ready:
-
-```sh
-curl --fail-with-body --silent --show-error http://127.0.0.1:8787/healthz
-```
-
-Use the matching `AUTH_TOKEN` value from `.env` in the commands below (the example value is
-`local-development-token`). The sample JWT is signed by the test key and links this email and
-wallet. Choose exactly one request for the proof backend you want to test:
-
-```sh
-JWT="$(tr -d '\r\n' < ../circuit/test/fixtures/sample_token.jwt)"
-AUTH_TOKEN='local-development-token'
-
-# Ethereum / Barretenberg
-curl --fail-with-body --silent --show-error \
-  -X POST http://127.0.0.1:8787/attestations \
-  -H "Authorization: Bearer ${AUTH_TOKEN}" \
-  -H 'Content-Type: application/json' \
-  --data-raw "{\"identityType\":\"email\",\"identityValue\":\"test-9988@privy.io\",\"wallet\":\"0xA01b6E60D51eDB3fEB9f86a62b846f4F90070f98\",\"jwt\":\"${JWT}\",\"network\":\"ethereum\"}"
-```
-
-```sh
-JWT="$(tr -d '\r\n' < ../circuit/test/fixtures/sample_token.jwt)"
-AUTH_TOKEN='local-development-token'
-
-# Solana / Sunspot
-curl --fail-with-body --silent --show-error \
-  -X POST http://127.0.0.1:8787/attestations \
-  -H "Authorization: Bearer ${AUTH_TOKEN}" \
-  -H 'Content-Type: application/json' \
-  --data-raw "{\"identityType\":\"email\",\"identityValue\":\"test-9988@privy.io\",\"wallet\":\"0xA01b6E60D51eDB3fEB9f86a62b846f4F90070f98\",\"jwt\":\"${JWT}\",\"network\":\"solana\"}"
+cp .env.example .env && $EDITOR .env
+yarn build && yarn start        # node --env-file=.env dist/server.js
 ```
 
 Each successful request returns a JSON attestation. Ethereum uses Barretenberg's proof and

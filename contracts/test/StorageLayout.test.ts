@@ -26,6 +26,13 @@ describe('vault implementation storage layout', function () {
     expect(base.immutables).to.deep.equal(['P2IDVault.factory']);
   });
 
+  it('P2IDVaultV2 preserves both the original snapshot and the current vault layout', () => {
+    const candidate = readContract(root, 'P2IDVaultV2');
+    const current = readContract(root, 'src/P2IDVault.sol:P2IDVault');
+    expect(errors(validateImplementation(snapshot, candidate))).to.deep.equal([]);
+    expect(errors(compareLayouts(current.layout, candidate.layout))).to.deep.equal([]);
+  });
+
   it('a variable inserted, retyped or removed is an error; a rename is a warning', () => {
     const shifted: Layout = JSON.parse(JSON.stringify(snapshot));
     shifted.storage = [{ label: 'inserted', slot: '0', offset: 0, type: 't_uint256', contract: 'X' }, ...shifted.storage.map((v) => ({ ...v, slot: String(Number(v.slot) + 1) }))];

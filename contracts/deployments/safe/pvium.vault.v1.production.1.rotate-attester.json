@@ -1,0 +1,17 @@
+{
+  "version": "1.0",
+  "chainId": "1",
+  "createdAt": 1793444407801,
+  "meta": {
+    "name": "Rotate compromised alpha attester",
+    "description": "Set factory default attester to 0xF4D957297E6497781aCa1ea4F0046D6748c4B7a3; invalidates outstanding alpha authorizations.",
+    "createdFromSafeAddress": "0xbC5E749404Bf159177E53e244319C4Ca1B633344"
+  },
+  "transactions": [
+    {
+      "to": "0x58982A37b8B0d48A10aB370e000a837cF916526a",
+      "value": "0",
+      "data": "0xc27a9840000000000000000000000000f4d957297e6497781aca1ea4f0046d6748c4b7a3"
+    }
+  ]
+}

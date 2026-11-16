@@ -14,6 +14,7 @@
 import { ethers, network, run } from 'hardhat';
 import { existsSync, readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
+import { circuitRelease } from './lib/deterministic';
 
 const DEPLOYMENTS = join(__dirname, '..', 'deployments');
 const ETHERSCAN_V2 = 'https://api.etherscan.io/v2/api';
@@ -32,11 +33,14 @@ export function targetsOf(r: any): Target[] {
   const attester: string = r.config.attester;
   // A later circuit version's verifier set (deploy-verifier.ts): its first five contracts only.
   if (r.kind === 'verifier-set') return targetsOf({ ...r, kind: undefined }).slice(0, 5);
+  // Each circuit version has its own generated verifier file and PviumVerifier (contracts/releases.json).
+  const release = circuitRelease(Number(r.config.circuitVersion));
+  const zkSource = release.zkVerifier.split(':')[0];
   return [
-    { name: 'RelationsLib', contract: 'src/PviumZKVerifier.sol:RelationsLib', address: r.relationsLib, args: [] },
-    { name: 'ZKTranscriptLib', contract: 'src/PviumZKVerifier.sol:ZKTranscriptLib', address: r.transcriptLib, args: [] },
+    { name: 'RelationsLib', contract: `${zkSource}:RelationsLib`, address: r.relationsLib, args: [] },
+    { name: 'ZKTranscriptLib', contract: `${zkSource}:ZKTranscriptLib`, address: r.transcriptLib, args: [] },
     {
-      name: 'PviumZKVerifier', contract: 'src/PviumZKVerifier.sol:PviumZKVerifier', address: r.zkVerifier, args: [],
+      name: release.zkVerifier.split(':')[1], contract: release.zkVerifier, address: r.zkVerifier, args: [],
       libraries: { RelationsLib: r.relationsLib, ZKTranscriptLib: r.transcriptLib },
     },
     {
@@ -44,7 +48,7 @@ export function targetsOf(r: any): Target[] {
       args: [r.zkVerifier, r.config.circuitVersion, ...(r.config.vkHash === undefined ? [] : [r.config.vkHash]), r.config.owner, keys.map((k) => k.x), keys.map((k) => k.y)],
     },
     {
-      name: 'PviumVerifier', contract: 'src/PviumVerifier.sol:PviumVerifier', address: r.pviumVerifier,
+      name: release.verifier.split(':')[1], contract: release.verifier, address: r.pviumVerifier,
       args: [r.pviumIdentity, r.config.owner, attester.toLowerCase() === z ? [] : [attester]],
     },
     { name: 'PviumP2IDPolicy', contract: 'src/PviumP2IDPolicy.sol:PviumP2IDPolicy', address: r.policy, args: [r.config.owner, [r.pviumVerifier]] },

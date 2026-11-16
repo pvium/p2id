@@ -30,10 +30,30 @@ Install with `yarn install`, run scripts with `yarn <script>`, run binaries with
 
 ## Workflow rules
 
-- `contracts/src/PviumZKVerifier.sol` (contract `PviumZKVerifier`, renamed from bb's `HonkVerifier` by the refresh script) is **generated** by `bb write_solidity_verifier`.
-  Never hand-edit it. After any circuit change: `nargo compile`, `nargo execute`, `bb prove`,
+- **A released contract source is never edited.** The stack is live, and every deployed address is
+  the hash of a contract's creation code, so an edit (even a constructor argument added for a test)
+  makes the checkout unable to rebuild what is on chain. A change is a new file and a new contract
+  next to the old one: `P2IDVaultV2`, `PviumVerifierV2`, `PviumZKVerifierV2`, `PviumP2IdVaultFactoryV2`
+  (the factory with a configurable notice; nothing deploys it, and a stack built on it would be a
+  new address scheme). `contracts/releases.json` is the manifest: the circuit version each scheme's
+  factory was deployed with, each circuit version's vk hash and its own `PviumZKVerifier…` /
+  `PviumVerifier…` contracts, the vault implementations released after the built-in `P2IDVault`, and
+  the owner settings each environment should have now. `test/ReleaseParity.test.ts` rebuilds every
+  record in `contracts/deployments/` and every prepared vault Safe batch from the checkout and
+  compares addresses; it must stay green. Tests that need to pass the factory's 14-day notice
+  advance local time; they do not shorten the notice.
+- The ZK verifier is **generated** by `bb write_solidity_verifier`, one file per circuit version:
+  `contracts/src/PviumZKVerifier.sol` for circuit v1, `PviumZKVerifierV<N>.sol` (contract
+  `PviumZKVerifierV<N>`, renamed from bb's `HonkVerifier` by the refresh script) from v2 on. Scripts
+  and tests pick a version's contracts through `circuitRelease(N)` / the test helper's `CURRENT`,
+  never a fixed name; every generated file declares the same library names, so those are addressed
+  by file (`src/PviumZKVerifierV2.sol:RelationsLib`).
+  Never hand-edit a generated file. After any circuit change: `nargo compile`, `nargo execute`, `bb prove`,
   then `yarn fixtures` in `contracts/` to refresh test fixtures and the verifier, and `yarn sync`
   in `sdks/node/` (`yarn workspace @pvium/p2id-verifier sync`) to refresh its bundled vk and fixtures.
+  `yarn fixtures` writes the file named in `releases.json` for `circuit/version.json`'s version and
+  refuses when that version's recorded vk hash differs from the compiled one: a changed circuit is a
+  new `circuitVersion`, a new `releases.json` entry, and its own verifier files.
 - **Circuit versioning**: `circuit/version.json` names the current build (`circuitVersion`, vk sha256).
   Bump `circuitVersion` whenever the compiled circuit changes, then sync all consumers (`yarn fixtures`
   in contracts, `yarn sync` in sdks/node and http-prover). The prover serves one version and echoes it
@@ -44,16 +64,30 @@ Install with `yarn install`, run scripts with `yarn <script>`, run binaries with
   `circuitVersion`/`vkHash`, and exposes a pinned entry point per version
   (`@pvium/p2id-verifier/v<N>`, `src/v<N>.ts` plus a `package.json` export). Old attestations stay
   valid; they are not regenerated in bulk.
+- **One command brings a chain to the current release.** In `contracts/`,
+  `yarn hardhat run scripts/deploy-deterministic.ts --network <chain>` deploys the scheme's stack
+  from the circuit version its factory was first deployed with (so any checkout gives the deployed
+  addresses), then everything in `releases.json`: each later circuit version's verifier set, and the
+  owner transactions the chain still lacks (bind the policy to its factory, the environment's alpha
+  attester and constraint signers, approve each later verifier, deploy and propose each later vault
+  implementation, register it once its notice has passed). Owner transactions are sent when the
+  deployer key is the owner (sandbox); otherwise each is simulated as the owner and written to
+  `deployments/safe/` as a Safe Transaction Builder batch: one file per step, plus
+  `<scheme>.<env>.<chainId>.owner-pending.json` holding all of them in order. It is re-runnable on
+  any chain at any time and skips what is there, so it is also how an existing chain picks up a new
+  release: add the contract and its `releases.json` entry, then run it on every chain.
+  `PREDICT=1` prints every address offline; `PLAN=1` reads the chain and writes the Safe batches
+  but sends nothing and needs no key; `STACK_ONLY=1` stops after the stack.
 - **Deploying a new circuit version** never touches the factory, policy or any P2ID address.
-  In `contracts/`: `yarn deploy:verifier --network <chain>` (`PREDICT=1` first) deploys only that
-  version's `PviumZKVerifier`, `PviumIdentity` and `PviumVerifier` next to the chain's recorded
+  The command above covers it. To do only that step, in `contracts/`:
+  `yarn deploy:verifier --network <chain>` (`PREDICT=1` first) deploys only that
+  version's ZK verifier, `PviumIdentity` and `PviumVerifier` next to the chain's recorded
   stack, reads them back and writes `deployments/<scheme>.<env>.circuit-v<N>.<chainId>.json` with
   their activation status; it sends no owner transaction. `yarn verifier:activate --network <chain>`
   shows the status and the owner's next transactions; `STEPS=approve[,release-alpha,propose-default,activate-default]`
   sends them from the owner key, or (production: the policy and factory owner is a Safe) writes a
   Safe Transaction Builder batch under `deployments/safe/`. Rerun it after the Safe executes to
-  record the new status. Do not use `deploy-deterministic.ts` for this: with a new verifier compiled
-  in it targets a new factory and refuses. Keep the previous version's verifier approved and its
+  record the new status. Keep the previous version's verifier approved and its
   prover (`releases/circuit/v<N>`) running until its deposits are claimed or refunded.
 - The Solidity sources in `contracts/src` are the source of truth; `sdks/node/p2id-core/scripts/sync-contracts.sh`
   copies them into the npm package at build time (gitignored there). Never edit `sdks/node/p2id-core/contracts/`.
@@ -76,11 +110,10 @@ Install with `yarn install`, run scripts with `yarn <script>`, run binaries with
   code:
   - never reorder, remove, retype or insert state variables in `P2IDVault`; append new ones at the
     end only. Mappings and structs count: a struct field change changes the layout;
-  - **Pre-launch single source of truth:** the user has confirmed this stack is not live.
-    Keep alpha and post-alpha behavior together in `contracts/src/P2IDVault.sol`; do not create
-    a duplicate alpha vault or keep parallel copies of ordinary vault logic. Sandbox deployments
-    do not freeze this source. After a production release, a change is a new contract
-    (e.g. `src/P2IDVaultV2.sol`), not an edit of the deployed one. It keeps
+  - **The stack is live (Base, BSC, Ethereum): `contracts/src/P2IDVault.sol` is frozen.** It keeps
+    alpha and post-alpha behavior together; do not create a duplicate alpha vault or parallel
+    copies of ordinary vault logic. A change is a new contract (`src/P2IDVaultV2.sol` is the first),
+    not an edit of the deployed one. It keeps
     `acceptOwnerProof` (returning its selector), never uses `delegatecall`
     or `selfdestruct`, and never defines the proxy's reserved selectors (`implementation()`,
     `lastUpgrade()`, `upgradeTo(bytes32,address,bytes)`, `alphaUpgradeNonceUsed(uint256)`, and
@@ -113,8 +146,11 @@ Install with `yarn install`, run scripts with `yarn <script>`, run binaries with
   - run `CANDIDATE=<Contract> yarn layout` in `contracts/` and fix every error before proposing it;
     `yarn layout` alone checks the base still matches `contracts/storage/P2IDVault.layout.json`.
     `UPDATE=1 yarn layout` rewrites that snapshot and is only legitimate while no factory is deployed;
-  - register through `IMPLEMENTATION=<Contract> yarn implementation --network <chain>` (deploy +
-    propose; `REGISTER=1` after the 14-day notice). The scheme name, salt and factory never change
+  - add it to `vaultImplementations` in `contracts/releases.json` and run `deploy-deterministic.ts`
+    on each chain: it deploys and proposes it through the factory and, on a run after the 14-day
+    notice, registers it (Safe batches when the owner is a Safe). For that step alone:
+    `FACTORY=<factory> CANDIDATE=<Contract> MAKE_DEFAULT=true yarn deploy:implementation --network <chain>`
+    (dry run; `EXECUTE=1` sends, `ACTION=activate` registers). The scheme name, salt and factory never change
     for a vault change; `pvium.vault.vN` bumps only if the *proxy or factory* code changes after a
     mainnet release.
 - **Fees: the rate lives in the policy, the ceiling in the factory, and the timelock is the

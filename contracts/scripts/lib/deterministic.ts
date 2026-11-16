@@ -4,6 +4,8 @@
 // the salt, never on who deploys or on a nonce.
 import { ethers, network } from 'hardhat';
 import type { Signer } from 'ethers';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 
 /** Arachnid's deterministic deployment proxy: present at this address on most EVM chains. */
 export const DETERMINISTIC_DEPLOYER =
@@ -54,6 +56,61 @@ export interface StackAddresses {
 }
 
 export const CURRENT_SCHEME = 'pvium.vault.v1';
+
+/** One circuit version's contracts (contracts/releases.json): fully qualified artifact names and the vk sha256. */
+export interface CircuitRelease {
+  vkHash: string;
+  /** The generated Honk verifier with this version's vk compiled in, e.g. src/PviumZKVerifierV2.sol:PviumZKVerifierV2. */
+  zkVerifier: string;
+  /** The PviumVerifier this version was released with. */
+  verifier: string;
+}
+export interface VaultImplementationRelease {
+  contract: string;
+  /** Names its Safe batch: <scheme>.<environment>.<chainId>.<label>-propose.json. */
+  label: string;
+  makeDefault: boolean;
+}
+export const RELEASES_FILE = join(__dirname, '..', '..', 'releases.json');
+const releases = (): any => JSON.parse(readFileSync(RELEASES_FILE, 'utf8'));
+
+/**
+ * The contracts of a circuit version. Every released version keeps its own source files, never
+ * edited afterwards, so any checkout reproduces the addresses already deployed for it.
+ */
+export function circuitRelease(circuitVersion: number): CircuitRelease {
+  const entry = releases().circuits[String(circuitVersion)];
+  if (!entry) {
+    throw new Error(
+      `circuit version ${circuitVersion} has no entry in contracts/releases.json: add its vk sha256 and its own ` +
+        `PviumZKVerifierV${circuitVersion} / PviumVerifierV${circuitVersion} sources (released files are never edited)`,
+    );
+  }
+  return entry;
+}
+/** Every circuit version in contracts/releases.json, ascending. */
+export function circuitVersions(): number[] {
+  return Object.keys(releases().circuits).map(Number).sort((a, b) => a - b);
+}
+/** The circuit version a scheme's factory was deployed with: part of the factory address. */
+export function stackCircuitVersion(scheme: string): number {
+  const v = releases().stackCircuit[scheme];
+  if (v === undefined) throw new Error(`contracts/releases.json has no stackCircuit for scheme ${scheme}`);
+  return v;
+}
+/** Owner-managed settings an environment's chains should have now (contracts/releases.json: environments). */
+export interface EnvironmentSettings {
+  alphaAttester?: string;
+  constraintSigners?: string[];
+  retiredConstraintSigners?: string[];
+}
+export function environmentSettings(environment: string): EnvironmentSettings {
+  return releases().environments?.[environment] ?? {};
+}
+/** Vault implementations released after the factory's built-in P2IDVault, in order. */
+export function vaultImplementationReleases(scheme: string): VaultImplementationRelease[] {
+  return releases().vaultImplementations?.[scheme] ?? [];
+}
 
 /** Make sure the proxy exists. On a local Hardhat network it is installed; elsewhere it must already be there. */
 export async function ensureDeterministicDeployer(): Promise<void> {
@@ -240,22 +297,25 @@ export async function deployVerifierSet(
   if (signer !== null) await ensureDeterministicDeployer();
   if (!/^pvium\.vault\.v[1-9][0-9]*$/.test(p.scheme)) throw new Error(`bad scheme "${p.scheme}" (expected pvium.vault.vN)`);
   const salt = p.salt ?? ethers.id(p.scheme);
+  // Each generated verifier file declares the same library names, so they are addressed by file.
+  const release = circuitRelease(p.circuitVersion);
+  const zkSource = release.zkVerifier.split(':')[0];
   const relationsLib = await deployDeterministic(
-    await initCodeOf('RelationsLib', []),
+    await initCodeOf(`${zkSource}:RelationsLib`, []),
     salt,
     signer,
     { name: 'relationsLib', log },
   );
   const transcriptLib = await deployDeterministic(
-    await initCodeOf('ZKTranscriptLib', []),
+    await initCodeOf(`${zkSource}:ZKTranscriptLib`, []),
     salt,
     signer,
     { name: 'transcriptLib', log },
   );
   const zkVerifier = await deployDeterministic(
-    await initCodeOf('PviumZKVerifier', [], {
-      RelationsLib: relationsLib,
-      ZKTranscriptLib: transcriptLib,
+    await initCodeOf(release.zkVerifier, [], {
+      [`${zkSource}:RelationsLib`]: relationsLib,
+      [`${zkSource}:ZKTranscriptLib`]: transcriptLib,
     }),
     salt,
     signer,
@@ -276,7 +336,7 @@ export async function deployVerifierSet(
     { name: 'pviumIdentity', log },
   );
   const pviumVerifier = await deployDeterministic(
-    await initCodeOf('PviumVerifier', [pviumIdentity, p.owner, p.attester === ethers.ZeroAddress ? [] : [p.attester]]),
+    await initCodeOf(release.verifier, [pviumIdentity, p.owner, p.attester === ethers.ZeroAddress ? [] : [p.attester]]),
     salt,
     signer,
     { name: 'pviumVerifier', log },
@@ -314,11 +374,12 @@ export async function checkStack(p: StackParams, a: StackAddresses, expectedVaul
   if (!same(await identity.owner(), p.owner)) fail('PviumIdentity.owner', await identity.owner(), p.owner);
   if (Number(await identity.signerKeyCount()) !== p.signerKeys.length) fail('signerKeyCount', await identity.signerKeyCount(), p.signerKeys.length);
   for (const k of p.signerKeys) if (!(await identity.isSignerKey(k.x, k.y))) fail(`signer key ${k.x.toString(16).slice(0, 12)}…`, 'missing', 'accepted');
-  const verifier = await ethers.getContractAt('PviumVerifier', a.pviumVerifier);
+  const verifier = await ethers.getContractAt(circuitRelease(p.circuitVersion).verifier, a.pviumVerifier);
   if (!same(await verifier.pviumIdentity(), a.pviumIdentity)) fail('PviumVerifier.pviumIdentity', await verifier.pviumIdentity(), a.pviumIdentity);
   if (!same(await verifier.owner(), p.owner)) fail('PviumVerifier.owner', await verifier.owner(), p.owner);
   const expectSigner = p.attester !== ethers.ZeroAddress;
-  if ((await verifier.supportsConstraints()) !== expectSigner) fail('PviumVerifier.supportsConstraints', await verifier.supportsConstraints(), expectSigner);
+  // With no registered signer the circuit v1 PviumVerifier reports false and later ones true (a payer may name any signer).
+  if (expectSigner && !(await verifier.supportsConstraints())) fail('PviumVerifier.supportsConstraints', false, true);
   if (expectSigner && !(await verifier.isConstraintSigner(p.attester))) fail('constraintSigner', 'not registered', p.attester);
   const factory = await ethers.getContractAt('PviumP2IdVaultFactory', a.factory);
   const expectedAlphaAttester = !p.alphaAttester || p.alphaAttester === ethers.ZeroAddress ? p.owner : p.alphaAttester;

@@ -50,13 +50,17 @@ interface IP2IDVault {
     function maxRefundWindow() external view returns (uint64);
 
     // funding
-    /// @notice Fund under the factory's default verifier. A non-zero `constraint` can be used once per funder.
+    /// @notice Fund under the factory's default verifier. A non-zero `constraint` can be used once per payer
+    ///         (the funder in P2IDVault, where funder and payer coincide; msg.sender in P2IDVaultV2, so a
+    ///         caller naming another funder reserves the constraint under their own address, never the funder's).
     /// @param ref Opaque application reference emitted in Funded; bytes32(0) for none. Does not affect claims or refunds.
     function fund(address token, uint256 amount, bytes32 constraint, uint64 refundWindow, bytes32 ref) external payable returns (uint256 depositId);
     /// @notice Fund under any verifier the factory's policy allows.
     /// @param ref Opaque application reference emitted in Funded; bytes32(0) for none.
     function fundWith(address verifier, address token, uint256 amount, bytes32 constraint, uint64 refundWindow, bytes32 ref) external payable returns (uint256 depositId);
-    /// @notice Factory-only: record a deposit for `funder`; pull ERC-20 from the factory or receive native msg.value.
+    /// @notice Record a deposit whose refund right belongs to `funder`; pull ERC-20 from msg.sender or receive native msg.value.
+    ///         P2IDVault (the first implementation) accepts this only from the factory; P2IDVaultV2 accepts any caller,
+    ///         so a contract payer can name a refund recipient.
     /// @param ref Opaque application reference emitted in Funded; bytes32(0) for none.
     function fundFor(address funder, address verifier, address token, uint256 amount, bytes32 constraint, uint64 refundWindow, bytes32 ref) external payable returns (uint256 depositId);
     function refund(uint256 depositId) external;
@@ -108,9 +112,10 @@ interface IP2IDVault {
     /// @notice A page of the bucket's deposit ids: up to `limit` from `offset` (limit 0 = all from `offset`).
     function bucketDepositIds(address verifier, bytes32 constraint, address token, uint256 offset, uint256 limit) external view returns (uint256[] memory);
     function bucketDepositCount(address verifier, bytes32 constraint, address token) external view returns (uint256);
-    /// @notice Deposit recorded for a nonzero constraint and funder in this vault. The record persists
-    ///         after a refund or claim and prevents the same funder from reusing that constraint here.
-    function constraintDeposit(bytes32 constraint, address funder) external view returns (bool used, uint256 depositId);
+    /// @notice Deposit recorded for a nonzero constraint and payer in this vault (the funder in P2IDVault; in
+    ///         P2IDVaultV2 the account that paid, or the funder on the factory path). The record persists
+    ///         after a refund or claim and prevents the same payer from reusing that constraint here.
+    function constraintDeposit(bytes32 constraint, address payer) external view returns (bool used, uint256 depositId);
     function bucketTotal(address verifier, bytes32 constraint, address token) external view returns (uint256);
     function trackedTotal(address token) external view returns (uint256);
     /// @notice Total default-bucket amount plus eligible untracked funds, before fees.

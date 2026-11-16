@@ -18,7 +18,21 @@
 // MAX_REFUND_WINDOW (initial values; part of the factory address; later changes go through
 // factory.proposeConfig/activateConfig), SCHEME (default: `current` in sdks/node/p2id-core/src/p2id.json), CIRCUIT_VERSION.
 //
+// The stack is built from the circuit version the scheme's factory was first deployed with
+// (contracts/releases.json: stackCircuit), whatever circuit/version.json says now, so any checkout
+// gives the addresses already deployed. After the stack, the chain is brought up to everything in
+// contracts/releases.json: each later circuit version's verifier set is deployed, and the owner
+// transactions are worked out from what the chain still lacks (bind the policy to the factory, the
+// environment's current alpha attester and constraint signers, approve each later verifier, deploy
+// and propose each later vault implementation, register it once its notice has passed). Those are
+// sent when the deployer key is the owner; otherwise each is simulated as the owner and written as
+// a Safe Transaction Builder batch in deployments/safe/, one per step plus `owner-pending`, which
+// holds all of them in order. The command is re-runnable on any chain at any time: what is already
+// there is skipped, so it is also how an existing chain picks up a new release.
+// STACK_ONLY=1 stops after the stack.
+//
 // PREDICT=1 prints the addresses without sending anything (with no --network, set P2ID_ENV).
+// PLAN=1 reads the chain and writes the owner Safe batches, but sends nothing and needs no key.
 //
 // Local runs (--network hardhat or localhost) need no .env: unset values default to the sandbox
 // Privy JWKS, the first local account as owner, and no attester. Real networks never default.
@@ -28,7 +42,12 @@ import { artifacts, ethers, network } from 'hardhat';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { envFor, environmentOf, requireEnvFor, type P2IDEnvironment } from '../deploy.config';
-import { checkStack, deployStack, predictStack, sortedKeys, stackStatus, type StackParams } from './lib/deterministic';
+import {
+  checkStack, circuitRelease, deployStack, deployVerifierSet, predictStack, sortedKeys, stackCircuitVersion, stackStatus,
+  vaultImplementationReleases, type StackParams,
+} from './lib/deterministic';
+import { implementationCreationCode } from './lib/implementation';
+import { IMPLEMENTATION_SALT, laterCircuits, syncReleases, verifierSetParams } from './lib/laterReleases';
 
 const DAY = 24 * 3600;
 const SANDBOX_JWKS = 'https://auth.privy.io/api/v1/apps/cmhc6t92u001tju0cxkxg34on/jwks.json';
@@ -134,7 +153,7 @@ async function configFor(environment: P2IDEnvironment, scheme: string, circuitVe
     owner,
     scheme,
     circuitVersion,
-    vkHash: JSON.parse(readFileSync(join(ROOT, 'circuit', 'version.json'), 'utf8')).vkSha256,
+    vkHash: circuitRelease(circuitVersion).vkHash,
     signerKeys: keys.map(({ x, y }) => ({ x, y })),
     attester,
     alphaAttester,
@@ -179,7 +198,7 @@ async function main() {
       console.log(`refreshed ${scheme} vaultInitCodeHash to ${proxyHash} in sdks/node/p2id-core/src/p2id.json (sandbox factory will be re-recorded)`);
     }
   }
-  const circuitVersion = Number(process.env.CIRCUIT_VERSION ?? JSON.parse(readFileSync(join(ROOT, 'circuit', 'version.json'), 'utf8')).circuitVersion);
+  const circuitVersion = Number(process.env.CIRCUIT_VERSION ?? stackCircuitVersion(scheme));
   const { params, keys, jwks } = await configFor(environment, scheme, circuitVersion);
   console.log(`${environment} on ${network.name}: ${keys.length} Privy keys (${keys.map((k) => k.kid).join(', ')}), owner ${params.owner}`);
 
@@ -201,7 +220,14 @@ async function main() {
     },
   };
   if (process.env.PREDICT) {
-    console.log(JSON.stringify({ ...summary, predicted: true, ...predicted }, null, 2));
+    const laterVerifierSets: Record<string, unknown> = {};
+    for (const v of laterCircuits(circuitVersion)) laterVerifierSets[`circuit-v${v}`] = await deployVerifierSet(verifierSetParams(params, v), null);
+    const vaultImplementations: Record<string, string> = {};
+    for (const impl of vaultImplementationReleases(scheme)) {
+      vaultImplementations[impl.contract] = ethers.getCreate2Address(
+        predicted.factory, IMPLEMENTATION_SALT, ethers.keccak256(await implementationCreationCode(impl.contract, predicted.factory)));
+    }
+    console.log(JSON.stringify({ ...summary, predicted: true, ...predicted, laterVerifierSets, vaultImplementations }, null, 2));
     return;
   }
 
@@ -229,60 +255,72 @@ async function main() {
     }
   }
 
-  const [signer] = await ethers.getSigners();
-  if (!signer) {
+  const plan = process.env.PLAN === '1';
+  const [deployer] = await ethers.getSigners();
+  if (!plan && !deployer) {
     throw new Error(
       `no deployer key for ${environment}: set DEPLOYER_KEY or DEPLOYER_KEY_${environment === 'sandbox' ? 'SANDBOX' : 'PROD'} ` +
         'to a private key (0x followed by 64 hex characters)',
     );
   }
+  const signer = plan ? null : deployer;
+  if (plan) console.log('PLAN=1: reading the chain; no transaction is sent');
 
   // 2. What is already on this chain (e.g. from an interrupted run): those steps are skipped.
   const status = await stackStatus(predicted);
   const present = Object.entries(status).filter(([, v]) => v).map(([k]) => k);
-  console.log(present.length === 0 ? 'nothing deployed yet on this chain' : `already deployed, will skip: ${present.join(', ')}`);
-
-  // 3. Deploy what is missing, one contract at a time.
-  const addresses = await deployStack(params, signer, (m) => console.log(m));
-  await checkStack(params, addresses, p2id.schemes[scheme]?.vaultInitCodeHash);
-
-  // 3b. Tell the launch policy which factory's vaults may hand it fees (owner-only, once). Until it
-  // is set the policy refuses every fee and recipients are paid in full, so a missing step is safe.
-  const policyContract = await ethers.getContractAt('PviumP2IDPolicy', addresses.policy);
-  if ((await policyContract.factory()) === ethers.ZeroAddress) {
-    if (signer.address.toLowerCase() === params.owner.toLowerCase()) {
-      await (await policyContract.setFactory(addresses.factory)).wait();
-      console.log(`policy.setFactory(${addresses.factory}) done`);
-    } else {
-      console.log(
-        `owner action needed: PviumP2IDPolicy(${addresses.policy}).setFactory(${addresses.factory}) from ${params.owner}\n` +
-          `  calldata: ${policyContract.interface.encodeFunctionData('setFactory', [addresses.factory])}`,
-      );
-    }
+  const missing = Object.entries(status).filter(([, v]) => !v).map(([k]) => k);
+  console.log(present.length === 0 ? 'nothing deployed yet on this chain' : missing.length === 0 ? 'the stack is already deployed on this chain' : `already deployed, will skip: ${present.join(', ')}`);
+  if (plan && missing.length) {
+    console.log(`a deployment run would deploy: ${missing.join(', ')}\nthen the later verifier sets, and it would write the owner transactions as Safe batches. Nothing to plan until the stack exists.`);
+    return;
   }
 
+  // 3. Deploy what is missing, one contract at a time. The read-back checks compare the chain with
+  //    the configuration the stack is deployed with, so they run when this run completed it; a
+  //    stack that was already there may since have had its attester, signers or default changed.
+  const addresses = signer === null ? predicted : await deployStack(params, signer, (m) => console.log(m));
   const chainId = Number((await ethers.provider.getNetwork()).chainId);
   // The second constant of the address formula, read back from the deployed factory: the hash of
   // the vault *proxy's* creation code (not the vault implementation's).
   const deployedFactory = await ethers.getContractAt('PviumP2IdVaultFactory', addresses.factory);
-  const record = { ...summary, network: network.name, chainId, ...addresses,
-    baseImplementationContract: 'src/P2IDVault.sol:P2IDVault',
-    vaultInitCodeHash: await deployedFactory.initCodeHash(),
-    vaultProxyContract: 'src/PviumP2IDVaultProxy.sol:PviumP2IDVaultProxy' };
-  if (chainId !== 31337) {
-    mkdirSync(DEPLOYMENTS, { recursive: true });
-    writeFileSync(join(DEPLOYMENTS, `${scheme}.${environment}.${chainId}.json`), JSON.stringify(record, null, 2) + '\n');
+  if (missing.length) {
+    await checkStack(params, addresses, p2id.schemes[scheme]?.vaultInitCodeHash);
+    const record = { ...summary, network: network.name, chainId, ...addresses,
+      baseImplementationContract: 'src/P2IDVault.sol:P2IDVault',
+      vaultInitCodeHash: await deployedFactory.initCodeHash(),
+      vaultProxyContract: 'src/PviumP2IDVaultProxy.sol:PviumP2IDVaultProxy' };
+    if (chainId !== 31337) {
+      mkdirSync(DEPLOYMENTS, { recursive: true });
+      writeFileSync(join(DEPLOYMENTS, `${scheme}.${environment}.${chainId}.json`), JSON.stringify(record, null, 2) + '\n');
+    }
+    console.log(JSON.stringify(record, null, 2));
+    console.log(`\nwiring checks passed (${environment})`);
+  } else {
+    const expectedHash = p2id.schemes[scheme]?.vaultInitCodeHash;
+    if (expectedHash && (await deployedFactory.initCodeHash()) !== expectedHash) {
+      throw new Error(`factory ${addresses.factory} reports initCodeHash ${await deployedFactory.initCodeHash()}, not ${expectedHash} (sdks/node/p2id-core/src/p2id.json)`);
+    }
+    if (chainId !== 31337 && !existsSync(join(DEPLOYMENTS, `${scheme}.${environment}.${chainId}.json`))) {
+      throw new Error(`the stack is on chain ${chainId} but deployments/${scheme}.${environment}.${chainId}.json is missing: restore the record (it is committed with the deployment)`);
+    }
   }
-  console.log(JSON.stringify(record, null, 2));
-  console.log(`\nwiring checks passed (${environment})`);
 
   // 4. Record the factory for the SDK. Only when nothing is recorded yet: a recorded address that
   //    differs was refused above, and one that matches needs nothing. Not for local chains.
-  if (chainId !== 31337 && recorded === null) {
+  if (!plan && chainId !== 31337 && recorded === null) {
     p2id.schemes[scheme].factories[environment] = addresses.factory;
     writeFileSync(P2ID_JSON, JSON.stringify(p2id, null, 2) + '\n');
     console.log(`recorded ${environment} factory ${addresses.factory} in sdks/node/p2id-core/src/p2id.json: rebuild the SDK and commit it`);
   }
+
+  // 5. Everything the scheme has released since its factory, and the environment's owner settings.
+  if (process.env.STACK_ONLY === '1') {
+    console.log('\nSTACK_ONLY=1: stopped after the stack');
+    return;
+  }
+  const result = await syncReleases({ environment, networkName: network.name, chainId, params, keys, addresses, signer, log: (m) => console.log(m) });
+  if (result.undeployed.length) console.log(`\na deployment run (without PLAN=1) would deploy: ${result.undeployed.join('; ')}`);
 }
 
 main().catch((e) => {

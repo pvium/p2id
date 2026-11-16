@@ -50,12 +50,12 @@ yarn add @pvium/p2id-core
 ```
 
 ```ts
-import { IdentityType, p2idAddress } from "@pvium/p2id-core";
+import { IdentityType, p2idAddress } from '@pvium/p2id-core';
 
 const address = p2idAddress({
   identityType: IdentityType.Email,
-  identityValue: "you@example.com",
-  environment: "sandbox",
+  identityValue: 'you@example.com',
+  environment: 'sandbox',
 });
 ```
 

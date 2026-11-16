@@ -74,7 +74,8 @@ yarn fixtures   # after re-proving in ../circuit: refresh test fixtures + regene
   initializes it in the same transaction, and provides policy, default-verifier and refund-window
   settings. All change through a timelock:
   the policy after `policyChangeDelay` (7 days by default), the default verifier after a fixed
-  14 days (`DEFAULT_VERIFIER_DELAY`), since direct transfers follow it and have no refund path,
+  `DEFAULT_VERIFIER_DELAY` (an immutable set when the factory is deployed; 14 days on the production
+  factory), since direct transfers follow it and have no refund path,
   and the numeric settings (`policyChangeDelay`, `minRefundWindow`, `maxRefundWindow`) through
   `proposeConfig(key, value)` → `activateConfig(key)` after the current delay, within limits fixed
   in the bytecode. Vaults read the refund-window bounds live; each deposit keeps the window it chose.
@@ -85,7 +86,7 @@ yarn fixtures   # after re-proving in ../circuit: refresh test fixtures + regene
   for the requested token amount. The constructor deploys the original `P2IDVault(factory)`,
   exposed as `initialImplementation`. `baseImplementation` is the current starting implementation.
   Owner-only `deployVaultImplementation(creationCode, makeDefault)` uses CREATE2 and immediately
-  proposes registration. After 14 days, `registerImplementation()` registers the target and, when
+  proposes registration. After `DEFAULT_VERIFIER_DELAY`, `registerImplementation()` registers the target and, when
   requested, selects it for future proxies. Existing vaults opt in through proof-authorized
   `upgradeTo`. Manual `proposeImplementation` remains an opt-in-only registration path.
   Deterministic deployment and default selection check the target's raw `factory()` binding;

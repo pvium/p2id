@@ -12,7 +12,14 @@ if (existsSync(envFile)) (process as any).loadEnvFile?.(envFile);
 const deployNetworks = Object.fromEntries(
   Object.entries(DEPLOY_NETWORKS).map(([name, n]) => {
     const key = envFor('DEPLOYER_KEY', n.environment, { shared: true });
-    return [name, { url: process.env[n.rpcEnv] ?? n.defaultRpc, chainId: n.chainId, accounts: key ? [key] : [] }];
+    return [
+      name,
+      {
+        url: process.env[n.rpcEnv] ?? n.defaultRpc,
+        chainId: n.chainId,
+        accounts: key ? [key] : [],
+      },
+    ];
   }),
 );
 
