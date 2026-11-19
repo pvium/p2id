@@ -30,7 +30,11 @@ package-lock.json
 circuit/target/
 # generated witness inputs (may hold a real token)
 circuit/Prover*.toml
+circuit/*_b64.txt
 circuit/**/*.gz
+
+
+
 
 # --- Hardhat (contracts/) -------------------------------------------------------
 contracts/artifacts/
@@ -72,3 +76,18 @@ tmp/
 # --- Dart example (contracts/examples/dart) -------------------------------------
 contracts/examples/dart/.dart_tool/
 contracts/examples/dart/pubspec.lock
+
+
+oi/
+test-ledger/
+/program_keypair.json
+/Prover*.toml
+
+# --- Anchor / Solana wrapper ---------------------------------------------------
+solana-anchor/target/
+solana-anchor/.anchor/
+
+# Local Solana attestation response may contain a generated proof and public witness
+solana-test/data.json
+
+Prover.toml

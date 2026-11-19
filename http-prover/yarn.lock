@@ -206,7 +206,7 @@
   resolved "https://registry.yarnpkg.com/@noir-lang/types/-/types-1.0.0-beta.26.tgz#57fd08f9838e5d1a6f51217e8d6f7c0d9955bbd8"
   integrity sha512-TFJMafp32koXf3TFVAfPBirwkVdlRHzSTM1nVAkRJDTQQNnI7qoAjvzXWXjgpE65kwjukQyzcmaucOegruawPw==
 
-"@pvium/p2id-core@^0.1.0":
+"@pvium/p2id-core@^1.1.1":
   version "0.0.0"
   uid ""
 

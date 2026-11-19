@@ -5,22 +5,34 @@ and, when supplied, a linked wallet. Verify the output with `@pvium/p2id-verifie
 `PviumIdentity.sol`.
 
 The Express API uses a shared bearer secret. Circuit solving runs in a worker thread with
-`noir_js`; proof generation uses the native `bb` binary.
+`noir_js`. Ethereum proofs use the native `bb` binary; Solana proofs use the Sunspot binary to
+produce Groth16 proofs.
 
 ## API
 
 `POST /attestations` — `Authorization: Bearer <AUTH_TOKEN>`
 
 ```json
-{ "identityType": "email", "identityValue": "you@example.com", "jwt": "<privy identity token>", "wallet": "0x…", "version": 1 }
+{ "identityType": "email", "identityValue": "you@example.com", "jwt": "<privy identity token>", "wallet": "0x…", "version": 1, "network": "ethereum" }
 ```
 
-Response, about 15 KB:
+`network` accepts `ethereum` or `solana` (case-insensitive). It defaults to `ethereum` for
+existing callers. Ethereum `publicInputs` contains 11 fields of 32 bytes each. For Solana,
+`publicInputs` is the base64 encoding of Sunspot's complete `.pw` public-witness file, and
+`publicWitness` is an alias of the same bytes for Solana verifiers that expect that field alongside
+the Groth16 `proof`. Solana responses omit `vkHash`, which identifies the Ethereum Barretenberg
+verification key.
+
+Response for Ethereum, about 15 KB:
 
 ```json
 { "proof": "<base64>", "publicInputs": "<base64>", "wallet": "0x…", "identityType": "email", "issuedAt": 1789240094,
-  "circuitVersion": 1, "vkHash": "0x…", "kid": "…" }
+  "network": "ethereum", "circuitVersion": 1, "vkHash": "0x…", "kid": "…" }
 ```
+
+Solana responses include `"network": "solana"` and carry the base64-encoded Sunspot `.proof` and
+`.pw` files in `proof`, `publicInputs` and `publicWitness`. The Ethereum verifier SDK does not
+verify this proof format.
 
 `version` defaults to the service's circuit version. Each instance serves one version and
 returns 400 for a different requested version. Store `circuitVersion` with the attestation and
@@ -32,7 +44,7 @@ Synchronous responses:
 | Status | Meaning |
 | --- | --- |
 | 200 | attestation generated |
-| 400 | malformed body, identity or wallet not linked in the token, token too large |
+| 400 | malformed body, unsupported network, identity or wallet not linked in the token, token too large |
 | 401 | bad secret, or the token is not signed by a trusted Privy key |
 | 413 | body over 64 KB |
 | 500 | proof generation failed |
@@ -74,8 +86,8 @@ usage. The response alone does not establish whether the process ran out of memo
 
 ### Repeated requests
 
-A callback request matching an active job's identity type, normalized identity value, wallet and
-callback URL returns `202 { jobId, status: "proving", deduplicated: true }`, including at
+A callback request matching an active job's network, identity type, normalized identity value,
+wallet and callback URL returns `202 { jobId, status: "proving", deduplicated: true }`, including at
 capacity. It does not start another proof. The JWT is excluded from this key: submitting a fresher
 token can return the existing job's proof. A different callback URL starts a separate job.
 Once the result is stored, a repeated request starts a new job.
@@ -89,8 +101,14 @@ and queue counts and limits, and outbox counts by status.
 results include `pending`, `delivered` or `failed` delivery status, attempts and the last error.
 Unknown job IDs return 404.
 
-Startup requires the pinned `bb` version and checks the verification key's SHA-256 hash against
-`circuit/version.json`.
+The service checks the verification key's SHA-256 hash against `circuit/version.json` at startup.
+Ethereum requests also check that `bb` exactly matches the version recorded for the circuit before
+proving. This check is intentionally not version-agnostic: the Ethereum proof backend, verification
+key and SDK must use compatible Barretenberg builds. Solana requests do not use `bb`; they require
+`SUNSPOT_BIN`, `SUNSPOT_ACIR_PATH`, `SUNSPOT_CCS_PATH` and `SUNSPOT_PK_PATH`. The full ACIR, CCS
+and PK must match the circuit that produced the noir_js witness. The normal `CIRCUIT_JSON` is
+stripped for noir_js/Barretenberg and is not suitable as Sunspot's ACIR input. These Sunspot files
+are only needed when a Solana request is made.
 
 ## Running
 
@@ -99,10 +117,52 @@ verification key, and version metadata; startup extracts the compressed circuit 
 You do not need to compile or copy circuit artifacts to run the committed build.
 
 ```sh
+cd http-prover
 yarn install
 cp .env.example .env && $EDITOR .env
 yarn build && yarn start        # node --env-file=.env dist/server.js
 ```
+
+Each successful request returns a JSON attestation. Ethereum uses Barretenberg's proof and
+11-field public inputs. Solana returns Sunspot's `.proof` bytes in `proof` and the complete `.pw`
+bytes (base64-encoded) in both `publicInputs` and `publicWitness`. Stop the server with Ctrl+C.
+
+The local `.env.example` paths assume you are running from `http-prover/`. Its `BB_BIN` example is
+for Apple Silicon macOS; change the architecture directory for another platform, or point it to
+an absolute path to Barretenberg 5.0.0. If `yarn` is not on PATH, run the package commands with
+`corepack yarn`.
+
+For a production-style build instead of the development server, run `yarn build` followed by
+`yarn start`. The repository includes the compressed compiled circuit, verification key, and
+version metadata; startup extracts the compressed circuit automatically. You do not need to
+recompile the circuit for the Ethereum demo.
+
+### Solana/Sunspot setup
+
+For the Solana demo, `sunspot` and the matching ACIR, CCS, and proving key must be available at
+the `.env` paths. Compile or refresh those artifacts only when needed:
+
+```sh
+cd ../circuit
+nargo compile
+cd ../http-prover
+yarn sync
+sunspot compile ../circuit/target/pvium_identity.json
+# For a local smoke test only: this command performs an unsafe, non-ceremonial trusted setup.
+sunspot setup ../circuit/target/pvium_identity.ccs
+```
+
+Set `SUNSPOT_ACIR_PATH=../circuit/target/pvium_identity.json`,
+`SUNSPOT_CCS_PATH=../circuit/target/pvium_identity.ccs` and
+`SUNSPOT_PK_PATH=../circuit/target/pvium_identity.pk` in `.env`, then send the normal request with
+`"network": "solana"` (the same `identityType`, `identityValue`, `jwt` and optional `wallet`
+fields are used). For anything beyond local testing, use a properly conducted trusted setup for
+the CCS; do not use `sunspot setup`'s built-in setup for production keys.
+
+Sunspot's upstream documentation currently specifies Noir `1.0.0-beta.22`, while this repository's
+circuit and `noir_js` are pinned to `1.0.0-beta.26`. Confirm that the Sunspot build being used
+accepts this repository's ACIR and witness format before attempting an end-to-end Solana proof;
+do not independently change only the circuit compiler or `noir_js` version.
 
 The Linux `bb` binary requires a 64-bit system with glibc 2.34 or newer, such as Ubuntu 22.04+
 or Debian 12+. Use Node 22.13+ for `node:sqlite` and the pinned `bb` version

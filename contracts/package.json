@@ -8,7 +8,7 @@
     "test": "hardhat test",
     "fixtures": "sh scripts/refresh-fixtures.sh",
     "deploy:verifier": "hardhat run scripts/deploy-verifier.ts",
-    "verifier:activate": "hardhat run scripts/verifier-activate.ts --via-ir",
+    "verifier:activate": "hardhat run scripts/verifier-activate.ts",
     "verify": "hardhat run scripts/verify-deployments.ts",
     "verify:vault": "VAULTS_ONLY=1 hardhat run scripts/verify-deployments.ts",
     "verify:bytecode": "hardhat run scripts/verify-deployed-bytecode.ts",
