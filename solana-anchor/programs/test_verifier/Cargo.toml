@@ -1,0 +1,21 @@
+[package]
+name = "test_verifier"
+version = "0.1.0"
+description = "Local-test-only no-op verifier for P2ID vault proof CPI tests"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "test_verifier"
+
+[features]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+cpi = ["no-entrypoint"]
+default = ["no-entrypoint", "custom-entrypoint"]
+custom-entrypoint = []
+idl-build = ["anchor-lang/idl-build"]
+
+[dependencies]
+anchor-lang = "=1.1.2"
