@@ -8,10 +8,14 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-p2id_solana_verifier = "DrPN26cNYpZrqAQgkARpds1ftm6q3hJXWY6Uh4RYgeNJ"
+p2id_vault = "DaQSQnyAHJLRMdN8m5ENm1Zr9dQKCeRBG8QoxMjEvVzf"
+test_verifier = "SgPm1N4qiMD7XfSQxrzZ1Yj9LQ4xWn44HAwhehfMFCJ"
 
 [provider]
 cluster = "localnet"
 wallet = "~/.config/solana/id.json"
+
+[scripts]
+test = "yarn run test"
 
 [hooks]
