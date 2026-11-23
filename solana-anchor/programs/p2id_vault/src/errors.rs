@@ -2,46 +2,36 @@ use anchor_lang::prelude::*;
 
 #[error_code]
 pub enum VaultError {
-    #[msg("Unauthorized")]
-    Unauthorized,
     #[msg("Wrong factory for this vault")]
     WrongFactory,
     #[msg("Deposit does not belong to this vault")]
     WrongVault,
+    #[msg("Deposit was already consumed")]
+    DepositConsumed,
     #[msg("Invalid identity hash")]
     InvalidIdentityHash,
     #[msg("Public witness has an unexpected layout")]
     InvalidPublicWitness,
-    #[msg("Verifier is not in the factory allowlist")]
+    #[msg("Verifier is not allowed by the factory")]
     VerifierNotAllowed,
-    #[msg("No verifier proposal is pending")]
-    NoVerifierProposed,
-    #[msg("Verifier change notice has not elapsed")]
-    VerifierChangeNotReady,
-    #[msg("Refund window is outside factory bounds")]
-    InvalidRefundWindow,
-    #[msg("Deposit was already consumed")]
-    DepositConsumed,
-    #[msg("Refund window is closed")]
-    RefundWindowClosed,
-    #[msg("Proof wallet does not match the claimer")]
+    #[msg("Verifier config does not belong to this verifier")]
+    WrongVerifierConfig,
+    #[msg("Verifier program does not match the pinned deposit verifier")]
+    VerifierMismatch,
+    #[msg("Proof wallet does not match the destination")]
     InvalidWallet,
-    #[msg("Proof is stale or not newer than the cached proof")]
+    #[msg("Proof is stale: older than the newest proof this vault has seen")]
     ProofNotFresh,
+    #[msg("Proof issue time is in the future")]
+    ProofFromFuture,
+    #[msg("Proof was produced from a token signed by a key this verifier does not accept")]
+    UnknownSignerKey,
     #[msg("Verifier rejected the proof")]
     ProofVerificationFailed,
     #[msg("Verifier program is not executable")]
     VerifierNotExecutable,
-    #[msg("Verifier program does not match the pinned deposit verifier")]
-    VerifierMismatch,
     #[msg("Proof payload exceeds the transaction-safe limit")]
     PayloadTooLarge,
     #[msg("Proof is empty")]
     EmptyProof,
-    #[msg("Amount must be nonzero")]
-    InvalidAmount,
-    #[msg("Constraint does not match the deposit")]
-    ConstraintMismatch,
-    #[msg("Policy fee exceeds the factory ceiling")]
-    FeeTooHigh,
 }

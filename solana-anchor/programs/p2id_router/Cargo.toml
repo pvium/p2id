@@ -1,0 +1,24 @@
+[package]
+name = "p2id_router"
+version = "0.1.0"
+description = "P2ID router: the immutable owner of every factory, vault and deposit account; implementations act on them through PDA-gated CPI"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "p2id_router"
+
+[features]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+cpi = ["no-entrypoint"]
+default = []
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+
+[dependencies]
+anchor-lang = { version = "=1.1.2", features = ["init-if-needed"] }
+anchor-spl = { version = "=1.1.2", features = ["token", "associated_token"] }
+sha2 = "0.10"
+solana-instructions-sysvar = "3.0.1"
+p2id_policy = { path = "../p2id_policy", features = ["cpi"] }

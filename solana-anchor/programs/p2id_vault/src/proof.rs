@@ -1,19 +1,21 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::Instruction;
 use anchor_lang::solana_program::program::invoke;
-use sha2::{Digest, Sha256};
 
 use crate::errors::VaultError;
-use crate::state::{
-    FIELD_LEN, IDENTITY_PREFIX, IDENTITY_TYPE_WALLET, PW_HEADER_LEN, PW_LEN, PUBLIC_INPUT_COUNT,
-    PUBLIC_INPUT_IAT, PUBLIC_INPUT_IDENTITY_HASH_HI, PUBLIC_INPUT_IDENTITY_HASH_LO,
-    PUBLIC_INPUT_WALLET_HASH_HI, PUBLIC_INPUT_WALLET_HASH_LO, MAX_VERIFIER_PAYLOAD_LEN,
+use p2id_router::state::{
+    FIELD_LEN, MAX_VERIFIER_PAYLOAD_LEN, PUBLIC_INPUT_COUNT, PUBLIC_INPUT_IAT, PUBLIC_INPUT_IDENTITY_HASH_HI,
+    PUBLIC_INPUT_IDENTITY_HASH_LO, PUBLIC_INPUT_SIGNER_X_HI, PUBLIC_INPUT_SIGNER_X_LO, PUBLIC_INPUT_SIGNER_Y_HI,
+    PUBLIC_INPUT_SIGNER_Y_LO, PUBLIC_INPUT_WALLET_HASH_HI, PUBLIC_INPUT_WALLET_HASH_LO, PW_HEADER_LEN, PW_LEN,
+    SIGNER_KEY_LEN,
 };
 
 #[derive(Debug, Clone, Copy)]
 pub struct PublicInputs {
     pub identity_type: [u8; 32],
     pub wallet: [u8; 32],
+    /// P-256 key (x || y) that signed the token, from public inputs 2-5.
+    pub signer_key: [u8; SIGNER_KEY_LEN],
     pub identity_hash: [u8; 32],
     pub wallet_hash: [u8; 32],
     pub iat: i64,
@@ -64,9 +66,22 @@ pub fn parse_public_witness(bytes: &[u8]) -> Result<PublicInputs> {
     ) as i64;
     require!(iat > 0, VaultError::InvalidPublicWitness);
 
+    let signer_x = hash_from_halves(
+        field(bytes, PUBLIC_INPUT_SIGNER_X_HI)?,
+        field(bytes, PUBLIC_INPUT_SIGNER_X_LO)?,
+    )?;
+    let signer_y = hash_from_halves(
+        field(bytes, PUBLIC_INPUT_SIGNER_Y_HI)?,
+        field(bytes, PUBLIC_INPUT_SIGNER_Y_LO)?,
+    )?;
+    let mut signer_key = [0u8; SIGNER_KEY_LEN];
+    signer_key[..32].copy_from_slice(&signer_x);
+    signer_key[32..].copy_from_slice(&signer_y);
+
     Ok(PublicInputs {
         identity_type: field(bytes, 0)?,
         wallet: field(bytes, 1)?,
+        signer_key,
         identity_hash: hash_from_halves(
             field(bytes, PUBLIC_INPUT_IDENTITY_HASH_HI)?,
             field(bytes, PUBLIC_INPUT_IDENTITY_HASH_LO)?,
@@ -77,32 +92,6 @@ pub fn parse_public_witness(bytes: &[u8]) -> Result<PublicInputs> {
         )?,
         iat,
     })
-}
-
-pub fn sha256(parts: &[&[u8]]) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    for part in parts {
-        hasher.update(part);
-    }
-    hasher.finalize().into()
-}
-
-pub fn identity_hash(identity_type: u8, value: &[u8]) -> [u8; 32] {
-    sha256(&[IDENTITY_PREFIX, &[identity_type], &normalize(identity_type, value)])
-}
-
-fn normalize(identity_type: u8, value: &[u8]) -> Vec<u8> {
-    let lowercase = identity_type == IDENTITY_TYPE_WALLET
-        && value.len() >= 2
-        && value[0] == b'0'
-        && value[1] == b'x';
-    if !lowercase {
-        return value.to_vec();
-    }
-    value
-        .iter()
-        .map(|c| if c.is_ascii_uppercase() { c.to_ascii_lowercase() } else { *c })
-        .collect()
 }
 
 pub fn verify_proof(verifier: &AccountInfo, proof: &[u8], public_witness: &[u8]) -> Result<()> {
@@ -153,8 +142,16 @@ mod tests {
         let lo = 0x9999_aaaa_bbbb_cccc_dddd_eeee_ffff_0000u128;
         values[7] = hi;
         values[8] = lo;
+        values[2] = 0xaaaa;
+        values[3] = 0xbbbb;
+        values[4] = 0xcccc;
+        values[5] = 0xdddd;
         let parsed = parse_public_witness(&witness(&values)).unwrap();
         assert_eq!(parsed.iat, 1_700_000_000);
+        assert_eq!(&parsed.signer_key[14..16], &[0xaa, 0xaa]);
+        assert_eq!(&parsed.signer_key[30..32], &[0xbb, 0xbb]);
+        assert_eq!(&parsed.signer_key[46..48], &[0xcc, 0xcc]);
+        assert_eq!(&parsed.signer_key[62..64], &[0xdd, 0xdd]);
         assert_eq!(&parsed.identity_hash[..16], &hi.to_be_bytes());
         assert_eq!(&parsed.identity_hash[16..], &lo.to_be_bytes());
     }
@@ -168,16 +165,5 @@ mod tests {
         let mut bytes = witness(&[1; PUBLIC_INPUT_COUNT]);
         bytes[PW_HEADER_LEN + 7 * FIELD_LEN] = 1;
         assert!(parse_public_witness(&bytes).is_err());
-    }
-
-    #[test]
-    fn wallet_hash_matches_evm_normalization() {
-        let lower = identity_hash(IDENTITY_TYPE_WALLET, b"0xabcd");
-        let upper = identity_hash(IDENTITY_TYPE_WALLET, b"0xABCD");
-        assert_eq!(lower, upper);
-
-        let base58 = identity_hash(IDENTITY_TYPE_WALLET, b"AbCd");
-        let lower_base58 = identity_hash(IDENTITY_TYPE_WALLET, b"abcd");
-        assert_ne!(base58, lower_base58);
     }
 }

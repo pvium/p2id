@@ -8,6 +8,8 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
+p2id_policy = "32CHoykPA8eVDvuY84uc8yvJCgkjj6kwsJqweX76G7oJ"
+p2id_router = "4Xy1ad1x63e6o3dMgrEE2JvKtem2jQvqSV4tRaHmvuc3"
 p2id_vault = "DaQSQnyAHJLRMdN8m5ENm1Zr9dQKCeRBG8QoxMjEvVzf"
 test_verifier = "SgPm1N4qiMD7XfSQxrzZ1Yj9LQ4xWn44HAwhehfMFCJ"
 
