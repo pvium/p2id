@@ -256,6 +256,41 @@ Local tests run against the workspace programs with `anchor test --validator leg
 programs upgradeable and burn the upgrade authority of the implementation and both verifier
 programs first, since the router admits nothing else.
 
+## Deploy
+
+`scripts/deploy.ts` deploys the stack to a cluster and brings it up to the current release, the way
+the EVM deploy script does for a chain:
+
+```sh
+cp .env.example .env            # fill in the environment's values
+yarn deploy:predict --cluster devnet   # addresses only, nothing sent
+yarn deploy --cluster devnet           # sandbox
+yarn deploy --cluster mainnet          # production
+yarn deploy:plan --cluster mainnet     # read the cluster, write the authority instructions, send nothing
+```
+
+The cluster decides the environment (`deploy.config.ts`: devnet and a local validator are
+`sandbox`, mainnet is `production`), and every environment-specific setting is read with that suffix
+from `.env`: the Privy keys (shared with the EVM stack, so they fall back to `contracts/.env`), the
+authority (a Squads vault) and the alpha attester. `releases.json` says what the stack is built
+from: the circuit version the factory is initialized with and the sha256 of its Sunspot verifying
+key, the policy rate, the program crates, the Sunspot artifact, and the authority settings every
+cluster of the environment should have now (alpha attester, constraint signers to add or retire).
+
+A run deploys the Sunspot program and burns its upgrade authority, builds the P2ID verifier with
+`P2ID_ZK_VERIFIER` set to it and checks on-chain that the deployed verifier fronts exactly that
+program, deploys the policy, router and implementation programs, burns the implementation's and
+verifier's authorities, initializes the policy and the factory, burns the router's authority, and
+then works out the authority transactions the cluster still lacks (bind the policy, attester, signers).
+Those are sent when the deployer is the authority; otherwise they are written to
+`deployments/squads/` as unsigned instructions to import into Squads. Every step is skipped when the
+cluster already has it, so the command is re-runnable and is how a cluster picks up a new release.
+Each run writes `deployments/<scheme>.<environment>.<cluster>.json` (program ids, PDAs, params
+hash, configuration, live status), and refuses a configuration whose factory PDA differs from an
+earlier record of the same environment. A local validator needs no `.env`: unset values default to
+the deployer as authority and attester, a built-in Privy key and the test verifier as the ZK backend,
+and nothing is recorded.
+
 To exercise a deployed verifier with a real Sunspot proof outside the suite, use
 [`solana-test/verify-anchor.js`](../solana-test/verify-anchor.js): start a local validator with the
 Sunspot program preloaded and finalized, deploy `p2id_solana_verifier` built against it, save the

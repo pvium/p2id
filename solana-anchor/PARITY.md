@@ -160,20 +160,26 @@ the first deploy with a kept program id.
   Solana counterpart of the EVM `alphaAttestation` flow), SDK assembling the Ed25519 instruction in
   front of the gated instruction, v0 + lookup table for proof-carrying refreshes while in alpha.
 - [ ] Event parsing for the indexer (Funded, Claimed, Refunded, OwnerRefreshed).
-- [ ] Deploy records for Solana alongside `contracts/deployments/*.json` (program ids,
-  factory/verifier/policy PDAs, params hash).
+- [x] Deploy records for Solana: `solana-anchor/deployments/<scheme>.<environment>.<cluster>.json`
+  written by `scripts/deploy.ts` (program ids, factory/verifier/policy PDAs, params hash, status).
+- [ ] SDK: read the Solana factory per environment from the deploy records (or a `p2id.json`
+  entry) as the EVM SDK reads `factories`.
 
 ## 5. Deploy sequence (once 1–3 are done)
 
-1. Generate and vault the program keypairs; `anchor keys sync`; commit the ids.
-2. Deploy the Sunspot verifier program and burn its upgrade authority (`solana program
-   set-upgrade-authority --final`). Build `p2id_solana_verifier` with `P2ID_ZK_VERIFIER=<its id>`.
-3. Deploy `p2id_solana_verifier`, `p2id_policy`, `p2id_router`, `p2id_vault` to devnet.
-4. Burn the upgrade authority of `p2id_solana_verifier` and `p2id_vault` now: `initialize_factory`
-   refuses them otherwise (pass each program and its ProgramData account).
-5. `initialize_policy(squads, router_program, fee_bps)`.
-6. `initialize_factory(squads, params_hash, keys, verifier, policy, vault_program, alpha_attester, …)`
-   on the router; the verifier starts in alpha, release it with `set_alpha(false)` when ready.
-7. `set_factory` on the policy.
-8. Burn the upgrade authority of `p2id_router`; decide the policy program's per item 1.
-9. Repeat on mainnet from the Squads multisig.
+`scripts/deploy.ts` (`yarn deploy --cluster <devnet|mainnet>`, see README "Deploy") performs the
+whole sequence and is re-runnable; `releases.json` is the release index, `deployments/` the records.
+Rehearsed end to end on a local validator (fresh ledger: deploy and burn the ZK backend, deploy the
+verifier and check its binding on-chain, deploy policy/router/implementation, burn, initialize policy
+and factory, burn the router, bind the policy; second run skips everything). Before a real cluster:
+
+1. Generate and vault the program keypairs (`SOL_PROGRAM_KEYPAIR_DIR`); their ids must be the ones
+   declared in the sources, so set them once and commit the ids.
+2. Build the Sunspot verifier for the current circuit and set `SOL_VK_FILE` once so the script
+   records the circuit's vkHash in `releases.json` (part of the factory PDA).
+3. Fill `.env` for the environment: Privy keys (or let them come from `contracts/.env`), Squads
+   authority, alpha attester (the backend's ed25519 key).
+4. `yarn deploy:predict`, then `yarn deploy` on devnet; the verifier starts in alpha, release it with
+   `set_alpha(false)` from the authority when ready. The policy program's upgrade authority is kept
+   unless `--finalize-policy` (section 3 item).
+5. Repeat on mainnet; the authority transactions come out as `deployments/squads/*.json` for Squads.

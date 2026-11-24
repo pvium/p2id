@@ -2,7 +2,10 @@
   "name": "p2id-solana-anchor",
   "private": true,
   "scripts": {
-    "test": "mocha -r ts-node/register tests/**/*.ts --timeout 300000"
+    "test": "mocha -r ts-node/register tests/**/*.ts --timeout 300000",
+    "deploy": "ts-node scripts/deploy.ts",
+    "deploy:predict": "ts-node scripts/deploy.ts --predict",
+    "deploy:plan": "ts-node scripts/deploy.ts --plan"
   },
   "devDependencies": {
     "@coral-xyz/anchor": "0.32.1",
