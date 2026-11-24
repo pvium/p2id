@@ -10,8 +10,6 @@ pub enum VaultError {
     DepositConsumed,
     #[msg("Invalid identity hash")]
     InvalidIdentityHash,
-    #[msg("Public witness has an unexpected layout")]
-    InvalidPublicWitness,
     #[msg("Verifier is not allowed by the factory")]
     VerifierNotAllowed,
     #[msg("Verifier config does not belong to this verifier")]
@@ -28,6 +26,8 @@ pub enum VaultError {
     UnknownSignerKey,
     #[msg("Verifier rejected the proof")]
     ProofVerificationFailed,
+    #[msg("Verifier returned no attestation: not a P2ID verifier")]
+    InvalidAttestation,
     #[msg("Verifier program is not executable")]
     VerifierNotExecutable,
     #[msg("Proof payload exceeds the transaction-safe limit")]

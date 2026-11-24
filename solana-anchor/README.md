@@ -15,16 +15,18 @@ Four programs live here.
   their vault to it, or does not.
 - `programs/p2id_policy` is the fee policy (`PviumP2IDPolicy`): the router asks it for the rate at
   funding and reports fees to it at settlement.
-- `programs/p2id_solana_verifier` is a thin CPI wrapper around a Sunspot verifier, described further
-  down; the vault does not use it. `programs/test_verifier` accepts any proof and exists only for
-  the local tests.
+- `programs/p2id_solana_verifier` is the verifier for circuit v2: it implements the verifier
+  interface (below) in front of the Sunspot-generated Groth16 program, checking the witness layout
+  and returning the attestation. `crates/p2id_verifier_interface` is the interface itself.
+  `programs/test_verifier` (a stand-in for the Sunspot program: accepts any proof) and
+  `programs/test_hook` (a Token-2022 transfer hook that counts transfers) exist only for the local tests.
 
 ## Router and implementations
 
 On Solana only an account's owner program can write its data or debit its lamports, and a program
 cannot call back into a program that is already on the call stack. So the split is: accounts and
 balances in the router, proof logic in implementations, and calls flow one way, user →
-implementation → router (→ policy, → Sunspot verifier from the implementation).
+implementation → router (→ policy), and implementation → verifier (→ its proof-system program).
 
 An implementation signs its router calls with its authority PDA
 (`PDA(["p2id.impl-authority.v1"], implementationProgram)`), and the router accepts the call only if
@@ -45,7 +47,10 @@ current); nobody else can.
 
 The implementation programs' upgrade authority is burned at deploy and the router's as well, which
 is the point: the only way behaviour changes for a vault is a new program the factory announced two
-weeks earlier and the owner opted into.
+weeks earlier and the owner opted into. The router does not take this on trust: `initialize_factory`,
+`register_implementation` and `activate_verifier` read the program's loader state (its ProgramData
+account under the upgradeable loader, the status under loader-v4) and refuse a program that still has
+an upgrade authority, or that is not deployed at all. Burning comes before registering.
 
 ## Addresses
 
@@ -54,7 +59,8 @@ factory    = PDA(["p2id.factory.v1", "pvium.vault.v1", authority, paramsHash], p
 verifier   = PDA(["p2id.verifier.v1", factory, verifierProgram],                 p2id_router)
 policy     = PDA(["p2id.policy.v1", authority, p2id_router, feeBps_be_u16],      p2id_policy)
 paramsHash = sha256("p2id.factory.params.v1" || nKeys_u8 || signerKey_1 || … || defaultVerifier || policy
-                    || defaultImplementation || circuitVersion_be_u16 || vkHash || minRefundWindow_be_i64 || maxRefundWindow_be_i64)
+                    || defaultImplementation || alphaAttester || circuitVersion_be_u16 || vkHash
+                    || minRefundWindow_be_i64 || maxRefundWindow_be_i64)
 vault      = PDA(["p2id.vault.v1", factory, identityHash],    p2id_router)
 deposit    = PDA(["p2id.deposit.v1", vault, depositId_le_u64], p2id_router)
 vaultMint  = PDA(["p2id.vault-mint.v1", vault, mint],           p2id_router)
@@ -100,12 +106,15 @@ cannot be caught), which is why the policy only books receipts, and a zero fee s
 | EVM | Solana (program) |
 | --- | --- |
 | `fund`, `fundWith(verifier, …)`, `fundWithRefunder(…, refundAddress, …)` (V2) | one instruction per asset: `fund_sol` / `fund_token(amount, constraint, refund_window, refunder?, reference)` (implementation); the verifier is the `verifier_config` account passed (the default's for plain funding), `refunder` null means the funder |
-| `refreshProof(verifier, proof)` | `refresh_proof(proof, public_witness)` with any allowed `verifier_program` (implementation) |
-| `refreshProofAndSweep` / `sweepDeposits` | `claim_sol` / `claim_token(id, proof, public_witness)` (implementation) |
-| `sweep` (proofless, cached owner) | the same instructions with an empty `proof` and `public_witness` |
+| `refreshProof(verifier, proof)` | `refresh_proof(proof)` with any allowed `verifier_program` (implementation); the verifier's accounts follow as remaining accounts |
+| `refreshProofAndSweep` / `sweepDeposits` | `claim_sol` / `claim_token(id, proof)` (implementation) |
+| `sweep` (proofless, cached owner) | the same instructions with an empty `proof` |
 | `sweepBucket(…, Constraint{commitment, signature}, …)` | the same instructions, preceded in the transaction by an Ed25519 instruction (see below) |
+| `*WithAttestation(…, AlphaAttestation)` / `executeWithAttestation` | the same instructions, preceded by the alpha attester's Ed25519 instruction while the verifier is in alpha (see below) |
+| `setAlpha(vkHash, enabled)`, `setDefaultAttester` | `set_alpha(enabled)` per verifier config, `set_alpha_attester` on the factory |
 | `sweepUntracked(token)` | `sweep_untracked_sol` / `sweep_untracked_token` (router) |
 | `refund(depositId)` | `refund_sol` / `refund_token(id)` (router) |
+| (none: consumed deposits cost nothing to keep on EVM) | `close_deposit(id)` (router, permissionless): returns a consumed deposit record's rent to its funder |
 | `upgradeTo(implementation)` on a vault | `set_vault_implementation(program)` (router, cached owner signs) |
 | `Funded`, `Claimed`, `Refunded`, `OwnerRefreshed`, `Swept` events | `Funded`, `Claimed`, `Refunded`, `OwnerRefreshed`, `UntrackedSwept`, plus `ImplementationRegistered`, `VaultImplementationChanged` (all emitted by the router) |
 
@@ -132,44 +141,98 @@ which key signed what. The authority adds and removes a verifier's constraint si
 (`set_constraint_signer`), as the EVM verifier owner does; funding with a constraint is refused
 while the chosen verifier has none (EVM: `supportsConstraints()`).
 
+**Alpha.** A verifier is as trustworthy as its circuit, and a soundness bug in a live circuit is
+invisible on-chain: the proof passes. The one party with independent evidence is the backend, which
+issued the identity token and knows which wallet that identity authenticated with. So every verifier
+starts in alpha (EVM `isAlpha(vkHash)`), and while it is, every payout under it needs the factory's
+`alpha_attester` (an ed25519 key held by the backend) to have approved that exact action: an earlier
+Ed25519 instruction in the same transaction over
+`"p2id.alpha.sol.v1" || deadline_le_i64 || sha256(factory || vault || verifier || destination || iat_le_i64 || action || subject || epoch_le_u64)`.
+The attester can withhold, never move funds: every router invariant still applies. Gated:
+`refresh_proof` (action 1), `claim_*` with or without a proof (2, subject = the deposit),
+`sweep_untracked_*` (3, subject = the mint, zero for SOL) and `set_vault_implementation` (4, subject
+= the program). Refunds and `close_deposit` are never gated. `iat` is the owner's proof time after
+any update the instruction carries, so an approval names the proof it was given for; there is no
+nonce because a deposit settles once and a same-age proof cannot move the owner. `set_alpha(false)`
+releases a verifier; `set_alpha(true)` puts it back, which also increments `key_set_revision` so
+owners cached from unvetted proofs must prove again under supervision. Both, and
+`set_alpha_attester`, bump `alpha_epoch`, which every approval signs, so outstanding approvals die
+with the change (EVM `alphaEpoch`). A proof-carrying `refresh_proof` plus the attester's instruction
+exceeds a legacy transaction; use a v0 transaction with a lookup table, as for a proof-carrying claim.
+
+**Tokens.** Both token programs are accepted: classic SPL Token and Token-2022, with any mint
+extensions. Every transfer is `transfer_checked`. A transfer-hook mint's extra accounts are appended
+to the instruction as remaining accounts (resolved client-side as for any transfer of that mint) and
+the programs re-resolve them on-chain before each transfer. Because a Token-2022 mint may take a cut
+of every transfer, the programs never trust the amount they asked for: a deposit records what reached
+the vault's token account, the policy books what reached its account, and payouts and refunds carry
+the mint's fee like any other transfer. Extensions that stop a transfer outright (non-transferable,
+a frozen default account state, a permanent delegate moving funds, a hook that refuses) are outside
+the programs' control; such a mint's deposits can neither be claimed nor refunded until the mint
+authority allows it.
+
 **Untracked funds.** SOL or tokens sent straight to a vault (no deposit record) are swept to the
 cached owner by `sweep_untracked_*`, at the current policy rate; recorded deposits and the vault's
 rent are never touched (`tracked_sol`, `VaultMint.tracked`).
 
 **Transaction size and compute.** A Sunspot proof plus witness is ~750 bytes; a proof-carrying
-`claim_sol` has 13 accounts and does not fit a legacy transaction, `claim_token` with ~22 accounts
-even less so. Present the proof once with `refresh_proof` (8 accounts, fits) and claim without a
-proof afterwards, or use an address lookup table. A proofless token claim uses ~160k compute units
-across the three programs; a proof-carrying one needs a compute-budget instruction sized for the
-Sunspot verifier as well.
+`claim_sol` has 15 accounts and does not fit a legacy transaction, `claim_token` with ~24 accounts
+even less so. Present the proof once with `refresh_proof` (11 accounts, fits) and claim without a
+proof afterwards, or send a v0 transaction whose address lookup table holds the claim's accounts
+(the test suite does both). A proofless token claim uses ~160k compute units across the three
+programs, up to ~200k for a Token-2022 mint with a transfer hook (set a 400k compute budget); a
+proof-carrying one adds the verifier (a few thousand units of its own) and whatever the Groth16
+verification costs, so size the compute budget from a simulation. Batching is several claim
+instructions in one transaction.
 
 **Account layout.** Every account carries a `version` and 128 (32 for deposits) reserved bytes so a
 later implementation can record more without the router reallocating.
 
 Each verifier program the factory accepts has a `VerifierConfig` account, the counterpart of the
-EVM `PviumVerifier` + `PviumIdentity` pair (the Sunspot verifier program itself is stateless): whether
+EVM `PviumVerifier` + `PviumIdentity` pair (the verifier program itself is stateless): whether
 it is allowed, the circuit version and vk hash it verifies, the P-256 keys a proof's Privy token must
 have been signed by (public inputs 2-5; the proof binds the token signature to that key), and its
-constraint signers. `propose_verifier` creates the config for a new circuit version with its keys;
+constraint signers. Every key handed to the factory is checked to be a point on P-256 before it is accepted, so a
+mistyped or swapped key cannot sit through the notice and turn out dead. `propose_verifier` creates
+the config for a new circuit version with its keys;
 `activate_verifier` allows it and makes it the default after the notice; `revoke_verifier` disallows
 a non-default one immediately. Per config, `propose_signer_key` / `activate_signer_key` add a key
 after a 7-day notice and `remove_signer_key` retires one immediately, incrementing
-`key_set_revision`. A claim is checked against the config of the verifier its deposit pins, so keys
-and signers rotate per circuit version, as on EVM.
+`key_set_revision`; `set_alpha` releases the verifier from alpha or puts it back. A claim is checked
+against the config of the verifier its deposit pins, so keys, signers and alpha mode are per circuit
+version, as on EVM.
 
-## Verifier wrapper
+## Verifier interface
 
-The `p2id_solana_verifier` program forwards a Sunspot proof to a caller-selected verifier program using a
-cross-program invocation (CPI). It passes the proof bytes followed by the serialized public
-witness bytes, matching the interface used by
-[`solana-test/verify-anchor.js`](../solana-test/verify-anchor.js).
-The instruction succeeds only if the CPI succeeds. On success, the wrapper sets Solana return data
-to the single byte `1`.
+The EVM vault calls `IVerifier.verify(proof, publicInputs)` through `PviumVerifier`; the Solana
+implementation does the same through the verifier interface (`crates/p2id_verifier_interface`). A
+verifier is any program with one instruction,
 
-The verifier program ID is an instruction argument and its executable account is also supplied
-to the instruction. The program checks that the account key equals the requested ID and that the
-account is executable. The caller must still choose and trust the correct verifier: an arbitrary
-executable program could return success without verifying the proof.
+```text
+verify(proof: Vec<u8>) -> Attestation        // Anchor discriminator sha256("global:verify")[..8]
+```
+
+that fails unless `proof` is genuine and returns, as Borsh return data, what it attests:
+
+```text
+Attestation { signer_key: [u8; 64], identity_hash: [u8; 32], wallet_hash: [u8; 32], iat: i64 }
+```
+
+The implementation treats `proof` as opaque bytes and passes through, in order, the accounts the
+caller appended for the verifier (remaining accounts; in `claim_token` any transfer-hook accounts
+follow them). It then checks the attestation: the signer key is one the deposit's `VerifierConfig`
+accepts, the identity hash is the vault's, `iat` is within bounds and not older than the newest
+proof seen, and the wallet hash commits to the destination. The verifier decides whether the proof
+is genuine; the implementation decides what a genuine proof is allowed to do.
+
+`p2id_solana_verifier` is the verifier for circuit v2. Its `proof` is the Groth16 proof followed by
+the 11-input public witness in gnark's serialization, exactly the bytes the Sunspot-generated
+program takes; it checks the witness layout, forwards the payload unchanged and returns the
+attestation read from the witness. Its two accounts are the Sunspot program and that program's
+ProgramData account: the Sunspot program id is fixed at build time (`P2ID_ZK_VERIFIER`, see
+`.cargo/config.toml`; the committed value is the local test backend), and the program must have no
+upgrade authority, checked on every call. A new circuit is a new Sunspot program and a new build of
+this verifier behind it, proposed to the factory like any other verifier.
 
 ## Build
 
@@ -187,75 +250,15 @@ anchor build
 ```
 
 Keep the generated keypair private and out of version control. `anchor keys sync` updates the
-program IDs in `Anchor.toml` and each program's `declare_id!` to match them. Local tests run against
-the workspace programs with `anchor test --validator legacy`.
+program IDs in `Anchor.toml` and each program's `declare_id!` to match them. Build the verifier for a
+real circuit with `P2ID_ZK_VERIFIER=<sunspot program id> anchor build -p p2id_solana_verifier`.
+Local tests run against the workspace programs with `anchor test --validator legacy`; they load the
+programs upgradeable and burn the upgrade authority of the implementation and both verifier
+programs first, since the router admits nothing else.
 
-## Instruction
+To exercise a deployed verifier with a real Sunspot proof outside the suite, use
+[`solana-test/verify-anchor.js`](../solana-test/verify-anchor.js): start a local validator with the
+Sunspot program preloaded and finalized, deploy `p2id_solana_verifier` built against it, save the
+prover's Solana attestation response as `solana-test/data.json`, set `P2ID_ANCHOR_PROGRAM_ID` and
+`SUNSPOT_VERIFIER_PROGRAM_ID`, and run `yarn verify:anchor`; it prints the attestation returned.
 
-`verify(verifier_program_id, proof, public_witness)` takes:
-
-- `verifier_program_id`: the deployed Sunspot verifier program address.
-- `proof`: the decoded bytes from the prover response's base64 `proof` field.
-- `public_witness`: the decoded bytes from `publicWitness` (or Solana `publicInputs`).
-
-The verifier CPI receives `proof || public_witness` as its instruction data and no account metas,
-matching Sunspot's stateless verifier interface. The combined payload is capped at 900 bytes.
-The local sample response is 388 proof bytes plus 76 public-witness bytes.
-
-The outer transaction must include a compute-budget instruction sized for the verifier. The
-existing direct-verifier example uses 600,000 units; CPI adds wrapper overhead, so simulate the
-transaction and increase the budget as needed, up to the cluster's transaction limit. A successful
-Anchor instruction means the CPI returned successfully; return data is `[1]`.
-
-## Local test setup
-
-Build the Sunspot verifier and the Anchor wrapper first. The following commands assume the
-Sunspot artifacts are in `circuit/target` and that the wrapper keypair was created at
-`solana-anchor/target/deploy/p2id_solana_verifier-keypair.json`.
-
-In Terminal 1, from the repository root, start a fresh local validator with the Sunspot verifier
-preloaded at the address derived from its keypair:
-
-```sh
-solana-test-validator --reset \
-  --bpf-program circuit/target/pvium_identity-keypair.json circuit/target/pvium_identity.so
-```
-
-In another terminal, derive and print the verifier's public program ID from its keypair file:
-
-```sh
-solana address -k circuit/target/pvium_identity-keypair.json
-```
-
-Use the printed address as `SUNSPOT_VERIFIER_PROGRAM_ID`. The command prints only the public
-address; keep the keypair file private.
-
-In Terminal 2, deploy the Anchor wrapper and confirm its program is visible on the local
-validator:
-
-```sh
-cd solana-anchor
-solana airdrop 5 --url http://127.0.0.1:8899
-anchor deploy
-solana program show "$(solana address -k target/deploy/p2id_solana_verifier-keypair.json)" \
-  --url http://127.0.0.1:8899
-```
-
-Save a Solana attestation response to `solana-test/data.json`. In Terminal 3, from the repository
-root, copy the example environment file if needed, export the IDs derived from the two program
-keypairs, and run the Anchor client:
-
-```sh
-cd solana-test
-test -f .env || cp .env.example .env
-export P2ID_ANCHOR_PROGRAM_ID="$(solana address -k ../solana-anchor/target/deploy/p2id_solana_verifier-keypair.json)"
-export SUNSPOT_VERIFIER_PROGRAM_ID="$(solana address -k ../circuit/target/pvium_identity-keypair.json)"
-yarn install
-yarn verify:anchor
-```
-
-The client sends `proof || public_witness` through the Anchor wrapper and checks that the wrapper
-returns `[1]`. `--reset` clears the validator's local ledger at startup; omit it to preserve an
-existing ledger, but make sure the Sunspot verifier is already deployed there. The wrapper does
-not deploy or configure the verifier program itself. The direct verifier path is available
-separately as `yarn verify:direct`; it uses `VERIFIER_PROGRAM_ID` and bypasses the Anchor wrapper.

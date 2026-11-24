@@ -20,6 +20,18 @@ the first deploy with a kept program id.
 - [x] Untracked SOL / token sweeps with fee
 - [x] Events: Funded, Claimed, Refunded, OwnerRefreshed, UntrackedSwept, FeeReceived, FeeWithdrawn
 - [x] `version` + `_reserved` bytes on every account for layout evolution
+- [x] Classic SPL Token and Token-2022 (transfer fees, transfer hooks) on every token path
+- [x] Verifier interface (`crates/p2id_verifier_interface`): `verify(proof) -> Attestation`, the
+  EVM `IVerifier` / `getIdentityWallet` shape. The implementation passes opaque proof bytes and
+  checks the attestation; `p2id_solana_verifier` is the registered verifier for circuit v2 and
+  fronts the Sunspot program (fixed at build time via `P2ID_ZK_VERIFIER`). Witness parsing moved
+  out of the implementation. Tested end to end through the suite (23 passing) and directly
+  (`.view()` returns the attestation; wrong backend, upgradeable backend, bad payload refused).
+- [x] Immutability enforced on-chain, not by deployment discipline: `initialize_factory`,
+  `register_implementation` and `activate_verifier` read loader state (upgradeable loader
+  ProgramData authority, loader-v4 status, legacy loaders) and refuse upgradeable or missing
+  programs; the verifier refuses an upgradeable Sunspot program on every call. Tested with
+  `test_hook` (upgradeable) as implementation/verifier, a missing program, and a wrong ProgramData.
 
 ## 1. Decisions (before any deploy with a kept program id)
 
@@ -76,28 +88,60 @@ the first deploy with a kept program id.
 
 ## 2. Code gaps (no decision needed)
 
-- [ ] **Close consumed deposits.** `close_deposit(id)`: once `consumed`, close the Deposit
-  account and return rent to the payer recorded at funding. Needs a `rent_payer` field on
-  `Deposit` (or reuse `funder`). Test: rent returned, second close fails.
-- [ ] **Transaction size.** (a) done: `refresh_proof` then proofless claim is the documented
-  primary flow (README); the SDK must drive it. (b) open: an address-lookup-table test for the
-  one-shot proof-carrying claim, since neither `claim_sol` (13 accounts) nor `claim_token` fits a
-  legacy transaction with a real-size proof.
-- [ ] **Real verifier end to end.** Tests use `test_verifier`. Run the full fund → refresh →
-  claim flow against `p2id_solana_verifier` with a real Sunspot proof on the local validator.
-- [ ] **P-256 on-curve check** for keys passed to `initialize_factory`, `propose_verifier` and
-  `propose_signer_key`, so a malformed key cannot be accepted after the 7-day wait.
-- [ ] **Token-2022** (if in scope): switch token paths to `token_interface`, make receipt
-  checks extension-aware (transfer fee reduces received amount), handle transfer hooks'
-  extra accounts.
-- [ ] **`claim_many`** (parity only): batch of proofless claims in one instruction. Low value
-  on Solana; skip unless the SDK wants it.
+- [x] **Close consumed deposits.** Router `close_deposit(id)`: permissionless once `consumed`,
+  closes the Deposit account and returns its rent to `deposit.funder` (who paid it). Deposit ids
+  are never reused. Tested: unconsumed refused, wrong recipient refused, rent returned, account gone.
+- [x] **Transaction size.** `refresh_proof` then proofless claim is the documented primary flow.
+  The one-shot proof-carrying claim is covered by a test that builds a v0 transaction with an
+  address lookup table holding the claim's accounts (388-byte proof + 364-byte witness) and asserts
+  the same claim does not serialize as a legacy transaction. The SDK needs both paths.
+- [ ] **Real verifier end to end.** Blocked on tooling: this machine has no `sunspot` CLI, no
+  compiled Sunspot verifier `.so` for the 11-input circuit, and no Solana-format proof
+  (`circuit/target/proof_p2id` is a 10 KB Barretenberg proof for the EVM path). Needs: Sunspot
+  installed, `pvium_identity.so` + keypair built from the current circuit, one Groth16 proof with
+  its 364-byte public witness and the wallet it names. Then: build `p2id_solana_verifier` with
+  `P2ID_ZK_VERIFIER=<sunspot id>`, load the Sunspot program finalized (or finalize it in `before`),
+  a factory whose default verifier is it, `deploy_vault` for the witness's identity hash,
+  `refresh_proof`, assert the cached owner. The interface and the Sunspot payload format
+  (`proof || witness`, forwarded unchanged) are already what `solana-test/verify-anchor.js` sends.
+- [x] **Alpha attestation.** EVM gates every payout (`refreshProof`, `refreshProofAndSweep`,
+  `sweepBucket*`, proxy `upgradeTo`) behind the backend attester's signature while the verifier's vk
+  is in alpha. Solana: `Factory.alpha_attester` (an `initialize_factory` argument, in `params_hash`;
+  zero means the authority) + `alpha_epoch` + `set_alpha_attester`; `VerifierConfig.alpha` (true from
+  creation) + `set_alpha`; router `require_alpha_attestation` in `set_owner_cache`, `settle_*`,
+  `sweep_untracked_*`, `set_vault_implementation` over the attester's Ed25519 instruction
+  (`"p2id.alpha.sol.v1" || deadline || sha256(factory || vault || verifier || destination || iat ||
+  action || subject || epoch)`). EVM `alphaRevision` is `key_set_revision` here (bumped on re-entry;
+  same restore/no-move semantics as EVM `_apply`, verified). No nonce (deposit settles once, same-iat
+  cannot move the owner). Tested: stale cache after re-entry; refresh refused without / wrong key /
+  wrong iat / wrong action / expired; settle bound to its deposit; sweep and move gated; attester
+  rotation voids the old epoch; release resumes proofless payouts and keeps the revision.
+  Transaction size: proof-carrying `refresh_proof` + the attester's instruction needs a v0
+  transaction with a lookup table (documented in the README).
+- [x] **P-256 on-curve check** in `initialize_factory`, `propose_verifier` and
+  `propose_signer_key` (`curve::is_on_p256`, p256 crate, admin paths only). Tested with an
+  all-9s blob, swapped x/y of a real key, and the generator in a unit test.
+- [x] **Token-2022** (decided in scope). Both token programs accepted everywhere (router,
+  implementation, policy) through `token_interface`; every transfer is `transfer_checked`; a
+  transfer hook's extra accounts come as remaining accounts and are re-resolved on-chain; the
+  programs record and book what actually arrived (transfer-fee mints take a cut on every hop).
+  Tested with classic SPL Token, a transfer-fee mint and a transfer-hook mint (`programs/test_hook`).
+- [x] **`claim_many`.** Closed by design: on Solana a batch is several `claim_*` instructions in
+  one transaction (with a lookup table when the account set is large); no program support needed.
 
 ## 3. Housekeeping
 
-- [ ] Commit the current work: `programs/p2id_policy/`, `programs/p2id_router/` and this file are
-  untracked; README has mixed staged and unstaged edits; `programs/p2id_vault/src/state.rs` is
-  deleted (moved to the router).
+- [ ] Commit the current work: new `crates/p2id_verifier_interface/`, `.cargo/config.toml`,
+  `programs/test_hook/`, `programs/p2id_policy/src/token.rs`, `programs/p2id_router/src/curve.rs`;
+  rewritten `programs/p2id_solana_verifier/`; deleted `programs/p2id_vault/src/proof.rs`;
+  `solana-test/verify-anchor.js` ported to the interface; alpha attestation (router, implementation,
+  tests, README).
+- [ ] Code review items from the external review, status: verifier wrapper disconnected → fixed
+  (it is the verifier now); immutability not enforced → fixed (router + verifier check loader
+  state); router trusts the implementation's owner update → by design (the implementation is
+  immutable, registered behind notice, and opted into per vault; the router cannot verify a proof
+  without freezing proof semantics). Policy program immutability is not enforced: it cannot reach
+  vault funds (fees are quoted at funding and capped by the router), decide separately.
 - [ ] README: strip anything that reads as internal status before publishing (constraint:
   public content carries no release status, repo paths or maintainer notes). Keep this file
   out of the public README.
@@ -112,6 +156,9 @@ the first deploy with a kept program id.
 - [ ] `factoryParamsHash` in the SDK, matching `programs/p2id_router/src/hash.rs` (includes the default implementation).
 - [ ] Fund / refresh / claim / refund builders, including the two-transaction
   refresh-then-claim flow and Ed25519 constraint instruction assembly.
+- [ ] Alpha approvals: backend endpoint signing the alpha message (ed25519 attester key, the
+  Solana counterpart of the EVM `alphaAttestation` flow), SDK assembling the Ed25519 instruction in
+  front of the gated instruction, v0 + lookup table for proof-carrying refreshes while in alpha.
 - [ ] Event parsing for the indexer (Funded, Claimed, Refunded, OwnerRefreshed).
 - [ ] Deploy records for Solana alongside `contracts/deployments/*.json` (program ids,
   factory/verifier/policy PDAs, params hash).
@@ -119,10 +166,14 @@ the first deploy with a kept program id.
 ## 5. Deploy sequence (once 1–3 are done)
 
 1. Generate and vault the program keypairs; `anchor keys sync`; commit the ids.
-2. Deploy `p2id_solana_verifier`, `p2id_policy`, `p2id_router`, `p2id_vault` to devnet.
-3. `initialize_policy(squads, router_program, fee_bps)`.
-4. `initialize_factory(squads, params_hash, keys, verifier, policy, vault_program, …)` on the router.
-5. `set_factory` on the policy.
-6. Burn the upgrade authority of `p2id_router` and `p2id_vault` (`solana program set-upgrade-authority
-   --final`); decide the policy program's per item 1.
-7. Repeat on mainnet from the Squads multisig.
+2. Deploy the Sunspot verifier program and burn its upgrade authority (`solana program
+   set-upgrade-authority --final`). Build `p2id_solana_verifier` with `P2ID_ZK_VERIFIER=<its id>`.
+3. Deploy `p2id_solana_verifier`, `p2id_policy`, `p2id_router`, `p2id_vault` to devnet.
+4. Burn the upgrade authority of `p2id_solana_verifier` and `p2id_vault` now: `initialize_factory`
+   refuses them otherwise (pass each program and its ProgramData account).
+5. `initialize_policy(squads, router_program, fee_bps)`.
+6. `initialize_factory(squads, params_hash, keys, verifier, policy, vault_program, alpha_attester, …)`
+   on the router; the verifier starts in alpha, release it with `set_alpha(false)` when ready.
+7. `set_factory` on the policy.
+8. Burn the upgrade authority of `p2id_router`; decide the policy program's per item 1.
+9. Repeat on mainnet from the Squads multisig.

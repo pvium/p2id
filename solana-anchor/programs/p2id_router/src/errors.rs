@@ -64,6 +64,10 @@ pub enum RouterError {
     PolicyChangeNotReady,
     #[msg("Signer key is all zero")]
     InvalidSignerKey,
+    #[msg("Signer key is not a point on the P-256 curve")]
+    SignerKeyNotOnCurve,
+    #[msg("Deposit is not consumed yet")]
+    DepositNotConsumed,
     #[msg("Signer key is already accepted")]
     SignerKeyAlreadyAccepted,
     #[msg("At least one signer key is required")]
@@ -82,4 +86,16 @@ pub enum RouterError {
     NothingToSweep,
     #[msg("Wrong mint for this account")]
     WrongMint,
+    #[msg("Implementation program must be deployed and immutable: burn its upgrade authority first")]
+    ImplementationNotImmutable,
+    #[msg("Verifier program must be deployed and immutable: burn its upgrade authority first")]
+    VerifierNotImmutable,
+    #[msg("Program data account does not belong to the program")]
+    WrongProgramData,
+    #[msg("Verifier is in alpha: no alpha attester signature approving this action precedes this instruction")]
+    AlphaAttestationRequired,
+    #[msg("Alpha attestation has expired")]
+    AlphaAttestationExpired,
+    #[msg("Alpha attester must be a nonzero key")]
+    InvalidAlphaAttester,
 }

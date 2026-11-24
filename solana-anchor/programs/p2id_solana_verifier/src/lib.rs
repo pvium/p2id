@@ -1,107 +1,67 @@
+//! The P2ID verifier for circuit v2 proofs made with Sunspot (gnark Groth16 over BN254). It
+//! implements the `p2id_verifier_interface` in front of the Sunspot-generated verifier program, which
+//! only answers "valid or not" to `proof || public witness`. This program checks the witness layout,
+//! forwards the payload unchanged, and returns the attestation the witness carries. The Sunspot
+//! program it fronts is fixed at build time (`P2ID_ZK_VERIFIER`, see `.cargo/config.toml`) and must
+//! itself be immutable: that is checked on every call, so the whole verification path is code nobody
+//! can change. A new circuit is a new build of this program behind a new Sunspot program.
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::{
-    instruction::Instruction,
-    program::{invoke, set_return_data},
-};
+use anchor_lang::solana_program::instruction::Instruction;
+use anchor_lang::solana_program::program::invoke;
+use p2id_verifier_interface::{program_status, Attestation, ProgramStatus, MAX_PROOF_LEN};
 
-declare_id!("DrPN26cNYpZrqAQgkARpds1ftm6q3hJXWY6Uh4RYgeNJ");
+pub mod witness;
 
-const MAX_VERIFIER_PAYLOAD_LEN: usize = 900;
+use witness::{parse_public_witness, PW_LEN};
+
+declare_id!("9WgYShJxUEFQmjird4GKbauXtq32uXbrRD8EdTcjoBxj");
+
+/// The proof-system program: a Sunspot-generated Groth16 verifier for the P2ID circuit.
+pub const ZK_VERIFIER: Pubkey =
+    Pubkey::from_str_const(env!("P2ID_ZK_VERIFIER", "set P2ID_ZK_VERIFIER to the Sunspot verifier program id"));
 
 #[program]
 pub mod p2id_solana_verifier {
     use super::*;
 
-    pub fn verify(
-        ctx: Context<VerifyProof>,
-        verifier_program_id: Pubkey,
-        proof: Vec<u8>,
-        public_witness: Vec<u8>,
-    ) -> Result<()> {
-        validate_payload(&proof, &public_witness)?;
-
-        let verifier_program = ctx.accounts.verifier_program.to_account_info();
-        require_keys_eq!(
-            verifier_program.key(),
-            verifier_program_id,
-            VerifierError::VerifierProgramMismatch
-        );
+    /// `proof` is the Groth16 proof followed by the serialized public witness, exactly the bytes the
+    /// Sunspot program takes. Fails unless the proof is genuine; returns what it attests.
+    pub fn verify(ctx: Context<Verify>, proof: Vec<u8>) -> Result<Attestation> {
+        require!(proof.len() > PW_LEN && proof.len() <= MAX_PROOF_LEN, VerifierError::InvalidPayload);
+        let zk_verifier = &ctx.accounts.zk_verifier;
+        require_keys_eq!(zk_verifier.key(), ZK_VERIFIER, VerifierError::WrongZkVerifier);
         require!(
-            verifier_program.executable,
-            VerifierError::VerifierProgramNotExecutable
+            program_status(zk_verifier, Some(&ctx.accounts.zk_verifier_data)) == ProgramStatus::Immutable,
+            VerifierError::ZkVerifierNotImmutable
         );
-
-        let mut verifier_data = Vec::with_capacity(proof.len() + public_witness.len());
-        verifier_data.extend_from_slice(&proof);
-        verifier_data.extend_from_slice(&public_witness);
-
+        let attestation = parse_public_witness(&proof[proof.len() - PW_LEN..])?;
         invoke(
-            &Instruction {
-                program_id: verifier_program_id,
-                accounts: Vec::new(),
-                data: verifier_data,
-            },
-            &[verifier_program],
-        )?;
-
-        set_return_data(&[1]);
-        Ok(())
+            &Instruction { program_id: ZK_VERIFIER, accounts: Vec::new(), data: proof },
+            &[zk_verifier.to_account_info()],
+        )
+        .map_err(|_| VerifierError::ProofRejected)?;
+        Ok(attestation)
     }
 }
 
 #[derive(Accounts)]
-pub struct VerifyProof<'info> {
-    /// CHECK: The instruction checks that this is the requested executable verifier program.
-    pub verifier_program: UncheckedAccount<'info>,
-}
-
-fn validate_payload(proof: &[u8], public_witness: &[u8]) -> Result<()> {
-    require!(
-        !proof.is_empty() && !public_witness.is_empty(),
-        VerifierError::EmptyProofPayload
-    );
-    require!(
-        proof.len() + public_witness.len() <= MAX_VERIFIER_PAYLOAD_LEN,
-        VerifierError::ProofPayloadTooLarge
-    );
-    Ok(())
+pub struct Verify<'info> {
+    /// CHECK: must be `ZK_VERIFIER`, executable and immutable; checked in the handler.
+    pub zk_verifier: UncheckedAccount<'info>,
+    /// CHECK: `ZK_VERIFIER`'s ProgramData account (upgradeable loader); any account for other loaders.
+    pub zk_verifier_data: UncheckedAccount<'info>,
 }
 
 #[error_code]
 pub enum VerifierError {
-    #[msg("Proof and public witness must both be non-empty")]
-    EmptyProofPayload,
-    #[msg("Combined verifier payload exceeds the supported size")]
-    ProofPayloadTooLarge,
-    #[msg("Verifier program account does not match the requested program ID")]
-    VerifierProgramMismatch,
-    #[msg("Verifier program account is not executable")]
-    VerifierProgramNotExecutable,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn accepts_the_current_sunspot_payload_size() {
-        let proof = vec![1; 388];
-        let public_witness = vec![2; 76];
-
-        assert!(validate_payload(&proof, &public_witness).is_ok());
-    }
-
-    #[test]
-    fn rejects_empty_proof_or_public_witness() {
-        assert!(validate_payload(&[], &[1]).is_err());
-        assert!(validate_payload(&[1], &[]).is_err());
-    }
-
-    #[test]
-    fn rejects_payloads_that_exceed_the_transaction_safe_limit() {
-        let proof = vec![1; MAX_VERIFIER_PAYLOAD_LEN];
-        let public_witness = vec![2];
-
-        assert!(validate_payload(&proof, &public_witness).is_err());
-    }
+    #[msg("Proof payload is not a Groth16 proof followed by an 11-input public witness")]
+    InvalidPayload,
+    #[msg("Public witness has an unexpected layout")]
+    InvalidPublicWitness,
+    #[msg("Not the ZK verifier program this verifier fronts")]
+    WrongZkVerifier,
+    #[msg("ZK verifier program is not immutable")]
+    ZkVerifierNotImmutable,
+    #[msg("Proof is not valid")]
+    ProofRejected,
 }

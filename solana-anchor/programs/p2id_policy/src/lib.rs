@@ -5,7 +5,10 @@
 //! factory behind its notice. The policy never holds an allowance and never pulls funds.
 use anchor_lang::prelude::*;
 use anchor_spl::associated_token::AssociatedToken;
-use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
+use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface};
+
+pub mod token;
+use token::transfer_tokens;
 
 declare_id!("32CHoykPA8eVDvuY84uc8yvJCgkjj6kwsJqweX76G7oJ");
 
@@ -158,7 +161,8 @@ pub mod p2id_policy {
         Ok(())
     }
 
-    /// A vault reports tokens it just transferred to this policy's associated token account.
+    /// A vault reports tokens it just transferred to this policy's associated token account (`amount`
+    /// is what arrived, after any Token-2022 transfer fee).
     pub fn collect_fee_token(ctx: Context<CollectFeeToken>, verifier: Pubkey, claimer: Pubkey, amount: u64) -> Result<()> {
         require_vault(&ctx.accounts.policy, &ctx.accounts.factory, &ctx.accounts.vault)?;
         let pm = &mut ctx.accounts.policy_mint;
@@ -195,7 +199,7 @@ pub mod p2id_policy {
         Ok(())
     }
 
-    pub fn withdraw_fees_token(ctx: Context<WithdrawFeesToken>, amount: u64) -> Result<()> {
+    pub fn withdraw_fees_token<'info>(ctx: Context<'info, WithdrawFeesToken<'info>>, amount: u64) -> Result<()> {
         let pm = &mut ctx.accounts.policy_mint;
         require!(amount > 0 && amount <= pm.fees_owed, PolicyError::InsufficientFees);
         pm.fees_owed -= amount;
@@ -204,17 +208,16 @@ pub mod p2id_policy {
         let fee = p.fee_bps.to_be_bytes();
         let bump = [p.bump];
         let signer: &[&[u8]] = &[POLICY_SEED, p.seed_authority.as_ref(), p.vault_program.as_ref(), &fee, &bump];
-        token::transfer(
-            CpiContext::new_with_signer(
-                ctx.accounts.token_program.key(),
-                Transfer {
-                    from: ctx.accounts.policy_token_account.to_account_info(),
-                    to: ctx.accounts.to_token_account.to_account_info(),
-                    authority: p.to_account_info(),
-                },
-                &[signer],
-            ),
+        transfer_tokens(
+            &ctx.accounts.token_program.to_account_info(),
+            &ctx.accounts.policy_token_account.to_account_info(),
+            &ctx.accounts.mint.to_account_info(),
+            &ctx.accounts.to_token_account.to_account_info(),
+            &p.to_account_info(),
+            ctx.remaining_accounts,
             amount,
+            ctx.accounts.mint.decimals,
+            &[signer],
         )?;
         emit!(FeeWithdrawn { policy: p.key(), mint: ctx.accounts.mint.key(), to: ctx.accounts.to_token_account.key(), amount });
         Ok(())
@@ -321,9 +324,11 @@ pub struct CollectFeeToken<'info> {
     /// Pays rent for a first-seen mint; the claim transaction's payer, passed through the CPI.
     #[account(mut)]
     pub payer: Signer<'info>,
-    pub mint: Account<'info, Mint>,
-    #[account(associated_token::mint = mint, associated_token::authority = policy)]
-    pub policy_token_account: Account<'info, TokenAccount>,
+    #[account(mint::token_program = token_program)]
+    pub mint: InterfaceAccount<'info, Mint>,
+    #[account(associated_token::mint = mint, associated_token::authority = policy, associated_token::token_program = token_program)]
+    pub policy_token_account: InterfaceAccount<'info, TokenAccount>,
+    pub token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
 }
 
@@ -358,15 +363,16 @@ pub struct WithdrawFeesToken<'info> {
         bump = policy_mint.bump
     )]
     pub policy_mint: Account<'info, PolicyMint>,
-    pub mint: Account<'info, Mint>,
-    #[account(mut, associated_token::mint = mint, associated_token::authority = policy)]
-    pub policy_token_account: Account<'info, TokenAccount>,
+    #[account(mint::token_program = token_program)]
+    pub mint: InterfaceAccount<'info, Mint>,
+    #[account(mut, associated_token::mint = mint, associated_token::authority = policy, associated_token::token_program = token_program)]
+    pub policy_token_account: InterfaceAccount<'info, TokenAccount>,
     /// CHECK: recipient token account chosen by the authority; created if needed.
-    #[account(init_if_needed, payer = authority, associated_token::mint = mint, associated_token::authority = to)]
-    pub to_token_account: Account<'info, TokenAccount>,
+    #[account(init_if_needed, payer = authority, associated_token::mint = mint, associated_token::authority = to, associated_token::token_program = token_program)]
+    pub to_token_account: InterfaceAccount<'info, TokenAccount>,
     /// CHECK: owner of the recipient token account.
     pub to: UncheckedAccount<'info>,
-    pub token_program: Program<'info, Token>,
+    pub token_program: Interface<'info, TokenInterface>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
 }

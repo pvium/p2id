@@ -13,13 +13,15 @@ pub fn sha256(parts: &[&[u8]]) -> [u8; 32] {
 
 /// Commitment to the factory parameters other than the authority:
 /// sha256("p2id.factory.params.v1" || n_keys_u8 || signer_key_1 || … || default_verifier || policy
-///        || default_implementation || circuit_version_be || vk_hash || min_refund_window_be || max_refund_window_be)
+///        || default_implementation || alpha_attester || circuit_version_be || vk_hash
+///        || min_refund_window_be || max_refund_window_be)
 #[allow(clippy::too_many_arguments)]
 pub fn factory_params_hash(
     signer_keys: &[[u8; SIGNER_KEY_LEN]],
     default_verifier: &Pubkey,
     policy: &Pubkey,
     default_implementation: &Pubkey,
+    alpha_attester: &Pubkey,
     circuit_version: u16,
     vk_hash: &[u8; 32],
     min_refund_window: i64,
@@ -35,6 +37,7 @@ pub fn factory_params_hash(
         default_verifier.as_ref(),
         policy.as_ref(),
         default_implementation.as_ref(),
+        alpha_attester.as_ref(),
         &circuit_version.to_be_bytes(),
         vk_hash,
         &min_refund_window.to_be_bytes(),
@@ -82,8 +85,10 @@ mod tests {
     #[test]
     fn params_hash_commits_to_the_implementation() {
         let keys = [[1u8; SIGNER_KEY_LEN]];
-        let a = factory_params_hash(&keys, &Pubkey::new_unique(), &Pubkey::default(), &Pubkey::new_from_array([1; 32]), 1, &[0; 32], 1, 2);
-        let b = factory_params_hash(&keys, &Pubkey::new_unique(), &Pubkey::default(), &Pubkey::new_from_array([2; 32]), 1, &[0; 32], 1, 2);
+        let a = factory_params_hash(&keys, &Pubkey::new_unique(), &Pubkey::default(), &Pubkey::new_from_array([1; 32]), &Pubkey::default(), 1, &[0; 32], 1, 2);
+        let b = factory_params_hash(&keys, &Pubkey::new_unique(), &Pubkey::default(), &Pubkey::new_from_array([2; 32]), &Pubkey::default(), 1, &[0; 32], 1, 2);
         assert_ne!(a, b);
+        let c = factory_params_hash(&keys, &Pubkey::new_unique(), &Pubkey::default(), &Pubkey::new_from_array([1; 32]), &Pubkey::new_from_array([3; 32]), 1, &[0; 32], 1, 2);
+        assert_ne!(a, c);
     }
 }

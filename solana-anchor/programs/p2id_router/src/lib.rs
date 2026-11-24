@@ -11,14 +11,18 @@
 use anchor_lang::prelude::*;
 use anchor_lang::system_program::{transfer as sol_transfer, Transfer as SolTransfer};
 use anchor_spl::associated_token::AssociatedToken;
-use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer as TokenTransfer};
+use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface};
+use p2id_policy::token::transfer_tokens;
 use solana_instructions_sysvar::{load_current_index_checked, load_instruction_at_checked};
 use p2id_policy::cpi::{self as policy_cpi, accounts as policy_accounts};
+use p2id_verifier_interface::{program_status, ProgramStatus};
 
+pub mod curve;
 pub mod errors;
 pub mod hash;
 pub mod state;
 
+use curve::is_on_p256;
 use errors::RouterError;
 use hash::{factory_params_hash, sha256};
 use state::*;
@@ -78,6 +82,21 @@ pub struct UntrackedSwept {
 }
 
 #[event]
+pub struct AlphaAttesterSet {
+    pub factory: Pubkey,
+    pub attester: Pubkey,
+    pub epoch: u64,
+}
+
+#[event]
+pub struct AlphaModeSet {
+    pub factory: Pubkey,
+    pub verifier: Pubkey,
+    pub enabled: bool,
+    pub epoch: u64,
+}
+
+#[event]
 pub struct ImplementationRegistered {
     pub factory: Pubkey,
     pub implementation: Pubkey,
@@ -126,6 +145,7 @@ pub mod p2id_router {
         default_verifier: Pubkey,
         policy: Pubkey,
         default_implementation: Pubkey,
+        alpha_attester: Pubkey,
         circuit_version: u16,
         vk_hash: [u8; 32],
         min_refund_window: i64,
@@ -138,6 +158,7 @@ pub mod p2id_router {
                     &default_verifier,
                     &policy,
                     &default_implementation,
+                    &alpha_attester,
                     circuit_version,
                     &vk_hash,
                     min_refund_window,
@@ -152,6 +173,18 @@ pub mod p2id_router {
             min_refund_window > 0 && min_refund_window <= max_refund_window,
             RouterError::InvalidRefundWindow
         );
+        require_immutable(
+            &ctx.accounts.default_verifier_program,
+            &ctx.accounts.default_verifier_program_data,
+            &default_verifier,
+            RouterError::VerifierNotImmutable,
+        )?;
+        require_immutable(
+            &ctx.accounts.default_implementation_program,
+            &ctx.accounts.default_implementation_program_data,
+            &default_implementation,
+            RouterError::ImplementationNotImmutable,
+        )?;
 
         let factory = &mut ctx.accounts.factory;
         factory.version = ACCOUNT_VERSION;
@@ -177,6 +210,9 @@ pub mod p2id_router {
         factory.proposed_implementation_eta = 0;
         factory.proposed_implementation_make_default = false;
         factory.implementation_change_delay = DEFAULT_VERIFIER_DELAY;
+        // EVM: a zero attester means the authority attests until a backend key is set.
+        factory.alpha_attester = if alpha_attester == Pubkey::default() { authority } else { alpha_attester };
+        factory.alpha_epoch = 0;
         factory.bump = ctx.bumps.factory;
         factory._reserved = [0u8; RESERVED_LEN];
 
@@ -231,8 +267,9 @@ pub mod p2id_router {
         Ok(())
     }
 
-    /// EVM registerImplementation: after the notice, vault owners may move to it.
-    pub fn register_implementation(ctx: Context<FactoryAdmin>) -> Result<()> {
+    /// EVM registerImplementation: after the notice, vault owners may move to it. The program must
+    /// be deployed and immutable by then: what owners opt into is code nobody can change.
+    pub fn register_implementation(ctx: Context<RegisterImplementation>) -> Result<()> {
         let factory = &mut ctx.accounts.factory;
         require!(factory.proposed_implementation_eta != 0, RouterError::NoImplementationProposed);
         require!(
@@ -240,6 +277,12 @@ pub mod p2id_router {
             RouterError::ImplementationChangeNotReady
         );
         let program = factory.proposed_implementation;
+        require_immutable(
+            &ctx.accounts.program,
+            &ctx.accounts.program_data,
+            &program,
+            RouterError::ImplementationNotImmutable,
+        )?;
         if !factory.implementations.contains(&program) {
             require!(
                 factory.implementations.len() < MAX_IMPLEMENTATIONS,
@@ -326,6 +369,12 @@ pub mod p2id_router {
             RouterError::VerifierChangeNotReady
         );
         let proposed = factory.proposed_verifier;
+        require_immutable(
+            &ctx.accounts.verifier_program,
+            &ctx.accounts.verifier_program_data,
+            &proposed,
+            RouterError::VerifierNotImmutable,
+        )?;
         ctx.accounts.verifier_config.allowed = true;
         factory.default_verifier = proposed;
         factory.proposed_verifier = Pubkey::default();
@@ -392,6 +441,7 @@ pub mod p2id_router {
     /// replaces any pending key proposal.
     pub fn propose_signer_key(ctx: Context<VerifierAdmin>, key: [u8; SIGNER_KEY_LEN]) -> Result<()> {
         require!(key.iter().any(|b| *b != 0), RouterError::InvalidSignerKey);
+        require!(is_on_p256(&key), RouterError::SignerKeyNotOnCurve);
         let config = &mut ctx.accounts.verifier_config;
         require!(!config.signer_keys.contains(&key), RouterError::SignerKeyAlreadyAccepted);
         require!(config.signer_keys.len() < MAX_SIGNER_KEYS, RouterError::TooManySignerKeys);
@@ -461,6 +511,32 @@ pub mod p2id_router {
         Ok(())
     }
 
+    /// Replace the alpha attester at once and bump the epoch, so approvals the old attester signed
+    /// stop working (EVM setDefaultAttester).
+    pub fn set_alpha_attester(ctx: Context<FactoryAdmin>, attester: Pubkey) -> Result<()> {
+        require!(attester != Pubkey::default(), RouterError::InvalidAlphaAttester);
+        let factory = &mut ctx.accounts.factory;
+        factory.alpha_attester = attester;
+        factory.alpha_epoch = factory.alpha_epoch.checked_add(1).ok_or(RouterError::InvalidAlphaAttester)?;
+        emit!(AlphaAttesterSet { factory: factory.key(), attester, epoch: factory.alpha_epoch });
+        Ok(())
+    }
+
+    /// Release a verifier from alpha, or put it back (EVM setAlpha). Every change bumps the epoch;
+    /// going back into alpha also bumps `key_set_revision`, so owners cached from proofs nobody
+    /// vetted while the verifier was released must prove again, now under the attester's eye.
+    pub fn set_alpha(ctx: Context<VerifierAdmin>, enabled: bool) -> Result<()> {
+        let config = &mut ctx.accounts.verifier_config;
+        let factory = &mut ctx.accounts.factory;
+        if enabled && !config.alpha {
+            config.key_set_revision = config.key_set_revision.checked_add(1).ok_or(RouterError::UnknownSignerKey)?;
+        }
+        config.alpha = enabled;
+        factory.alpha_epoch = factory.alpha_epoch.checked_add(1).ok_or(RouterError::InvalidAlphaAttester)?;
+        emit!(AlphaModeSet { factory: factory.key(), verifier: config.verifier, enabled, epoch: factory.alpha_epoch });
+        Ok(())
+    }
+
     // ------------------------------------------------------------------ vaults (direct)
 
     /// Create the vault PDA for `identity_hash` under `factory`; permissionless, the payer only funds
@@ -494,6 +570,15 @@ pub mod p2id_router {
         );
         let vault = &ctx.accounts.vault;
         require_current_cache(&ctx.accounts.verifier_config, vault, &ctx.accounts.owner.key(), vault.owner_verifier)?;
+        require_alpha_attestation(
+            &ctx.accounts.factory,
+            &ctx.accounts.verifier_config,
+            vault,
+            &ctx.accounts.owner.key(),
+            ALPHA_ACTION_SET_IMPLEMENTATION,
+            &implementation,
+            &ctx.accounts.instructions,
+        )?;
         let vault = &mut ctx.accounts.vault;
         vault.implementation = implementation;
         emit!(VaultImplementationChanged { vault: vault.key(), implementation });
@@ -517,20 +602,20 @@ pub mod p2id_router {
         Ok(())
     }
 
-    pub fn refund_token(ctx: Context<RefundToken>, id: u64) -> Result<()> {
+    pub fn refund_token<'info>(ctx: Context<'info, RefundToken<'info>>, id: u64) -> Result<()> {
         let now = Clock::get()?.unix_timestamp;
         let deposit = &mut ctx.accounts.deposit;
         require!(deposit.id == id, RouterError::WrongVault);
         validate_refund(deposit, &ctx.accounts.caller.key(), now)?;
         require!(deposit.mint == ctx.accounts.mint.key(), RouterError::WrongMint);
 
-        let seeds = vault_seeds(&ctx.accounts.vault);
-        transfer_from_vault(
+        vault_transfer(
             &ctx.accounts.token_program,
             &ctx.accounts.vault_token_account,
+            &ctx.accounts.mint,
             &ctx.accounts.caller_token_account,
             &ctx.accounts.vault,
-            &seeds,
+            ctx.remaining_accounts,
             deposit.amount,
         )?;
         deposit.consumed = true;
@@ -546,6 +631,15 @@ pub mod p2id_router {
         Ok(())
     }
 
+    /// Reclaim the rent of a consumed deposit record for the funder who paid it. Permissionless:
+    /// the lamports can only go to the funder, and a deposit id is never reused (EVM has no
+    /// counterpart; there a consumed deposit costs nothing to keep).
+    pub fn close_deposit(ctx: Context<CloseDeposit>, id: u64) -> Result<()> {
+        require!(ctx.accounts.deposit.id == id, RouterError::WrongVault);
+        require!(ctx.accounts.deposit.consumed, RouterError::DepositNotConsumed);
+        Ok(())
+    }
+
     /// Pay SOL that reached the vault outside any deposit record to the cached owner (EVM
     /// sweepUntracked). Anyone may submit it; requires a current owner cache under the default
     /// verifier; the current policy rate applies.
@@ -553,6 +647,15 @@ pub mod p2id_router {
         let factory = &ctx.accounts.factory;
         let vault = &ctx.accounts.vault;
         require_current_cache(&ctx.accounts.verifier_config, vault, &ctx.accounts.owner.key(), factory.default_verifier)?;
+        require_alpha_attestation(
+            factory,
+            &ctx.accounts.verifier_config,
+            vault,
+            &ctx.accounts.owner.key(),
+            ALPHA_ACTION_SWEEP_UNTRACKED,
+            &Pubkey::default(),
+            &ctx.accounts.instructions,
+        )?;
         let info = vault.to_account_info();
         let rent = Rent::get()?.minimum_balance(info.data_len());
         let reserved = rent.checked_add(vault.tracked_sol).ok_or(RouterError::InvalidAmount)?;
@@ -577,9 +680,18 @@ pub mod p2id_router {
     }
 
     /// Pay tokens that reached the vault's ATA outside any deposit record to the cached owner.
-    pub fn sweep_untracked_token(ctx: Context<SweepUntrackedToken>) -> Result<()> {
+    pub fn sweep_untracked_token<'info>(ctx: Context<'info, SweepUntrackedToken<'info>>) -> Result<()> {
         let factory = &ctx.accounts.factory;
         require_current_cache(&ctx.accounts.verifier_config, &ctx.accounts.vault, &ctx.accounts.owner.key(), factory.default_verifier)?;
+        require_alpha_attestation(
+            factory,
+            &ctx.accounts.verifier_config,
+            &ctx.accounts.vault,
+            &ctx.accounts.owner.key(),
+            ALPHA_ACTION_SWEEP_UNTRACKED,
+            &ctx.accounts.mint.key(),
+            &ctx.accounts.instructions,
+        )?;
         init_vault_mint(&mut ctx.accounts.vault_mint, ctx.accounts.vault.key(), ctx.accounts.mint.key(), ctx.bumps.vault_mint);
         let amount = ctx
             .accounts
@@ -590,22 +702,23 @@ pub mod p2id_router {
         let fee_bps = quote_fee(&ctx.accounts.policy_program, &ctx.accounts.policy, factory.default_verifier, ctx.accounts.mint.key())?;
         let fee = fee_for(amount, fee_bps);
         let net = amount.checked_sub(fee).ok_or(RouterError::InvalidAmount)?;
-        let seeds = vault_seeds(&ctx.accounts.vault);
-        transfer_from_vault(
+        let paid_fee = vault_transfer(
             &ctx.accounts.token_program,
             &ctx.accounts.vault_token_account,
-            &ctx.accounts.owner_token_account,
-            &ctx.accounts.vault,
-            &seeds,
-            net,
-        )?;
-        transfer_from_vault(
-            &ctx.accounts.token_program,
-            &ctx.accounts.vault_token_account,
+            &ctx.accounts.mint,
             &ctx.accounts.policy_token_account,
             &ctx.accounts.vault,
-            &seeds,
+            ctx.remaining_accounts,
             fee,
+        )?;
+        vault_transfer(
+            &ctx.accounts.token_program,
+            &ctx.accounts.vault_token_account,
+            &ctx.accounts.mint,
+            &ctx.accounts.owner_token_account,
+            &ctx.accounts.vault,
+            ctx.remaining_accounts,
+            net,
         )?;
         collect_fee_token(
             &ctx.accounts.policy_program,
@@ -616,10 +729,11 @@ pub mod p2id_router {
             &ctx.accounts.payer,
             &ctx.accounts.mint,
             &ctx.accounts.policy_token_account,
+            &ctx.accounts.token_program,
             &ctx.accounts.system_program,
             factory.default_verifier,
             ctx.accounts.owner.key(),
-            fee,
+            paid_fee,
         )?;
         emit!(UntrackedSwept {
             vault: ctx.accounts.vault.key(),
@@ -691,9 +805,11 @@ pub mod p2id_router {
         Ok(())
     }
 
-    /// Record an SPL-token deposit; same terms as create_deposit_sol.
-    pub fn create_deposit_token(
-        ctx: Context<CreateDepositToken>,
+    /// Record a token deposit (classic SPL Token or Token-2022); same terms as create_deposit_sol.
+    /// The recorded amount is what reached the vault's token account, which is less than `amount`
+    /// for a transfer-fee mint. A transfer hook's extra accounts come as remaining accounts.
+    pub fn create_deposit_token<'info>(
+        ctx: Context<'info, CreateDepositToken<'info>>,
         amount: u64,
         constraint: [u8; 32],
         refund_window: i64,
@@ -709,6 +825,18 @@ pub mod p2id_router {
             ctx.accounts.verifier_config.verifier,
             ctx.accounts.mint.key(),
         )?;
+        require!(amount > 0, RouterError::InvalidAmount);
+        let received = transfer_tokens(
+            &ctx.accounts.token_program.to_account_info(),
+            &ctx.accounts.funder_token_account.to_account_info(),
+            &ctx.accounts.mint.to_account_info(),
+            &ctx.accounts.vault_token_account.to_account_info(),
+            &ctx.accounts.funder.to_account_info(),
+            ctx.remaining_accounts,
+            amount,
+            ctx.accounts.mint.decimals,
+            &[],
+        )?;
         populate_deposit(
             &mut ctx.accounts.deposit,
             &ctx.accounts.vault,
@@ -719,7 +847,7 @@ pub mod p2id_router {
                 fee_bps,
                 funder: ctx.accounts.funder.key(),
                 mint: ctx.accounts.mint.key(),
-                amount,
+                amount: received,
                 constraint,
                 refund_window,
                 funded_at: now,
@@ -729,21 +857,9 @@ pub mod p2id_router {
             ctx.bumps.deposit,
         )?;
 
-        token::transfer(
-            CpiContext::new(
-                ctx.accounts.token_program.key(),
-                TokenTransfer {
-                    from: ctx.accounts.funder_token_account.to_account_info(),
-                    to: ctx.accounts.vault_token_account.to_account_info(),
-                    authority: ctx.accounts.funder.to_account_info(),
-                },
-            ),
-            amount,
-        )?;
-
         init_vault_mint(&mut ctx.accounts.vault_mint, ctx.accounts.vault.key(), ctx.accounts.mint.key(), ctx.bumps.vault_mint);
         let vault_mint = &mut ctx.accounts.vault_mint;
-        vault_mint.tracked = vault_mint.tracked.checked_add(amount).ok_or(RouterError::InvalidAmount)?;
+        vault_mint.tracked = vault_mint.tracked.checked_add(received).ok_or(RouterError::InvalidAmount)?;
 
         let vault = &mut ctx.accounts.vault;
         vault.deposit_seq = id.checked_add(1).ok_or(RouterError::InvalidAmount)?;
@@ -756,7 +872,16 @@ pub mod p2id_router {
     pub fn set_owner_cache(ctx: Context<SetOwnerCache>, update: OwnerUpdate) -> Result<()> {
         require_implementation(&ctx.accounts.vault, &ctx.accounts.impl_authority)?;
         require!(ctx.accounts.verifier_config.allowed, RouterError::VerifierNotAllowed);
-        apply_owner_update(&mut ctx.accounts.vault, update, &ctx.accounts.verifier_config)
+        apply_owner_update(&mut ctx.accounts.vault, update, &ctx.accounts.verifier_config)?;
+        require_alpha_attestation(
+            &ctx.accounts.factory,
+            &ctx.accounts.verifier_config,
+            &ctx.accounts.vault,
+            &update.owner,
+            ALPHA_ACTION_OWNER_UPDATE,
+            &Pubkey::default(),
+            &ctx.accounts.instructions,
+        )
     }
 
     /// Pay SOL deposit `id` to the vault's owner: after applying `owner_update` if the implementation
@@ -805,7 +930,7 @@ pub mod p2id_router {
 
     /// Pay SPL-token deposit `id` to the owner's associated token account (created if needed, rent
     /// paid by `payer`). Same authorization as settle_sol.
-    pub fn settle_token(ctx: Context<SettleToken>, id: u64, owner_update: Option<OwnerUpdate>) -> Result<()> {
+    pub fn settle_token<'info>(ctx: Context<'info, SettleToken<'info>>, id: u64, owner_update: Option<OwnerUpdate>) -> Result<()> {
         require_implementation(&ctx.accounts.vault, &ctx.accounts.impl_authority)?;
         require!(ctx.accounts.deposit.id == id, RouterError::WrongVault);
         require!(ctx.accounts.deposit.mint == ctx.accounts.mint.key(), RouterError::WrongMint);
@@ -822,22 +947,23 @@ pub mod p2id_router {
         let amount = ctx.accounts.deposit.amount;
         let fee = fee_for(amount, ctx.accounts.deposit.fee_bps);
         let net = amount.checked_sub(fee).ok_or(RouterError::InvalidAmount)?;
-        let seeds = vault_seeds(&ctx.accounts.vault);
-        transfer_from_vault(
+        let paid_fee = vault_transfer(
             &ctx.accounts.token_program,
             &ctx.accounts.vault_token_account,
-            &ctx.accounts.owner_token_account,
-            &ctx.accounts.vault,
-            &seeds,
-            net,
-        )?;
-        transfer_from_vault(
-            &ctx.accounts.token_program,
-            &ctx.accounts.vault_token_account,
+            &ctx.accounts.mint,
             &ctx.accounts.policy_token_account,
             &ctx.accounts.vault,
-            &seeds,
+            ctx.remaining_accounts,
             fee,
+        )?;
+        vault_transfer(
+            &ctx.accounts.token_program,
+            &ctx.accounts.vault_token_account,
+            &ctx.accounts.mint,
+            &ctx.accounts.owner_token_account,
+            &ctx.accounts.vault,
+            ctx.remaining_accounts,
+            net,
         )?;
         let verifier = ctx.accounts.deposit.verifier;
         collect_fee_token(
@@ -849,10 +975,11 @@ pub mod p2id_router {
             &ctx.accounts.payer,
             &ctx.accounts.mint,
             &ctx.accounts.policy_token_account,
+            &ctx.accounts.token_program,
             &ctx.accounts.system_program,
             verifier,
             ctx.accounts.owner.key(),
-            fee,
+            paid_fee,
         )?;
 
         let vault_mint = &mut ctx.accounts.vault_mint;
@@ -893,11 +1020,32 @@ fn require_implementation(vault: &Account<'_, Vault>, impl_authority: &Signer<'_
     Ok(())
 }
 
+/// `program` must be `expected`, deployed, and have no upgrade authority (`program_data` is its
+/// ProgramData account under the upgradeable loader). Implementations and verifiers decide who gets
+/// paid; the router only ever admits ones whose code is final, so the zero-custody claim is enforced
+/// here rather than by deployment discipline.
+fn require_immutable(
+    program: &AccountInfo<'_>,
+    program_data: &AccountInfo<'_>,
+    expected: &Pubkey,
+    not_immutable: RouterError,
+) -> Result<()> {
+    if program.key != expected {
+        return Err(not_immutable.into());
+    }
+    match program_status(program, Some(program_data)) {
+        ProgramStatus::Immutable => Ok(()),
+        ProgramStatus::WrongProgramData => Err(RouterError::WrongProgramData.into()),
+        ProgramStatus::Upgradeable | ProgramStatus::NotExecutable => Err(not_immutable.into()),
+    }
+}
+
 fn validate_signer_keys(signer_keys: &[[u8; SIGNER_KEY_LEN]]) -> Result<()> {
     require!(!signer_keys.is_empty(), RouterError::NoSignerKeys);
     require!(signer_keys.len() <= MAX_SIGNER_KEYS, RouterError::TooManySignerKeys);
     for (i, key) in signer_keys.iter().enumerate() {
         require!(key.iter().any(|b| *b != 0), RouterError::InvalidSignerKey);
+        require!(is_on_p256(key), RouterError::SignerKeyNotOnCurve);
         require!(!signer_keys[..i].contains(key), RouterError::SignerKeyAlreadyAccepted);
     }
     Ok(())
@@ -924,6 +1072,7 @@ fn init_verifier_config(
     config.proposed_signer_key = [0u8; SIGNER_KEY_LEN];
     config.proposed_signer_key_eta = 0;
     config.key_set_revision = 0;
+    config.alpha = true;
     config.constraint_signers = Vec::new();
     config.bump = bump;
     config._reserved = [0u8; 64];
@@ -1053,8 +1202,9 @@ fn collect_fee_token<'info>(
     factory: &Account<'info, Factory>,
     vault: &Account<'info, Vault>,
     payer: &Signer<'info>,
-    mint: &Account<'info, Mint>,
-    policy_token_account: &Account<'info, TokenAccount>,
+    mint: &InterfaceAccount<'info, Mint>,
+    policy_token_account: &InterfaceAccount<'info, TokenAccount>,
+    token_program: &Interface<'info, TokenInterface>,
     system_program: &Program<'info, System>,
     verifier: Pubkey,
     claimer: Pubkey,
@@ -1077,6 +1227,7 @@ fn collect_fee_token<'info>(
             payer: payer.to_account_info(),
             mint: mint.to_account_info(),
             policy_token_account: policy_token_account.to_account_info(),
+            token_program: token_program.to_account_info(),
             system_program: system_program.to_account_info(),
         },
         &signers,
@@ -1093,30 +1244,30 @@ fn vault_seeds(vault: &Account<'_, Vault>) -> [[u8; 32]; 2] {
     [vault.factory.to_bytes(), vault.identity_hash]
 }
 
-fn transfer_from_vault<'info>(
-    token_program: &Program<'info, Token>,
-    from: &Account<'info, TokenAccount>,
-    to: &Account<'info, TokenAccount>,
+/// Move tokens out of the vault's token account, signed as the vault. Either token program; a
+/// transfer hook's extra accounts come from `extra`. Returns what the destination actually gained.
+fn vault_transfer<'info>(
+    token_program: &Interface<'info, TokenInterface>,
+    from: &InterfaceAccount<'info, TokenAccount>,
+    mint: &InterfaceAccount<'info, Mint>,
+    to: &InterfaceAccount<'info, TokenAccount>,
     vault: &Account<'info, Vault>,
-    seeds: &[[u8; 32]; 2],
+    extra: &[AccountInfo<'info>],
     amount: u64,
-) -> Result<()> {
-    if amount == 0 {
-        return Ok(());
-    }
+) -> Result<u64> {
+    let seeds = vault_seeds(vault);
     let bump = [vault.bump];
     let signer: &[&[u8]] = &[VAULT_SEED, &seeds[0], &seeds[1], &bump];
-    token::transfer(
-        CpiContext::new_with_signer(
-            token_program.key(),
-            TokenTransfer {
-                from: from.to_account_info(),
-                to: to.to_account_info(),
-                authority: vault.to_account_info(),
-            },
-            &[signer],
-        ),
+    transfer_tokens(
+        &token_program.to_account_info(),
+        &from.to_account_info(),
+        &mint.to_account_info(),
+        &to.to_account_info(),
+        &vault.to_account_info(),
+        extra,
         amount,
+        mint.decimals,
+        &[signer],
     )
 }
 
@@ -1197,7 +1348,63 @@ fn authorize_settlement(
         apply_owner_update(vault, update, verifier_config)?;
     }
     require_current_cache(verifier_config, vault, destination, deposit.verifier)?;
-    check_constraint(factory, verifier_config, deposit, instructions)
+    check_constraint(factory, verifier_config, deposit, instructions)?;
+    require_alpha_attestation(factory, verifier_config, vault, destination, ALPHA_ACTION_SETTLE, &deposit.key(), instructions)
+}
+
+/// While the verifier is in alpha, a payout needs the factory's alpha attester to have approved this
+/// exact action: an earlier instruction of this transaction is the Ed25519 program verifying the
+/// attester's signature over ALPHA_PREFIX || deadline || sha256(factory || vault || verifier ||
+/// destination || iat || action || subject || epoch), with the deadline not yet passed. The owner's
+/// `iat` is read after any owner update was applied, so the approval names the proof it was given
+/// for. No nonce: a settlement is bound to its deposit, which settles once, and an owner update to
+/// an owner and iat a replay cannot change, so a reused approval has nothing left to do.
+fn require_alpha_attestation(
+    factory: &Account<'_, Factory>,
+    verifier_config: &Account<'_, VerifierConfig>,
+    vault: &Account<'_, Vault>,
+    destination: &Pubkey,
+    action: u8,
+    subject: &Pubkey,
+    instructions: &UncheckedAccount<'_>,
+) -> Result<()> {
+    if !verifier_config.alpha {
+        return Ok(());
+    }
+    let digest = sha256(&[
+        factory.key().as_ref(),
+        vault.key().as_ref(),
+        verifier_config.verifier.as_ref(),
+        destination.as_ref(),
+        &vault.latest_proof_iat.to_le_bytes(),
+        &[action],
+        subject.as_ref(),
+        &factory.alpha_epoch.to_le_bytes(),
+    ]);
+    let now = Clock::get()?.unix_timestamp;
+    let attester = [factory.alpha_attester];
+    let mut expired = false;
+    let found = ed25519_precedes(instructions, &attester, |message| {
+        if message.len() != ALPHA_MESSAGE_LEN
+            || &message[..ALPHA_PREFIX.len()] != ALPHA_PREFIX
+            || message[ALPHA_PREFIX.len() + 8..] != digest
+        {
+            return false;
+        }
+        let deadline = i64::from_le_bytes(message[ALPHA_PREFIX.len()..ALPHA_PREFIX.len() + 8].try_into().unwrap());
+        if now > deadline {
+            expired = true;
+            return false;
+        }
+        true
+    })?;
+    if found {
+        Ok(())
+    } else if expired {
+        err!(RouterError::AlphaAttestationExpired)
+    } else {
+        err!(RouterError::AlphaAttestationRequired)
+    }
 }
 
 /// A constrained deposit (EVM sweepBucket with a Constraint) is released only if an earlier
@@ -1219,6 +1426,20 @@ fn check_constraint(
     expected.extend_from_slice(factory.key().as_ref());
     expected.extend_from_slice(&deposit.constraint);
 
+    if ed25519_precedes(instructions, &verifier_config.constraint_signers, |message| message == expected)? {
+        return Ok(());
+    }
+    err!(RouterError::ConstraintNotSatisfied)
+}
+
+/// Whether an Ed25519 program instruction earlier in this transaction verified a signature by one
+/// of `signers` over a message `accept`s. The runtime has already checked every such signature by
+/// the time this instruction runs; this only confirms which key signed what.
+fn ed25519_precedes(
+    instructions: &UncheckedAccount<'_>,
+    signers: &[Pubkey],
+    mut accept: impl FnMut(&[u8]) -> bool,
+) -> Result<bool> {
     let info = instructions.to_account_info();
     let current = load_current_index_checked(&info)? as usize;
     for index in 0..current {
@@ -1226,17 +1447,17 @@ fn check_constraint(
         if ix.program_id.to_bytes() != ED25519_PROGRAM_ID.to_bytes() {
             continue;
         }
-        if ed25519_instruction_covers(&ix.data, index, &expected, &verifier_config.constraint_signers) {
-            return Ok(());
+        if ed25519_instruction_covers(&ix.data, index, signers, &mut accept) {
+            return Ok(true);
         }
     }
-    err!(RouterError::ConstraintNotSatisfied)
+    Ok(false)
 }
 
 /// Parse an Ed25519 program instruction (count, padding, then 14-byte offset records) and report
-/// whether one of its signatures is by an allowed signer over `expected`, with all three parts
-/// (signature, key, message) located in the instruction itself.
-fn ed25519_instruction_covers(data: &[u8], own_index: usize, expected: &[u8], signers: &[Pubkey]) -> bool {
+/// whether one of its signatures is by an allowed signer over a message `accept`s, with all three
+/// parts (signature, key, message) located in the instruction itself.
+fn ed25519_instruction_covers(data: &[u8], own_index: usize, signers: &[Pubkey], accept: &mut impl FnMut(&[u8]) -> bool) -> bool {
     if data.len() < 2 {
         return false;
     }
@@ -1263,7 +1484,7 @@ fn ed25519_instruction_covers(data: &[u8], own_index: usize, expected: &[u8], si
         ) else {
             continue;
         };
-        if message == expected && signers.iter().any(|s| s.as_ref() == key) {
+        if signers.iter().any(|s| s.as_ref() == key) && accept(message) {
             return true;
         }
     }
@@ -1294,6 +1515,14 @@ pub struct InitializeFactory<'info> {
     /// Pays the rent; any key. The factory is administered by the `authority` argument, not the payer.
     #[account(mut)]
     pub payer: Signer<'info>,
+    /// CHECK: the `default_verifier` program; must be immutable (checked in the handler).
+    pub default_verifier_program: UncheckedAccount<'info>,
+    /// CHECK: its ProgramData account (upgradeable loader); any account for other loaders.
+    pub default_verifier_program_data: UncheckedAccount<'info>,
+    /// CHECK: the `default_implementation` program; must be immutable (checked in the handler).
+    pub default_implementation_program: UncheckedAccount<'info>,
+    /// CHECK: its ProgramData account (upgradeable loader); any account for other loaders.
+    pub default_implementation_program_data: UncheckedAccount<'info>,
     pub system_program: Program<'info, System>,
 }
 
@@ -1310,10 +1539,28 @@ pub struct FactoryAdmin<'info> {
     pub clock: Sysvar<'info, Clock>,
 }
 
-/// Factory authority acting on one verifier's config (keys, constraint signers, revocation).
+#[derive(Accounts)]
+pub struct RegisterImplementation<'info> {
+    #[account(
+        mut,
+        seeds = [FACTORY_SEED, SCHEME_VERSION, factory.seed_authority.as_ref(), factory.params_hash.as_ref()],
+        bump = factory.bump,
+        has_one = authority @ RouterError::Unauthorized
+    )]
+    pub factory: Box<Account<'info, Factory>>,
+    pub authority: Signer<'info>,
+    pub clock: Sysvar<'info, Clock>,
+    /// CHECK: the proposed implementation program; must be immutable (checked in the handler).
+    pub program: UncheckedAccount<'info>,
+    /// CHECK: its ProgramData account (upgradeable loader); any account for other loaders.
+    pub program_data: UncheckedAccount<'info>,
+}
+
+/// Factory authority acting on one verifier's config (keys, constraint signers, revocation, alpha).
 #[derive(Accounts)]
 pub struct VerifierAdmin<'info> {
     #[account(
+        mut,
         seeds = [FACTORY_SEED, SCHEME_VERSION, factory.seed_authority.as_ref(), factory.params_hash.as_ref()],
         bump = factory.bump,
         has_one = authority @ RouterError::Unauthorized
@@ -1371,6 +1618,10 @@ pub struct ActivateVerifier<'info> {
     pub verifier_config: Box<Account<'info, VerifierConfig>>,
     pub authority: Signer<'info>,
     pub clock: Sysvar<'info, Clock>,
+    /// CHECK: the proposed verifier program; must be immutable (checked in the handler).
+    pub verifier_program: UncheckedAccount<'info>,
+    /// CHECK: its ProgramData account (upgradeable loader); any account for other loaders.
+    pub verifier_program_data: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]
@@ -1419,6 +1670,9 @@ pub struct SetVaultImplementation<'info> {
     pub verifier_config: Box<Account<'info, VerifierConfig>>,
     /// The cached owner.
     pub owner: Signer<'info>,
+    /// CHECK: the instructions sysvar, read for the alpha attester's instruction while the verifier is in alpha.
+    #[account(address = INSTRUCTIONS_SYSVAR_ID)]
+    pub instructions: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]
@@ -1500,21 +1754,19 @@ pub struct CreateDepositToken<'info> {
     pub funder: Signer<'info>,
     /// The implementation's authority PDA, signed through invoke_signed; checked against vault.implementation.
     pub impl_authority: Signer<'info>,
-    pub mint: Box<Account<'info, Mint>>,
-    #[account(
-        mut,
-        constraint = funder_token_account.owner == funder.key() @ RouterError::Unauthorized,
-        constraint = funder_token_account.mint == mint.key() @ RouterError::WrongMint
-    )]
-    pub funder_token_account: Box<Account<'info, TokenAccount>>,
+    #[account(mint::token_program = token_program)]
+    pub mint: Box<InterfaceAccount<'info, Mint>>,
+    #[account(mut, token::mint = mint, token::authority = funder, token::token_program = token_program)]
+    pub funder_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(
         init_if_needed,
         payer = funder,
         associated_token::mint = mint,
-        associated_token::authority = vault
+        associated_token::authority = vault,
+        associated_token::token_program = token_program
     )]
-    pub vault_token_account: Box<Account<'info, TokenAccount>>,
-    pub token_program: Program<'info, Token>,
+    pub vault_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
+    pub token_program: Interface<'info, TokenInterface>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
 }
@@ -1535,6 +1787,9 @@ pub struct SetOwnerCache<'info> {
         bump = verifier_config.bump
     )]
     pub verifier_config: Box<Account<'info, VerifierConfig>>,
+    /// CHECK: the instructions sysvar, read for the alpha attester's instruction while the verifier is in alpha.
+    #[account(address = INSTRUCTIONS_SYSVAR_ID)]
+    pub instructions: UncheckedAccount<'info>,
     /// The implementation's authority PDA, signed through invoke_signed; checked against vault.implementation.
     pub impl_authority: Signer<'info>,
 }
@@ -1612,16 +1867,18 @@ pub struct SettleToken<'info> {
     pub payer: Signer<'info>,
     /// CHECK: the destination wallet: the owner after `owner_update`, else the cached owner. Not a signer.
     pub owner: UncheckedAccount<'info>,
-    pub mint: Box<Account<'info, Mint>>,
-    #[account(mut, associated_token::mint = mint, associated_token::authority = vault)]
-    pub vault_token_account: Box<Account<'info, TokenAccount>>,
+    #[account(mint::token_program = token_program)]
+    pub mint: Box<InterfaceAccount<'info, Mint>>,
+    #[account(mut, associated_token::mint = mint, associated_token::authority = vault, associated_token::token_program = token_program)]
+    pub vault_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(
         init_if_needed,
         payer = payer,
         associated_token::mint = mint,
-        associated_token::authority = owner
+        associated_token::authority = owner,
+        associated_token::token_program = token_program
     )]
-    pub owner_token_account: Box<Account<'info, TokenAccount>>,
+    pub owner_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
     /// CHECK: validated against `factory.policy`; authority of the fee token account.
     #[account(mut, constraint = policy.key() == factory.policy @ RouterError::Unauthorized)]
     pub policy: UncheckedAccount<'info>,
@@ -1635,15 +1892,16 @@ pub struct SettleToken<'info> {
         init_if_needed,
         payer = payer,
         associated_token::mint = mint,
-        associated_token::authority = policy
+        associated_token::authority = policy,
+        associated_token::token_program = token_program
     )]
-    pub policy_token_account: Box<Account<'info, TokenAccount>>,
+    pub policy_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
     /// CHECK: the instructions sysvar, read to find the constraint signer's Ed25519 instruction.
     #[account(address = INSTRUCTIONS_SYSVAR_ID)]
     pub instructions: UncheckedAccount<'info>,
     /// The implementation's authority PDA, signed through invoke_signed; checked against vault.implementation.
     pub impl_authority: Signer<'info>,
-    pub token_program: Program<'info, Token>,
+    pub token_program: Interface<'info, TokenInterface>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
 }
@@ -1696,12 +1954,34 @@ pub struct RefundToken<'info> {
     pub vault_mint: Box<Account<'info, VaultMint>>,
     #[account(mut)]
     pub caller: Signer<'info>,
-    pub mint: Box<Account<'info, Mint>>,
-    #[account(mut, associated_token::mint = mint, associated_token::authority = vault)]
-    pub vault_token_account: Box<Account<'info, TokenAccount>>,
-    #[account(mut, associated_token::mint = mint, associated_token::authority = caller)]
-    pub caller_token_account: Box<Account<'info, TokenAccount>>,
-    pub token_program: Program<'info, Token>,
+    #[account(mint::token_program = token_program)]
+    pub mint: Box<InterfaceAccount<'info, Mint>>,
+    #[account(mut, associated_token::mint = mint, associated_token::authority = vault, associated_token::token_program = token_program)]
+    pub vault_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
+    #[account(mut, associated_token::mint = mint, associated_token::authority = caller, associated_token::token_program = token_program)]
+    pub caller_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
+    pub token_program: Interface<'info, TokenInterface>,
+}
+
+#[derive(Accounts)]
+#[instruction(id: u64)]
+pub struct CloseDeposit<'info> {
+    #[account(
+        seeds = [VAULT_SEED, vault.factory.as_ref(), vault.identity_hash.as_ref()],
+        bump = vault.bump
+    )]
+    pub vault: Box<Account<'info, Vault>>,
+    #[account(
+        mut,
+        seeds = [DEPOSIT_SEED, vault.key().as_ref(), &id.to_le_bytes()],
+        bump = deposit.bump,
+        constraint = deposit.vault == vault.key() @ RouterError::WrongVault,
+        close = funder
+    )]
+    pub deposit: Box<Account<'info, Deposit>>,
+    /// CHECK: the funder recorded on the deposit, who paid its rent and gets it back.
+    #[account(mut, address = deposit.funder @ RouterError::Unauthorized)]
+    pub funder: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]
@@ -1728,6 +2008,9 @@ pub struct SweepUntrackedSol<'info> {
     /// CHECK: the program owning the policy account; quotes and books fees.
     #[account(executable, constraint = policy_program.key() == *policy.owner @ RouterError::InvalidPolicy)]
     pub policy_program: UncheckedAccount<'info>,
+    /// CHECK: the instructions sysvar, read for the alpha attester's instruction while the verifier is in alpha.
+    #[account(address = INSTRUCTIONS_SYSVAR_ID)]
+    pub instructions: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]
@@ -1756,16 +2039,18 @@ pub struct SweepUntrackedToken<'info> {
     pub payer: Signer<'info>,
     /// CHECK: must be the cached owner.
     pub owner: UncheckedAccount<'info>,
-    pub mint: Box<Account<'info, Mint>>,
-    #[account(mut, associated_token::mint = mint, associated_token::authority = vault)]
-    pub vault_token_account: Box<Account<'info, TokenAccount>>,
+    #[account(mint::token_program = token_program)]
+    pub mint: Box<InterfaceAccount<'info, Mint>>,
+    #[account(mut, associated_token::mint = mint, associated_token::authority = vault, associated_token::token_program = token_program)]
+    pub vault_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(
         init_if_needed,
         payer = payer,
         associated_token::mint = mint,
-        associated_token::authority = owner
+        associated_token::authority = owner,
+        associated_token::token_program = token_program
     )]
-    pub owner_token_account: Box<Account<'info, TokenAccount>>,
+    pub owner_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
     /// CHECK: validated against `factory.policy`; authority of the fee token account.
     #[account(mut, constraint = policy.key() == factory.policy @ RouterError::Unauthorized)]
     pub policy: UncheckedAccount<'info>,
@@ -1779,10 +2064,14 @@ pub struct SweepUntrackedToken<'info> {
         init_if_needed,
         payer = payer,
         associated_token::mint = mint,
-        associated_token::authority = policy
+        associated_token::authority = policy,
+        associated_token::token_program = token_program
     )]
-    pub policy_token_account: Box<Account<'info, TokenAccount>>,
-    pub token_program: Program<'info, Token>,
+    pub policy_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
+    pub token_program: Interface<'info, TokenInterface>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
+    /// CHECK: the instructions sysvar, read for the alpha attester's instruction while the verifier is in alpha.
+    #[account(address = INSTRUCTIONS_SYSVAR_ID)]
+    pub instructions: UncheckedAccount<'info>,
 }

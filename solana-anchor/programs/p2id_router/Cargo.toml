@@ -18,7 +18,10 @@ idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
 
 [dependencies]
 anchor-lang = { version = "=1.1.2", features = ["init-if-needed"] }
-anchor-spl = { version = "=1.1.2", features = ["token", "associated_token"] }
+anchor-spl = { version = "=1.1.2", features = ["token", "token_2022", "token_2022_extensions", "associated_token"] }
 sha2 = "0.10"
 solana-instructions-sysvar = "3.0.1"
+p256 = { version = "0.13", default-features = false, features = ["arithmetic"] }
+
 p2id_policy = { path = "../p2id_policy", features = ["cpi"] }
+p2id_verifier_interface = { path = "../../crates/p2id_verifier_interface" }

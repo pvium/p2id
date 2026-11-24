@@ -30,10 +30,10 @@ if (!["localhost", "127.0.0.1", "[::1]"].includes(new URL(rpcUrl).hostname)) {
 }
 const connection = new Connection(rpcUrl, "confirmed");
 
-// Configure these to the deployed Anchor wrapper and Sunspot verifier addresses.
+// Configure these to the deployed P2ID verifier program and the Sunspot verifier it fronts.
 if (!process.env.P2ID_ANCHOR_PROGRAM_ID) {
   throw new Error(
-    "set P2ID_ANCHOR_PROGRAM_ID to the deployed Anchor wrapper address",
+    "set P2ID_ANCHOR_PROGRAM_ID to the deployed P2ID verifier program address",
   );
 }
 const anchorProgramId = new PublicKey(process.env.P2ID_ANCHOR_PROGRAM_ID);
@@ -45,6 +45,17 @@ if (!process.env.SUNSPOT_VERIFIER_PROGRAM_ID) {
 const verifierProgramId = new PublicKey(
   process.env.SUNSPOT_VERIFIER_PROGRAM_ID,
 );
+// The Sunspot program's ProgramData account (upgradeable loader); the verifier checks it has no
+// upgrade authority before trusting the program.
+const BPF_LOADER_UPGRADEABLE = new PublicKey(
+  "BPFLoaderUpgradeab1e11111111111111111111111",
+);
+const verifierProgramData = PublicKey.findProgramAddressSync(
+  [verifierProgramId.toBytes()],
+  BPF_LOADER_UPGRADEABLE,
+)[0];
+// Borsh layout of the attestation the verifier returns.
+const ATTESTATION_LEN = 64 + 32 + 32 + 8;
 
 async function runTest() {
   const payer = await unresolvedPayer;
@@ -91,25 +102,26 @@ async function runTest() {
     length.writeUInt32LE(bytes.length);
     return Buffer.concat([length, bytes]);
   };
-  const proofArg = vec(proof);
-  const publicWitnessArg = vec(publicWitness);
+  // The verifier interface: verify(proof) where, for the Sunspot-backed verifier, `proof` is the
+  // Groth16 proof followed by the public witness, exactly the bytes the Sunspot program takes.
   const discriminator = createHash("sha256")
     .update("global:verify")
     .digest()
     .subarray(0, 8);
   const anchorInstructionData = Buffer.concat([
     discriminator,
-    Buffer.from(verifierProgramId.toBytes()),
-    proofArg,
-    publicWitnessArg,
+    vec(Buffer.concat([proof, publicWitness])),
   ]);
 
   console.log(
-    `Invoking Anchor verifier wrapper with ${proof.length + publicWitness.length} proof bytes...`,
+    `Invoking the P2ID verifier with ${proof.length + publicWitness.length} proof bytes...`,
   );
 
   const verifyInstruction = new TransactionInstruction({
-    keys: [{ pubkey: verifierProgramId, isSigner: false, isWritable: false }],
+    keys: [
+      { pubkey: verifierProgramId, isSigner: false, isWritable: false },
+      { pubkey: verifierProgramData, isSigner: false, isWritable: false },
+    ],
     programId: anchorProgramId,
     data: anchorInstructionData,
   });
@@ -136,18 +148,24 @@ async function runTest() {
     if (
       confirmed?.meta?.err ||
       returnData?.programId !== anchorProgramId.toBase58() ||
-      returnBytes.length !== 1 ||
-      returnBytes[0] !== 1
+      returnBytes.length !== ATTESTATION_LEN
     ) {
-      throw new Error("Anchor verifier did not return the success value [1]");
+      throw new Error("The verifier did not return an attestation");
     }
+    const attestation = {
+      signerKey: returnBytes.subarray(0, 64).toString("hex"),
+      identityHash: returnBytes.subarray(64, 96).toString("hex"),
+      walletHash: returnBytes.subarray(96, 128).toString("hex"),
+      iat: Number(returnBytes.readBigInt64LE(128)),
+    };
     console.log(
-      `\n✅ SUCCESS! Anchor returned true after the Sunspot verifier accepted the proof.`,
+      `\n✅ SUCCESS! The Sunspot verifier accepted the proof; attestation:`,
     );
+    console.log(attestation);
     console.log(`Transaction Signature: ${signature}`);
   } catch (error) {
     console.error("\n❌ TRANSACTION FAILED!");
-    console.error("The Anchor wrapper call or Sunspot verifier CPI failed.");
+    console.error("The P2ID verifier call or its Sunspot verifier CPI failed.");
     console.error(error);
     process.exitCode = 1;
   }

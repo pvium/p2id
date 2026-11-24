@@ -10,8 +10,10 @@ skip-lint = false
 [programs.localnet]
 p2id_policy = "32CHoykPA8eVDvuY84uc8yvJCgkjj6kwsJqweX76G7oJ"
 p2id_router = "4Xy1ad1x63e6o3dMgrEE2JvKtem2jQvqSV4tRaHmvuc3"
-p2id_vault = "DaQSQnyAHJLRMdN8m5ENm1Zr9dQKCeRBG8QoxMjEvVzf"
-test_verifier = "SgPm1N4qiMD7XfSQxrzZ1Yj9LQ4xWn44HAwhehfMFCJ"
+p2id_solana_verifier = "9WgYShJxUEFQmjird4GKbauXtq32uXbrRD8EdTcjoBxj"
+p2id_vault = "A48yVmhHBvP2Hf3zc2p9XGzV9CtVStFmq8DRuwWgGp53"
+test_hook = "ETVm4N6WjGkF8NVT8NYJvY54zKqaNuR1EPupuYrJvSV9"
+test_verifier = "CBpmjvYYEQnMkp6HeQxG5GdJXDXkZHmqb6MRFZEQpnsg"
 
 [provider]
 cluster = "localnet"
@@ -19,5 +21,11 @@ wallet = "~/.config/solana/id.json"
 
 [scripts]
 test = "yarn run test"
+
+# Load the programs with the provider wallet as upgrade authority (a genesis-loaded program has an
+# unusable authority nobody can burn); the suite then finalizes the ones the factory references, as a
+# real deployment must before `initialize_factory` / `register_implementation` / `activate_verifier`.
+[test]
+upgradeable = true
 
 [hooks]

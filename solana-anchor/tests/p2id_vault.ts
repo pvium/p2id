@@ -1,8 +1,11 @@
 import * as fs from "fs";
-import { createHash } from "crypto";
+import { createHash, generateKeyPairSync } from "crypto";
 import { expect } from "chai";
 import { AnchorProvider, BN, Idl, Program } from "@coral-xyz/anchor";
 import {
+  AccountMeta,
+  AddressLookupTableProgram,
+  ComputeBudgetProgram,
   Ed25519Program,
   Keypair,
   PublicKey,
@@ -10,16 +13,30 @@ import {
   SYSVAR_CLOCK_PUBKEY,
   SYSVAR_INSTRUCTIONS_PUBKEY,
   Transaction,
+  TransactionInstruction,
+  TransactionMessage,
+  VersionedTransaction,
 } from "@solana/web3.js";
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
+  ExtensionType,
+  TOKEN_2022_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
+  addExtraAccountMetasForExecute,
+  calculateFee,
+  createInitializeMintInstruction,
+  createInitializeTransferFeeConfigInstruction,
+  createInitializeTransferHookInstruction,
   createMint,
+  createTransferCheckedWithTransferHookInstruction,
   getAccount,
   getAssociatedTokenAddressSync,
+  getExtraAccountMetaAddress,
+  getMint,
+  getMintLen,
   getOrCreateAssociatedTokenAccount,
+  getTransferFeeConfig,
   mintTo,
-  transfer as splTransfer,
 } from "@solana/spl-token";
 
 // Router seeds (programs/p2id_router/src/state.rs) and policy seeds (programs/p2id_policy/src/lib.rs).
@@ -38,6 +55,10 @@ const SCHEME = Buffer.from("pvium.vault.v1");
 const IDENTITY_PREFIX = Buffer.from("p2id.identity.v1");
 const FACTORY_PARAMS_PREFIX = Buffer.from("p2id.factory.params.v1");
 const CONSTRAINT_PREFIX = Buffer.from("p2id.constraint.sol.v1");
+const ALPHA_PREFIX = Buffer.from("p2id.alpha.sol.v1");
+const ALPHA_ACTION = { ownerUpdate: 1, settle: 2, sweepUntracked: 3, setImplementation: 4 };
+// The backend's alpha attester (ed25519); deterministic so the factory address is stable across runs.
+const ATTESTER = Keypair.fromSeed(createHash("sha256").update("p2id test alpha attester").digest());
 const WALLET_TYPE = 12;
 const ZERO = new Uint8Array(32);
 const NONE = Buffer.alloc(0);
@@ -46,13 +67,21 @@ const PRIVY_KEY = Buffer.concat([
   Buffer.from("lbnZ0Y--2fXDuKq0ZicXk1Ob4svIanCQ3ZL032AIUN4", "base64url"),
   Buffer.from("Os_zTTMZ1EoDr92BhHTTVR4rN-4v8CnOrB7nSSTuuBM", "base64url"),
 ]);
-const OTHER_KEY = Buffer.alloc(64, 9);
+const OTHER_KEY = Buffer.alloc(64, 9); // not a P-256 point: only ever appears inside a witness
+// A second genuine P-256 key (x || y), as a rotated Privy key would be.
+const SECOND_KEY = (() => {
+  const jwk = generateKeyPairSync("ec", { namedCurve: "P-256" }).publicKey.export({ format: "jwk" }) as { x: string; y: string };
+  return Buffer.concat([Buffer.from(jwk.x, "base64url"), Buffer.from(jwk.y, "base64url")]);
+})();
+// A realistic Sunspot proof size; the test verifier accepts anything.
+const REAL_SIZE_PROOF = Buffer.alloc(388, 3);
 
 type FactoryParams = {
   signerKeys: Buffer[];
   defaultVerifier: PublicKey;
   policy: PublicKey;
   defaultImplementation: PublicKey;
+  alphaAttester: PublicKey;
   circuitVersion: number;
   vkHash: Uint8Array;
   minRefundWindow: number;
@@ -71,6 +100,7 @@ function factoryParamsHash(p: FactoryParams): Buffer {
       p.defaultVerifier.toBuffer(),
       p.policy.toBuffer(),
       p.defaultImplementation.toBuffer(),
+      p.alphaAttester.toBuffer(),
       u16(p.circuitVersion),
       Buffer.from(p.vkHash),
       i64(p.minRefundWindow),
@@ -124,7 +154,12 @@ function witness(identityHash: Uint8Array, wallet: PublicKey, iat: number, signe
   return Buffer.concat([count, wideCount, ...values]);
 }
 
-const PROOF = Buffer.alloc(64, 7); // the test verifier accepts anything; the implementation checks the witness
+const PROOF = Buffer.alloc(64, 7); // the test ZK backend accepts anything; the verifier program checks the witness
+const BPF_LOADER_UPGRADEABLE = new PublicKey("BPFLoaderUpgradeab1e11111111111111111111111");
+const programDataAddress = (program: PublicKey) => pda([program.toBuffer()], BPF_LOADER_UPGRADEABLE);
+const readonly = (pubkey: PublicKey): AccountMeta => ({ pubkey, isSigner: false, isWritable: false });
+/// The program accounts the router inspects when it admits a verifier or implementation.
+const programPair = (program: PublicKey) => [program, programDataAddress(program)];
 
 describe("p2id router + vault implementation", () => {
   const provider = AnchorProvider.env();
@@ -133,10 +168,28 @@ describe("p2id router + vault implementation", () => {
   const router: any = new Program(loadIdl("p2id_router"), provider);
   const impl: any = new Program(loadIdl("p2id_vault"), provider);
   const policyProgram: any = new Program(loadIdl("p2id_policy"), provider);
-  const verifierId = Keypair.fromSecretKey(
+  // The verifier the factory allows is the P2ID verifier program; the Sunspot-shaped ZK backend it
+  // fronts is the test verifier, which accepts every proof. Both are the verifier's accounts.
+  const verifier: any = new Program(loadIdl("p2id_solana_verifier"), provider);
+  const verifierId: PublicKey = verifier.programId;
+  const zkVerifierId = Keypair.fromSecretKey(
     Uint8Array.from(JSON.parse(fs.readFileSync("target/deploy/test_verifier-keypair.json", "utf8")))
   ).publicKey;
+  const verifierAccounts = programPair(zkVerifierId).map(readonly);
   const payer = (provider.wallet as any).payer as Keypair;
+  // The router admits only immutable programs; anchor deploys upgradeable ones, so burn the upgrade
+  // authority (solana program set-upgrade-authority --final) of what the factory will reference.
+  const finalize = async (program: PublicKey) => {
+    const programData = programDataAddress(program);
+    const info = await provider.connection.getAccountInfo(programData);
+    if (info!.data[12] === 0) return; // already immutable
+    const ix = new TransactionInstruction({
+      programId: BPF_LOADER_UPGRADEABLE,
+      keys: [{ pubkey: programData, isSigner: false, isWritable: true }, { pubkey: payer.publicKey, isSigner: true, isWritable: false }],
+      data: Buffer.from([4, 0, 0, 0]), // SetAuthority with no new authority
+    });
+    await provider.sendAndConfirm(new Transaction().add(ix));
+  };
   const implAuthority = pda([IMPL_AUTHORITY_SEED], impl.programId);
   // The fee policy is a PolicyConfig of the policy program: (authority, router program, rate) are its seeds.
   const u16be = (n: number) => { const b = Buffer.alloc(2); b.writeUInt16BE(n); return b; };
@@ -151,6 +204,7 @@ describe("p2id router + vault implementation", () => {
     defaultVerifier: verifierId,
     policy,
     defaultImplementation: impl.programId,
+    alphaAttester: ATTESTER.publicKey,
     circuitVersion: 2,
     vkHash: ZERO,
     minRefundWindow: 1,
@@ -168,11 +222,18 @@ describe("p2id router + vault implementation", () => {
     p.defaultVerifier,
     p.policy,
     p.defaultImplementation,
+    p.alphaAttester,
     p.circuitVersion,
     Array.from(p.vkHash),
     new BN(p.minRefundWindow),
     new BN(p.maxRefundWindow),
   ];
+  const initAccounts = (f: PublicKey, config: PublicKey, payer: PublicKey, verifierProgram = verifierId, implementation: PublicKey = impl.programId) => ({
+    factory: f, verifierConfig: config, payer,
+    defaultVerifierProgram: verifierProgram, defaultVerifierProgramData: programDataAddress(verifierProgram),
+    defaultImplementationProgram: implementation, defaultImplementationProgramData: programDataAddress(implementation),
+    systemProgram: SystemProgram.programId,
+  });
   const admin = { factory, authority, clock: SYSVAR_CLOCK_PUBKEY };
   const verifierAdmin = { factory, verifierConfig, authority, clock: SYSVAR_CLOCK_PUBKEY };
   const configAccount = () => router.account.verifierConfig.fetch(verifierConfig);
@@ -206,13 +267,39 @@ describe("p2id router + vault implementation", () => {
     factory, verifierConfig, vault, deposit: depositPda(id), owner, verifierProgram: verifierId, policy, policyProgram: policyProgram.programId,
     instructions: SYSVAR_INSTRUCTIONS_PUBKEY, implAuthority, routerProgram: router.programId,
   });
-  const claimSol = (id: number, owner: PublicKey, proof: Buffer, pw: Buffer, pre: any[] = []) =>
-    impl.methods.claimSol(new BN(id), proof, pw).accounts(claimSolAccounts(id, owner)).preInstructions(pre).rpc();
-  const refreshProof = (owner: PublicKey, pw: Buffer) =>
+  // The implementation takes the proof as one opaque blob (for the Sunspot verifier: proof || witness)
+  // and passes the verifier's own accounts through as remaining accounts.
+  const claimSol = (id: number, owner: PublicKey, proof: Buffer, pw: Buffer, pre: any[] = []) => {
+    const payload = Buffer.concat([proof, pw]);
+    return impl.methods.claimSol(new BN(id), payload).accounts(claimSolAccounts(id, owner))
+      .remainingAccounts(payload.length ? verifierAccounts : []).preInstructions(pre).rpc();
+  };
+  const refreshProof = (owner: PublicKey, pw: Buffer, pre: any[] = []) =>
     impl.methods
-      .refreshProof(PROOF, pw)
-      .accounts({ factory, vault, verifierConfig, owner, verifierProgram: verifierId, implAuthority, routerProgram: router.programId })
+      .refreshProof(Buffer.concat([PROOF, pw]))
+      .accounts({ factory, vault, verifierConfig, owner, verifierProgram: verifierId, instructions: SYSVAR_INSTRUCTIONS_PUBKEY, implAuthority, routerProgram: router.programId })
+      .remainingAccounts(verifierAccounts)
+      .preInstructions(pre)
       .rpc();
+  const sweepSol = (owner: PublicKey, pre: any[] = []) =>
+    router.methods.sweepUntrackedSol()
+      .accounts({ factory, verifierConfig, vault, owner, policy, policyProgram: policyProgram.programId, instructions: SYSVAR_INSTRUCTIONS_PUBKEY })
+      .preInstructions(pre).rpc();
+  const moveVault = (to: PublicKey, signer: Keypair, pre: any[] = []) =>
+    router.methods.setVaultImplementation(to)
+      .accounts({ factory, vault, verifierConfig, owner: signer.publicKey, instructions: SYSVAR_INSTRUCTIONS_PUBKEY })
+      .signers([signer]).preInstructions(pre).rpc();
+  const ed25519 = (kp: Keypair, message: Buffer) => Ed25519Program.createInstructionWithPrivateKey({ privateKey: kp.secretKey, message });
+  // What the backend signs to approve one payout while the verifier is in alpha (router require_alpha_attestation).
+  const alphaMessage = (p: { destination: PublicKey; iat: number; action: number; subject?: PublicKey; epoch: number; deadline: number; verifier?: PublicKey }) => {
+    const i64 = (n: number) => { const b = Buffer.alloc(8); b.writeBigInt64LE(BigInt(n)); return b; };
+    const digest = createHash("sha256").update(Buffer.concat([
+      factory.toBuffer(), vault.toBuffer(), (p.verifier ?? verifierId).toBuffer(), p.destination.toBuffer(), i64(p.iat),
+      Buffer.from([p.action]), (p.subject ?? PublicKey.default).toBuffer(), i64(p.epoch),
+    ])).digest();
+    return Buffer.concat([ALPHA_PREFIX, i64(p.deadline), digest]);
+  };
+  const alphaAttest = (p: Parameters<typeof alphaMessage>[0], kp: Keypair = ATTESTER) => ed25519(kp, alphaMessage(p));
   // Refunds never pass through an implementation: the refunder calls the router.
   const refundSol = (id: number, caller: Keypair) =>
     router.methods
@@ -241,6 +328,7 @@ describe("p2id router + vault implementation", () => {
   const otherVerifier = Keypair.generate().publicKey; // proposed but never activated
 
   before(async () => {
+    for (const program of [impl.programId, verifierId, zkVerifierId]) await finalize(program);
     if (!(await provider.connection.getAccountInfo(policy))) {
       await policyProgram.methods
         .initializePolicy(authority, router.programId, FEE_BPS)
@@ -250,12 +338,17 @@ describe("p2id router + vault implementation", () => {
     if (!(await provider.connection.getAccountInfo(factory))) {
       await router.methods
         .initializeFactory(...initArgs(params, paramsHash, authority))
-        .accounts({ factory, verifierConfig, payer: authority, systemProgram: SystemProgram.programId })
+        .accounts(initAccounts(factory, verifierConfig, authority))
         .rpc();
     }
     // PviumP2IDPolicy.setFactory: the policy refuses fees until bound to its factory.
     if ((await policyAccount()).factory.equals(PublicKey.default)) {
       await policyProgram.methods.setFactory().accounts({ policy, authority, factory }).rpc();
+    }
+    // Every verifier starts in alpha (payouts need the attester's approval); most tests exercise the
+    // released verifier, and the alpha test puts it back and releases it again.
+    if ((await configAccount()).alpha) {
+      await router.methods.setAlpha(false).accounts(verifierAdmin).rpc();
     }
   });
 
@@ -290,12 +383,12 @@ describe("p2id router + vault implementation", () => {
     expect(config.signerKeys.length).to.equal(1);
 
     // Our existing factory cannot be re-created with other terms, whoever pays.
-    const theirParams = { ...params, policy: stranger.publicKey, defaultImplementation: stranger.publicKey, circuitVersion: 9 };
+    const theirParams = { ...params, policy: stranger.publicKey, circuitVersion: 9 };
     let failed = false;
     try {
       await router.methods
         .initializeFactory(...initArgs(theirParams, paramsHash, authority))
-        .accounts({ factory, verifierConfig, payer: stranger.publicKey, systemProgram: SystemProgram.programId })
+        .accounts(initAccounts(factory, verifierConfig, stranger.publicKey))
         .signers([stranger])
         .rpc();
     } catch {
@@ -308,7 +401,7 @@ describe("p2id router + vault implementation", () => {
     await expectFailure(
       router.methods
         .initializeFactory(...initArgs(theirParams, bogusHash, authority))
-        .accounts({ factory: factoryPda(authority, bogusHash), verifierConfig: verifierConfigPda(factoryPda(authority, bogusHash), verifierId), payer: stranger.publicKey, systemProgram: SystemProgram.programId })
+        .accounts(initAccounts(factoryPda(authority, bogusHash), verifierConfigPda(factoryPda(authority, bogusHash), verifierId), stranger.publicKey))
         .signers([stranger])
         .rpc(),
       "params_hash does not commit"
@@ -320,7 +413,7 @@ describe("p2id router + vault implementation", () => {
     expect(squat.equals(factory)).to.equal(false);
     await router.methods
       .initializeFactory(...initArgs(theirParams, theirHash, authority))
-      .accounts({ factory: squat, verifierConfig: verifierConfigPda(squat, verifierId), payer: stranger.publicKey, systemProgram: SystemProgram.programId })
+      .accounts(initAccounts(squat, verifierConfigPda(squat, verifierId), stranger.publicKey))
       .signers([stranger])
       .rpc();
     expect((await factoryAccount()).policy.equals(policy)).to.equal(true);
@@ -378,7 +471,9 @@ describe("p2id router + vault implementation", () => {
     expect((await factoryAccount()).proposedVerifier.equals(other)).to.equal(true);
 
     await expectFailure(
-      router.methods.activateVerifier().accounts({ factory, verifierConfig: otherConfig, authority, clock: SYSVAR_CLOCK_PUBKEY }).rpc(),
+      router.methods.activateVerifier()
+        .accounts({ factory, verifierConfig: otherConfig, authority, clock: SYSVAR_CLOCK_PUBKEY, verifierProgram: other, verifierProgramData: programDataAddress(other) })
+        .rpc(),
       "Verifier change notice has not elapsed"
     );
     await router.methods.cancelVerifierProposal().accounts(admin).rpc();
@@ -412,7 +507,10 @@ describe("p2id router + vault implementation", () => {
     let state = await factoryAccount();
     expect(state.proposedImplementation.equals(candidate)).to.equal(true);
     expect(state.proposedImplementationMakeDefault).to.equal(true);
-    await expectFailure(router.methods.registerImplementation().accounts(admin).rpc(), "Implementation notice has not elapsed");
+    await expectFailure(
+      router.methods.registerImplementation().accounts({ ...admin, program: candidate, programData: programDataAddress(candidate) }).rpc(),
+      "Implementation notice has not elapsed"
+    );
     // Only registered implementations can become the default, with or without notice.
     await expectFailure(router.methods.setDefaultImplementation(candidate).accounts(admin).rpc(), "not registered");
     await router.methods.cancelImplementationProposal().accounts(admin).rpc();
@@ -423,10 +521,83 @@ describe("p2id router + vault implementation", () => {
     await router.methods.setDefaultImplementation(impl.programId).accounts(admin).rpc();
   });
 
-  it("enforces the signer key notice", async () => {
-    await router.methods.proposeSignerKey(Array.from(OTHER_KEY)).accounts(verifierAdmin).rpc();
+  it("admits only immutable programs as implementation and verifier", async () => {
+    // test_hook is deployed upgradeable (anchor's default) and stands in for a program whose author
+    // could still change it. The squat factory address keeps these attempts away from the real one.
+    const upgradeable: PublicKey = hook.programId;
+    const stranger = Keypair.generate();
+    await airdrop(provider, stranger.publicKey, 2_000_000_000);
+    const attempt = (p: FactoryParams, verifierProgram = p.defaultVerifier, implementation = p.defaultImplementation) => {
+      const hash = factoryParamsHash(p);
+      const f = factoryPda(authority, hash);
+      return router.methods
+        .initializeFactory(...initArgs(p, hash, authority))
+        .accounts(initAccounts(f, verifierConfigPda(f, p.defaultVerifier), stranger.publicKey, verifierProgram, implementation))
+        .signers([stranger])
+        .rpc();
+    };
+    await expectFailure(attempt({ ...params, circuitVersion: 11, defaultImplementation: upgradeable }), "Implementation program must be deployed and immutable");
+    await expectFailure(attempt({ ...params, circuitVersion: 12, defaultVerifier: upgradeable }), "Verifier program must be deployed and immutable");
+    // A program id with no program behind it, and a wrong ProgramData account, are refused too.
+    await expectFailure(attempt({ ...params, circuitVersion: 13, defaultImplementation: Keypair.generate().publicKey }), "Implementation program must be deployed and immutable");
+    const sneaky = { ...initAccounts(factory, verifierConfig, stranger.publicKey), defaultImplementationProgramData: programDataAddress(verifierId) };
+    const hash = factoryParamsHash({ ...params, circuitVersion: 14 });
+    await expectFailure(
+      router.methods.initializeFactory(...initArgs({ ...params, circuitVersion: 14 }, hash, authority))
+        .accounts({ ...sneaky, factory: factoryPda(authority, hash), verifierConfig: verifierConfigPda(factoryPda(authority, hash), verifierId) })
+        .signers([stranger]).rpc(),
+      "Program data account does not belong"
+    );
+  });
+
+  it("verifier interface: the verifier returns the attestation and refuses other backends and malformed payloads", async () => {
+    const owner = Keypair.generate();
+    const iat = 1_700_000_000;
+    const payload = Buffer.concat([PROOF, witness(identityHash, owner.publicKey, iat)]);
+    const [zkVerifier, zkVerifierData] = programPair(zkVerifierId);
+    const attestation = await verifier.methods.verify(payload).accounts({ zkVerifier, zkVerifierData }).view();
+    expect(Buffer.from(attestation.signerKey).equals(PRIVY_KEY)).to.equal(true);
+    expect(Buffer.from(attestation.identityHash).equals(identityHash)).to.equal(true);
+    expect(Buffer.from(attestation.walletHash).equals(Buffer.from(walletHash(owner.publicKey.toBase58())))).to.equal(true);
+    expect(attestation.iat.toNumber()).to.equal(iat);
+
+    // The ZK backend is fixed at build time: another program, even an executable one, is refused.
+    // (rpc, not view: anchor's view loses the error message of a failed simulation.)
+    const [otherProgram, otherData] = programPair(hook.programId);
+    await expectFailure(verifier.methods.verify(payload).accounts({ zkVerifier: otherProgram, zkVerifierData: otherData }).rpc(), "Not the ZK verifier");
+    await expectFailure(verifier.methods.verify(payload).accounts({ zkVerifier, zkVerifierData: otherData }).rpc(), "ZK verifier program is not immutable");
+    // A payload without room for a proof in front of the witness, and a witness with a bad header.
+    await expectFailure(verifier.methods.verify(payload.subarray(PROOF.length)).accounts({ zkVerifier, zkVerifierData }).rpc(), "not a Groth16 proof");
+    const badHeader = Buffer.from(payload);
+    badHeader[PROOF.length + 3] = 12;
+    await expectFailure(verifier.methods.verify(badHeader).accounts({ zkVerifier, zkVerifierData }).rpc(), "unexpected layout");
+    // Through the implementation, the attestation's signer key must still be one the config accepts.
+    const funder = Keypair.generate();
+    await airdrop(provider, funder.publicKey, 1_000_000_000);
+    const id = await fundSol(funder, 100_000_000, 1);
+    await expectFailure(claimSol(id, owner.publicKey, PROOF, witness(identityHash, owner.publicKey, (await chainTime()) + 30, OTHER_KEY)), "does not accept");
+    // Leave the vault as found: later tests account for every lamport in it.
+    await waitPast((await depositAccount(id)).fundedAt.toNumber() + 1);
+    await refundSol(id, funder);
+  });
+
+  it("enforces the signer key notice and refuses keys that are not P-256 points", async () => {
+    // A 64-byte blob that is not on the curve can never match a token signature: refused up front.
+    await expectFailure(router.methods.proposeSignerKey(Array.from(OTHER_KEY)).accounts(verifierAdmin).rpc(), "not a point on the P-256 curve");
+    const swapped = Buffer.concat([PRIVY_KEY.subarray(32), PRIVY_KEY.subarray(0, 32)]);
+    await expectFailure(router.methods.proposeSignerKey(Array.from(swapped)).accounts(verifierAdmin).rpc(), "not a point on the P-256 curve");
+    const freshVerifier = Keypair.generate().publicKey;
+    await expectFailure(
+      router.methods
+        .proposeVerifier(freshVerifier, 4, Array.from(ZERO), [Array.from(OTHER_KEY)])
+        .accounts({ factory, verifierConfig: verifierConfigPda(factory, freshVerifier), authority, clock: SYSVAR_CLOCK_PUBKEY, systemProgram: SystemProgram.programId })
+        .rpc(),
+      "not a point on the P-256 curve"
+    );
+
+    await router.methods.proposeSignerKey(Array.from(SECOND_KEY)).accounts(verifierAdmin).rpc();
     let state = await configAccount();
-    expect(Buffer.from(state.proposedSignerKey).equals(OTHER_KEY)).to.equal(true);
+    expect(Buffer.from(state.proposedSignerKey).equals(SECOND_KEY)).to.equal(true);
     await expectFailure(router.methods.activateSignerKey().accounts(verifierAdmin).rpc(), "Signer key notice has not elapsed");
     await expectFailure(router.methods.proposeSignerKey(Array.from(PRIVY_KEY)).accounts(verifierAdmin).rpc(), "already accepted");
     await router.methods.cancelSignerKeyProposal().accounts(verifierAdmin).rpc();
@@ -465,7 +636,7 @@ describe("p2id router + vault implementation", () => {
     await expectFailure(
       router.methods
         .setOwnerCache({ owner: impostor.publicKey, iat: new BN(1) })
-        .accounts({ factory, vault, verifierConfig, implAuthority: impostor.publicKey })
+        .accounts({ factory, vault, verifierConfig, instructions: SYSVAR_INSTRUCTIONS_PUBKEY, implAuthority: impostor.publicKey })
         .signers([impostor])
         .rpc(),
       "not the authority PDA of this vault's implementation"
@@ -495,6 +666,18 @@ describe("p2id router + vault implementation", () => {
     expect((await depositAccount(shortId)).consumed).to.equal(true);
     expect((await vaultAccount()).trackedSol.toNumber()).to.equal(1_100_000_000);
     expect(await provider.connection.getBalance(funder.publicKey)).to.be.greaterThan(before - 1_200_000_000);
+
+    // A consumed deposit record is dead weight: anyone may close it, the rent goes back to the funder.
+    const closeDeposit = (id: number, to: PublicKey) =>
+      router.methods.closeDeposit(new BN(id)).accounts({ vault, deposit: depositPda(id), funder: to }).rpc();
+    await expectFailure(closeDeposit(longId, funder.publicKey), "not consumed yet");
+    await expectFailure(closeDeposit(shortId, Keypair.generate().publicKey), "Unauthorized");
+    const depositRent = (await provider.connection.getAccountInfo(depositPda(shortId)))!.lamports;
+    const funderBefore = await provider.connection.getBalance(funder.publicKey);
+    await closeDeposit(shortId, funder.publicKey);
+    expect(await provider.connection.getAccountInfo(depositPda(shortId))).to.equal(null);
+    expect(await provider.connection.getBalance(funder.publicKey)).to.equal(funderBefore + depositRent);
+    await expectFailure(refundSol(shortId, funder), "AccountNotInitialized");
 
     // P2IDVaultV2 fundWithRefunder: the named refunder, not the funder, may refund and is paid.
     const refunder = Keypair.generate();
@@ -567,12 +750,7 @@ describe("p2id router + vault implementation", () => {
 
   it("lets only the cached owner move the vault, and only to a registered implementation", async () => {
     await airdrop(provider, cachedOwner.publicKey, 100_000_000); // fee payer for its own transactions
-    const move = (to: PublicKey, signer: Keypair) =>
-      router.methods
-        .setVaultImplementation(to)
-        .accounts({ factory, vault, verifierConfig, owner: signer.publicKey })
-        .signers([signer])
-        .rpc();
+    const move = moveVault;
     await expectFailure(move(Keypair.generate().publicKey, cachedOwner), "not registered");
     const stranger = Keypair.generate();
     await airdrop(provider, stranger.publicKey, 100_000_000);
@@ -608,7 +786,7 @@ describe("p2id router + vault implementation", () => {
     const id = await fundSol(funder, 100_000_000, 7200, commitment);
 
     const message = Buffer.concat([CONSTRAINT_PREFIX, factory.toBuffer(), commitment]);
-    const attest = (kp: Keypair, msg: Buffer) => Ed25519Program.createInstructionWithPrivateKey({ privateKey: kp.secretKey, message: msg });
+    const attest = ed25519;
     await expectFailure(claimSol(id, cachedOwner.publicKey, NONE, NONE), "Constraint not satisfied");
     await expectFailure(claimSol(id, cachedOwner.publicKey, NONE, NONE, [attest(Keypair.generate(), message)]), "Constraint not satisfied");
     await expectFailure(claimSol(id, cachedOwner.publicKey, NONE, NONE, [attest(signer, Buffer.concat([CONSTRAINT_PREFIX, factory.toBuffer(), ZERO]))]), "Constraint not satisfied");
@@ -621,95 +799,221 @@ describe("p2id router + vault implementation", () => {
     expect((await configAccount()).constraintSigners.length).to.equal(0);
   });
 
-  it("funds, claims, refunds and sweeps SPL tokens, creating the payee's token account on demand", async () => {
+  it("carries a real-size proof in a versioned transaction with a lookup table; a legacy one is too large", async () => {
     const funder = Keypair.generate();
-    await airdrop(provider, funder.publicKey, 3_000_000_000);
-    const mint = await createMint(provider.connection, payer, payer.publicKey, null, 6);
-    const funderAta = await getOrCreateAssociatedTokenAccount(provider.connection, payer, mint, funder.publicKey);
-    await mintTo(provider.connection, payer, mint, funderAta.address, payer, 10_000_000);
-    const vaultAta = getAssociatedTokenAddressSync(mint, vault, true);
-    const vaultMint = vaultMintPda(mint);
-    const policyAta = getAssociatedTokenAddressSync(mint, policy, true);
+    await airdrop(provider, funder.publicKey, 2_000_000_000);
+    const id = await fundSol(funder, 100_000_000, 7200);
+    const iat = (await vaultAccount()).latestProofIat.toNumber() + 1;
+    const ix = await impl.methods
+      .claimSol(new BN(id), Buffer.concat([REAL_SIZE_PROOF, witness(identityHash, cachedOwner.publicKey, iat)]))
+      .accounts(claimSolAccounts(id, cachedOwner.publicKey))
+      .remainingAccounts(verifierAccounts)
+      .instruction();
+    const { blockhash, lastValidBlockHeight } = await provider.connection.getLatestBlockhash();
 
-    const fundToken = async (amount: number, window: number) => {
-      const id = nextId++;
-      await impl.methods
-        .fundToken(new BN(amount), Array.from(ZERO), new BN(window), null, Array.from(ZERO))
-        .accounts({
-          factory, verifierConfig, vault, deposit: depositPda(id), vaultMint, policy, policyProgram: policyProgram.programId, funder: funder.publicKey,
-          implAuthority, mint, funderTokenAccount: funderAta.address, vaultTokenAccount: vaultAta, routerProgram: router.programId,
-          tokenProgram: TOKEN_PROGRAM_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID, systemProgram: SystemProgram.programId,
-        })
-        .signers([funder])
-        .rpc();
-      return id;
-    };
-    const tokenAccounts = (id: number, owner: PublicKey) => ({
-      factory, verifierConfig, vault, deposit: depositPda(id), vaultMint, payer: provider.wallet.publicKey, owner, verifierProgram: verifierId, mint,
-      vaultTokenAccount: vaultAta, ownerTokenAccount: getAssociatedTokenAddressSync(mint, owner),
-      policy, policyProgram: policyProgram.programId, policyMint: policyMintPda(mint), policyTokenAccount: policyAta,
-      instructions: SYSVAR_INSTRUCTIONS_PUBKEY, implAuthority, routerProgram: router.programId, tokenProgram: TOKEN_PROGRAM_ID,
-      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID, systemProgram: SystemProgram.programId,
+    const legacy = new Transaction({ feePayer: payer.publicKey, blockhash, lastValidBlockHeight }).add(ix);
+    legacy.sign(payer);
+    expect(() => legacy.serialize()).to.throw(/too large/i);
+
+    // Address lookup table holding every account of the claim; usable from the slot after it is extended.
+    const slot = await provider.connection.getSlot("finalized");
+    const [createTable, table] = AddressLookupTableProgram.createLookupTable({ authority: payer.publicKey, payer: payer.publicKey, recentSlot: slot });
+    const extendTable = AddressLookupTableProgram.extendLookupTable({
+      authority: payer.publicKey, payer: payer.publicKey, lookupTable: table,
+      addresses: [...ix.keys.map((k: { pubkey: PublicKey }) => k.pubkey), impl.programId],
     });
+    await provider.sendAndConfirm(new Transaction().add(createTable, extendTable));
+    const extendedAt = await provider.connection.getSlot();
+    while ((await provider.connection.getSlot()) <= extendedAt) await new Promise((r) => setTimeout(r, 200));
+    const lookup = (await provider.connection.getAddressLookupTable(table)).value!;
 
-    const id = await fundToken(4_000_000, 7200);
-    expect((await router.account.vaultMint.fetch(vaultMint)).tracked.toNumber()).to.equal(4_000_000);
-    expect(Number((await getAccount(provider.connection, vaultAta)).amount)).to.equal(4_000_000);
-
-    // The cached owner has no token account for this mint; the claim creates it (relayer pays rent).
-    await impl.methods.claimToken(new BN(id), NONE, NONE).accounts(tokenAccounts(id, cachedOwner.publicKey)).rpc();
-    const ownerAta = getAssociatedTokenAddressSync(mint, cachedOwner.publicKey);
-    expect(Number((await getAccount(provider.connection, ownerAta)).amount)).to.equal(net(4_000_000));
-    expect(Number((await getAccount(provider.connection, policyAta)).amount)).to.equal(fee(4_000_000));
-    expect((await policyProgram.account.policyMint.fetch(policyMintPda(mint))).feesOwed.toNumber()).to.equal(fee(4_000_000));
-    expect((await router.account.vaultMint.fetch(vaultMint)).tracked.toNumber()).to.equal(0);
-
-    // Refund after a one-second window, through the router.
-    const refundId = await fundToken(1_000_000, 1);
-    await waitPast((await depositAccount(refundId)).fundedAt.toNumber() + 1);
-    await router.methods
-      .refundToken(new BN(refundId))
-      .accounts({
-        factory, vault, deposit: depositPda(refundId), vaultMint, caller: funder.publicKey, mint,
-        vaultTokenAccount: vaultAta, callerTokenAccount: funderAta.address, tokenProgram: TOKEN_PROGRAM_ID,
-      })
-      .signers([funder])
-      .rpc();
-    expect(Number((await getAccount(provider.connection, funderAta.address)).amount)).to.equal(6_000_000);
-
-    // Tokens sent straight to the vault's token account have no deposit record: untracked sweep (router).
-    await splTransfer(provider.connection, payer, funderAta.address, vaultAta, funder, 2_500_000);
-    await router.methods
-      .sweepUntrackedToken()
-      .accounts({
-        factory, verifierConfig, vault, vaultMint, payer: provider.wallet.publicKey, owner: cachedOwner.publicKey, mint,
-        vaultTokenAccount: vaultAta, ownerTokenAccount: ownerAta, policy, policyProgram: policyProgram.programId, policyMint: policyMintPda(mint), policyTokenAccount: policyAta,
-        tokenProgram: TOKEN_PROGRAM_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID, systemProgram: SystemProgram.programId,
-      })
-      .rpc();
-    expect(Number((await getAccount(provider.connection, ownerAta)).amount)).to.equal(net(4_000_000) + net(2_500_000));
-    expect(Number((await getAccount(provider.connection, vaultAta)).amount)).to.equal(0);
-
-    // The authority withdraws the booked token fees (PviumP2IDPolicy.withdrawFees).
-    const owed = fee(4_000_000) + fee(2_500_000);
-    expect((await policyProgram.account.policyMint.fetch(policyMintPda(mint))).feesOwed.toNumber()).to.equal(owed);
-    const withdraw = (amount: number) =>
-      policyProgram.methods.withdrawFeesToken(new BN(amount)).accounts({
-        policy, authority, policyMint: policyMintPda(mint), mint, policyTokenAccount: policyAta,
-        toTokenAccount: getAssociatedTokenAddressSync(mint, authority), to: authority,
-        tokenProgram: TOKEN_PROGRAM_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID, systemProgram: SystemProgram.programId,
-      }).rpc();
-    await expectFailure(withdraw(owed + 1), "Insufficient booked fees");
-    await withdraw(owed);
-    expect(Number((await getAccount(provider.connection, getAssociatedTokenAddressSync(mint, authority))).amount)).to.equal(owed);
-    expect((await policyProgram.account.policyMint.fetch(policyMintPda(mint))).feesOwed.toNumber()).to.equal(0);
+    const before = await provider.connection.getBalance(cachedOwner.publicKey);
+    const message = new TransactionMessage({ payerKey: payer.publicKey, recentBlockhash: blockhash, instructions: [ix] }).compileToV0Message([lookup]);
+    const versioned = new VersionedTransaction(message);
+    versioned.sign([payer]);
+    expect(versioned.serialize().length).to.be.lessThan(1232);
+    const sig = await provider.connection.sendTransaction(versioned);
+    await provider.connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, "confirmed");
+    expect(await provider.connection.getBalance(cachedOwner.publicKey)).to.equal(before + net(100_000_000));
+    expect((await vaultAccount()).latestProofIat.toNumber()).to.equal(iat);
   });
+
+  // Token flows run three times: classic SPL Token, Token-2022 with a transfer fee, Token-2022 with a
+  // transfer hook. Everything is asserted from what actually arrives, since Token-2022 may take a cut
+  // of every transfer, and the programs record and book arrivals, never what was sent.
+  type TokenCase = {
+    programId: PublicKey;
+    createMint: () => Promise<PublicKey>;
+    /** The cut the token program itself takes from a transfer of `amount` (0 for classic SPL Token). */
+    transferFee: (mint: PublicKey) => Promise<(amount: number) => number>;
+    /** Accounts every transfer of this mint needs beyond the token accounts (a transfer hook's). */
+    extras: (mint: PublicKey) => Promise<AccountMeta[]>;
+    hookTransfers?: (mint: PublicKey) => Promise<number>;
+  };
+  const budget = ComputeBudgetProgram.setComputeUnitLimit({ units: 600_000 });
+  const hook: any = new Program(loadIdl("test_hook"), provider);
+  const counterPda = (mint: PublicKey) => pda([Buffer.from("counter"), mint.toBuffer()], hook.programId);
+  const createMint2022 = async (extensions: ExtensionType[], init: (mint: PublicKey) => TransactionInstruction[]) => {
+    const mint = Keypair.generate();
+    const space = getMintLen(extensions);
+    const lamports = await provider.connection.getMinimumBalanceForRentExemption(space);
+    const tx = new Transaction().add(
+      SystemProgram.createAccount({ fromPubkey: payer.publicKey, newAccountPubkey: mint.publicKey, space, lamports, programId: TOKEN_2022_PROGRAM_ID }),
+      ...init(mint.publicKey),
+      createInitializeMintInstruction(mint.publicKey, 6, payer.publicKey, null, TOKEN_2022_PROGRAM_ID),
+    );
+    await provider.sendAndConfirm(tx, [mint]);
+    return mint.publicKey;
+  };
+  const classic: TokenCase = {
+    programId: TOKEN_PROGRAM_ID,
+    createMint: () => createMint(provider.connection, payer, payer.publicKey, null, 6),
+    transferFee: async () => () => 0,
+    extras: async () => [],
+  };
+  const withTransferFee: TokenCase = {
+    programId: TOKEN_2022_PROGRAM_ID,
+    createMint: () =>
+      createMint2022([ExtensionType.TransferFeeConfig], (mint) => [
+        createInitializeTransferFeeConfigInstruction(mint, payer.publicKey, payer.publicKey, 100, BigInt(1_000_000_000), TOKEN_2022_PROGRAM_ID),
+      ]),
+    transferFee: async (mint) => {
+      const config = getTransferFeeConfig(await getMint(provider.connection, mint, undefined, TOKEN_2022_PROGRAM_ID))!;
+      return (amount) => Number(calculateFee(config.newerTransferFee, BigInt(amount)));
+    },
+    extras: async () => [],
+  };
+  const withTransferHook: TokenCase = {
+    programId: TOKEN_2022_PROGRAM_ID,
+    createMint: async () => {
+      const mint = await createMint2022([ExtensionType.TransferHook], (m) => [
+        createInitializeTransferHookInstruction(m, payer.publicKey, hook.programId, TOKEN_2022_PROGRAM_ID),
+      ]);
+      await hook.methods
+        .initializeExtraAccountMetaList()
+        .accounts({ payer: payer.publicKey, extraAccountMetaList: getExtraAccountMetaAddress(mint, hook.programId), mint, counter: counterPda(mint), systemProgram: SystemProgram.programId })
+        .rpc();
+      return mint;
+    },
+    transferFee: async () => () => 0,
+    // Resolve the hook's extra accounts the way a wallet would; the programs re-resolve them on-chain.
+    extras: async (mint) => {
+      const probe = new TransactionInstruction({
+        programId: TOKEN_2022_PROGRAM_ID,
+        keys: [vault, mint, vault, vault].map((pubkey) => ({ pubkey, isSigner: false, isWritable: false })),
+        data: Buffer.alloc(0),
+      });
+      await addExtraAccountMetasForExecute(provider.connection, probe, hook.programId, vault, mint, vault, vault, 1);
+      return probe.keys.slice(4);
+    },
+    hookTransfers: async (mint) => (await hook.account.counter.fetch(counterPda(mint))).transfers.toNumber(),
+  };
+
+  const tokenFlow = (label: string, t: TokenCase) =>
+    it(`funds, claims, refunds, sweeps and withdraws ${label}, booking only what arrives`, async () => {
+      const funder = Keypair.generate();
+      await airdrop(provider, funder.publicKey, 3_000_000_000);
+      const mint = await t.createMint();
+      const tf = await t.transferFee(mint);
+      const extras = await t.extras(mint);
+      const P = t.programId;
+      const ata = (owner: PublicKey) => getAssociatedTokenAddressSync(mint, owner, true, P);
+      const balance = async (address: PublicKey) => Number((await getAccount(provider.connection, address, undefined, P)).amount);
+      const funderAta = (await getOrCreateAssociatedTokenAccount(provider.connection, payer, mint, funder.publicKey, false, undefined, undefined, P)).address;
+      await mintTo(provider.connection, payer, mint, funderAta, payer, 10_000_000, [], undefined, P);
+      const vaultAta = ata(vault);
+      const vaultMint = vaultMintPda(mint);
+      const policyAta = ata(policy);
+      const ownerAta = ata(cachedOwner.publicKey);
+      const tracked = async () => (await router.account.vaultMint.fetch(vaultMint)).tracked.toNumber();
+      const owedToPolicy = async () => (await policyProgram.account.policyMint.fetch(policyMintPda(mint))).feesOwed.toNumber();
+      const base = {
+        factory, verifierConfig, vault, vaultMint, policy, policyProgram: policyProgram.programId, mint, vaultTokenAccount: vaultAta,
+        implAuthority, routerProgram: router.programId, tokenProgram: P, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID, systemProgram: SystemProgram.programId,
+      };
+      const policyBits = { policyMint: policyMintPda(mint), policyTokenAccount: policyAta };
+      const fundToken = async (amount: number, window: number) => {
+        const id = nextId++;
+        await impl.methods
+          .fundToken(new BN(amount), Array.from(ZERO), new BN(window), null, Array.from(ZERO))
+          .accounts({ ...base, deposit: depositPda(id), funder: funder.publicKey, funderTokenAccount: funderAta })
+          .remainingAccounts(extras).preInstructions([budget]).signers([funder]).rpc();
+        return id;
+      };
+
+      // Fund: the deposit records what reached the vault's token account, not what the funder sent.
+      const id = await fundToken(4_000_000, 7200);
+      const received = 4_000_000 - tf(4_000_000);
+      expect((await depositAccount(id)).amount.toNumber()).to.equal(received);
+      expect(await tracked()).to.equal(received);
+      expect(await balance(vaultAta)).to.equal(received);
+
+      // Claim: the cached owner has no token account for this mint; the claim creates it (relayer pays rent).
+      await impl.methods
+        .claimToken(new BN(id), NONE)
+        .accounts({ ...base, deposit: depositPda(id), payer: provider.wallet.publicKey, owner: cachedOwner.publicKey, verifierProgram: verifierId, ownerTokenAccount: ownerAta, ...policyBits, instructions: SYSVAR_INSTRUCTIONS_PUBKEY })
+        .remainingAccounts(extras).preInstructions([budget]).rpc();
+      const ownerGot = net(received) - tf(net(received));
+      const policyGot = fee(received) - tf(fee(received));
+      expect(await balance(ownerAta)).to.equal(ownerGot);
+      expect(await balance(policyAta)).to.equal(policyGot);
+      expect(await owedToPolicy()).to.equal(policyGot);
+      expect(await tracked()).to.equal(0);
+
+      // Refund after a one-second window, through the router.
+      const refundId = await fundToken(1_000_000, 1);
+      const received2 = 1_000_000 - tf(1_000_000);
+      await waitPast((await depositAccount(refundId)).fundedAt.toNumber() + 1);
+      const funderBefore = await balance(funderAta);
+      await router.methods
+        .refundToken(new BN(refundId))
+        .accounts({ factory, vault, deposit: depositPda(refundId), vaultMint, caller: funder.publicKey, mint, vaultTokenAccount: vaultAta, callerTokenAccount: funderAta, tokenProgram: P })
+        .remainingAccounts(extras).preInstructions([budget]).signers([funder]).rpc();
+      expect(await balance(funderAta)).to.equal(funderBefore + received2 - tf(received2));
+      expect(await tracked()).to.equal(0);
+
+      // Tokens sent straight to the vault's token account have no deposit record: untracked sweep (router).
+      const direct = await createTransferCheckedWithTransferHookInstruction(provider.connection, funderAta, mint, vaultAta, funder.publicKey, BigInt(2_500_000), 6, [], undefined, P);
+      await provider.sendAndConfirm(new Transaction().add(direct), [funder]);
+      const untracked = 2_500_000 - tf(2_500_000);
+      expect(await balance(vaultAta)).to.equal(untracked);
+      await router.methods
+        .sweepUntrackedToken()
+        .accounts({
+          factory, verifierConfig, vault, vaultMint, payer: provider.wallet.publicKey, owner: cachedOwner.publicKey, mint, vaultTokenAccount: vaultAta, ownerTokenAccount: ownerAta,
+          policy, policyProgram: policyProgram.programId, ...policyBits, tokenProgram: P, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID, systemProgram: SystemProgram.programId,
+          instructions: SYSVAR_INSTRUCTIONS_PUBKEY,
+        })
+        .remainingAccounts(extras).preInstructions([budget]).rpc();
+      expect(await balance(ownerAta)).to.equal(ownerGot + net(untracked) - tf(net(untracked)));
+      expect(await balance(vaultAta)).to.equal(0);
+
+      // The authority withdraws the booked token fees (PviumP2IDPolicy.withdrawFees).
+      const owed = policyGot + fee(untracked) - tf(fee(untracked));
+      expect(await owedToPolicy()).to.equal(owed);
+      const withdraw = (amount: number) =>
+        policyProgram.methods
+          .withdrawFeesToken(new BN(amount))
+          .accounts({
+            policy, authority, policyMint: policyMintPda(mint), mint, policyTokenAccount: policyAta, toTokenAccount: ata(authority), to: authority,
+            tokenProgram: P, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID, systemProgram: SystemProgram.programId,
+          })
+          .remainingAccounts(extras).preInstructions([budget]).rpc();
+      await expectFailure(withdraw(owed + 1), "Insufficient booked fees");
+      await withdraw(owed);
+      expect(await balance(ata(authority))).to.equal(owed - tf(owed));
+      expect(await owedToPolicy()).to.equal(0);
+      // fund, claim (fee + payout), fund, refund, direct send, sweep (fee + payout), withdraw
+      if (t.hookTransfers) expect(await t.hookTransfers(mint)).to.equal(9);
+    });
+  tokenFlow("classic SPL tokens", classic);
+  tokenFlow("Token-2022 with a transfer fee", withTransferFee);
+  tokenFlow("Token-2022 with a transfer hook", withTransferHook);
 
   it("sweeps untracked SOL to the cached owner, never touching recorded deposits or rent", async () => {
     const tracked = (await vaultAccount()).trackedSol.toNumber();
     expect(tracked).to.be.greaterThan(0); // the 7200-second deposits from earlier tests
-    const sweep = () =>
-      router.methods.sweepUntrackedSol().accounts({ factory, verifierConfig, vault, owner: cachedOwner.publicKey, policy, policyProgram: policyProgram.programId }).rpc();
+    const sweep = () => sweepSol(cachedOwner.publicKey);
     await expectFailure(sweep(), "Nothing untracked to sweep");
 
     const tx = new Transaction().add(SystemProgram.transfer({ fromPubkey: payer.publicKey, toPubkey: vault, lamports: 700_000_000 }));
@@ -731,6 +1035,81 @@ describe("p2id router + vault implementation", () => {
     expect(await provider.connection.getBalance(policy)).to.equal(policyRent);
   });
 
+  it("alpha: every payout under a verifier in alpha needs the attester's approval of that exact action", async () => {
+    const funder = Keypair.generate();
+    await airdrop(provider, funder.publicKey, 3_000_000_000);
+    const owner = cachedOwner.publicKey;
+    const a = await fundSol(funder, 200_000_000, 7200);
+    const b = await fundSol(funder, 200_000_000, 7200);
+    expect((await configAccount()).alpha).to.equal(false);
+    const epoch0 = (await factoryAccount()).alphaEpoch.toNumber();
+    const revision0 = (await configAccount()).keySetRevision.toNumber();
+    expect((await factoryAccount()).alphaAttester.equals(ATTESTER.publicKey)).to.equal(true);
+
+    // Back into alpha: a flaw was found in the live circuit. Approvals and owners cached while the
+    // verifier was released are void; the attester now vets every payout.
+    await router.methods.setAlpha(true).accounts(verifierAdmin).rpc();
+    expect((await configAccount()).alpha).to.equal(true);
+    expect((await configAccount()).keySetRevision.toNumber()).to.equal(revision0 + 1);
+    let epoch = (await factoryAccount()).alphaEpoch.toNumber();
+    expect(epoch).to.equal(epoch0 + 1);
+    await expectFailure(claimSol(a, owner, NONE, NONE), "Owner cache is stale");
+
+    // Re-proving the owner needs the attester's approval of this owner update (owner + iat).
+    const iat = (await vaultAccount()).latestProofIat.toNumber() + 1;
+    const pw = witness(identityHash, owner, iat);
+    const deadline = (await chainTime()) + 120;
+    const update = { destination: owner, iat, action: ALPHA_ACTION.ownerUpdate, epoch, deadline };
+    await expectFailure(refreshProof(owner, pw), "Verifier is in alpha");
+    await expectFailure(refreshProof(owner, pw, [alphaAttest(update, Keypair.generate())]), "Verifier is in alpha");
+    await expectFailure(refreshProof(owner, pw, [alphaAttest({ ...update, iat: iat + 1 })]), "Verifier is in alpha");
+    await expectFailure(refreshProof(owner, pw, [alphaAttest({ ...update, action: ALPHA_ACTION.settle })]), "Verifier is in alpha");
+    await expectFailure(refreshProof(owner, pw, [alphaAttest({ ...update, deadline: (await chainTime()) - 1 })]), "has expired");
+    await refreshProof(owner, pw, [alphaAttest(update)]);
+    expect((await vaultAccount()).latestProofIat.toNumber()).to.equal(iat);
+
+    // A proofless settlement is bound to its deposit: the approval for one cannot release another.
+    const settle = (id: number) => ({ destination: owner, iat, action: ALPHA_ACTION.settle, subject: depositPda(id), epoch, deadline });
+    await expectFailure(claimSol(a, owner, NONE, NONE), "Verifier is in alpha");
+    await expectFailure(claimSol(a, owner, NONE, NONE, [alphaAttest(settle(b))]), "Verifier is in alpha");
+    let before = await provider.connection.getBalance(owner);
+    await claimSol(a, owner, NONE, NONE, [alphaAttest(settle(a))]);
+    expect(await provider.connection.getBalance(owner)).to.equal(before + net(200_000_000));
+
+    // Untracked sweeps and the implementation move are payouts too.
+    await provider.sendAndConfirm(new Transaction().add(SystemProgram.transfer({ fromPubkey: payer.publicKey, toPubkey: vault, lamports: 100_000_000 })));
+    await expectFailure(sweepSol(owner), "Verifier is in alpha");
+    before = await provider.connection.getBalance(owner);
+    await sweepSol(owner, [alphaAttest({ destination: owner, iat, action: ALPHA_ACTION.sweepUntracked, epoch, deadline })]);
+    expect(await provider.connection.getBalance(owner)).to.equal(before + net(100_000_000));
+    await expectFailure(moveVault(impl.programId, cachedOwner), "Verifier is in alpha");
+    await moveVault(impl.programId, cachedOwner, [alphaAttest({ destination: owner, iat, action: ALPHA_ACTION.setImplementation, subject: impl.programId, epoch, deadline })]);
+
+    // Rotating the attester voids approvals signed under the old epoch; the new attester's work.
+    const attester2 = Keypair.generate();
+    await expectFailure(router.methods.setAlphaAttester(PublicKey.default).accounts(admin).rpc(), "nonzero key");
+    await router.methods.setAlphaAttester(attester2.publicKey).accounts(admin).rpc();
+    expect((await factoryAccount()).alphaAttester.equals(attester2.publicKey)).to.equal(true);
+    expect((await factoryAccount()).alphaEpoch.toNumber()).to.equal(epoch + 1);
+    await expectFailure(claimSol(b, owner, NONE, NONE, [alphaAttest(settle(b))]), "Verifier is in alpha");
+    epoch += 1;
+    await expectFailure(claimSol(b, owner, NONE, NONE, [alphaAttest(settle(b))]), "Verifier is in alpha");
+    before = await provider.connection.getBalance(owner);
+    await claimSol(b, owner, NONE, NONE, [alphaAttest(settle(b), attester2)]);
+    expect(await provider.connection.getBalance(owner)).to.equal(before + net(200_000_000));
+
+    // Releasing the verifier bumps the epoch but keeps the owners vetted in alpha: proofless payouts resume unattended.
+    await router.methods.setAlpha(false).accounts(verifierAdmin).rpc();
+    expect((await configAccount()).alpha).to.equal(false);
+    expect((await configAccount()).keySetRevision.toNumber()).to.equal(revision0 + 1);
+    expect((await factoryAccount()).alphaEpoch.toNumber()).to.equal(epoch + 1);
+    const c = await fundSol(funder, 100_000_000, 7200);
+    before = await provider.connection.getBalance(owner);
+    await claimSol(c, owner, NONE, NONE);
+    expect(await provider.connection.getBalance(owner)).to.equal(before + net(100_000_000));
+    await router.methods.setAlphaAttester(ATTESTER.publicKey).accounts(admin).rpc();
+  });
+
   it("rejects proofs from keys the verifier does not accept; removal is immediate and invalidates the cache", async () => {
     const funder = Keypair.generate();
     await airdrop(provider, funder.publicKey, 3_000_000_000);
@@ -743,18 +1122,16 @@ describe("p2id router + vault implementation", () => {
     await expectFailure(claimWith(OTHER_KEY), "does not accept");
 
     // Retire the accepted key: takes effect at once and bumps the revision.
+    const revision = (await configAccount()).keySetRevision.toNumber();
     await router.methods.removeSignerKey(Array.from(PRIVY_KEY)).accounts(verifierAdmin).rpc();
     const state = await configAccount();
     expect(state.signerKeys.length).to.equal(0);
-    expect(state.keySetRevision.toNumber()).to.equal(1);
+    expect(state.keySetRevision.toNumber()).to.equal(revision + 1);
 
     await expectFailure(claimWith(PRIVY_KEY), "does not accept");
     // The owner cached under the old key set can no longer be paid without a proof, nor move the vault.
     await expectFailure(claimSol(id, cachedOwner.publicKey, NONE, NONE), "Owner cache is stale");
-    await expectFailure(
-      router.methods.setVaultImplementation(impl.programId).accounts({ factory, vault, verifierConfig, owner: cachedOwner.publicKey }).signers([cachedOwner]).rpc(),
-      "Owner cache is stale"
-    );
+    await expectFailure(moveVault(impl.programId, cachedOwner), "Owner cache is stale");
     expect((await depositAccount(id)).consumed).to.equal(false);
     // The deposit is still refundable after its window: the router never depends on the implementation for that.
   });
