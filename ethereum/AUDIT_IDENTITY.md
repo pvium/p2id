@@ -23,9 +23,9 @@ modified by this review.
 
 Source SHA-256 values at review time:
 
-| File | SHA-256 |
-| --- | --- |
-| `src/PviumIdentity.sol` | `bc71e34fed53ab849b41fa54043a46000bad24f41762628f54649c2237d6d278` |
+| File                      | SHA-256                                                            |
+| ------------------------- | ------------------------------------------------------------------ |
+| `src/PviumIdentity.sol`   | `bc71e34fed53ab849b41fa54043a46000bad24f41762628f54649c2237d6d278` |
 | `src/PviumZKVerifier.sol` | `d162b3909afe70f12a77fd3fc1b27909a21796452bca718723a4c6245bdb78ab` |
 
 Three findings were confirmed: two concern signer-revocation behavior and one concerns the
@@ -164,7 +164,7 @@ library and updated test helper already supply the owner argument.
   and the encoding/mutation checks. The finding reproductions assert current behavior and
   should be inverted or replaced with regression assertions when fixes are made.
 
-Run from `contracts/`, with the repository's prescribed Node installation first on `PATH`:
+Run from `ethereum/`, with the repository's prescribed Node installation first on `PATH`:
 
 ```sh
 yarn hardhat test test/PviumZKVerifier.test.ts test/PviumVerifier.test.ts
@@ -180,11 +180,11 @@ The follow-up reviewed the new `keySetRevision` / `revision()` / `ownerRevision`
 removal, timestamp recovery, and the corrected local deployment script. Production sources
 were not changed during this review.
 
-| Reviewed file | SHA-256 |
-| --- | --- |
-| `src/PviumIdentity.sol` | `08dc283b4637a10639c290e2568622dbfd39e755ca5ed10ab8362338915d4fcf` |
+| Reviewed file             | SHA-256                                                            |
+| ------------------------- | ------------------------------------------------------------------ |
+| `src/PviumIdentity.sol`   | `08dc283b4637a10639c290e2568622dbfd39e755ca5ed10ab8362338915d4fcf` |
 | `src/PviumZKVerifier.sol` | `d162b3909afe70f12a77fd3fc1b27909a21796452bca718723a4c6245bdb78ab` |
-| `src/P2IDVault.sol` | `de02584fbd1738cf0fb3c99df79bc151d7bb13066f37056204cb75f1d16ee933` |
+| `src/P2IDVault.sol`       | `de02584fbd1738cf0fb3c99df79bc151d7bb13066f37056204cb75f1d16ee933` |
 
 ### Previous findings
 
@@ -279,7 +279,7 @@ does not hold for a token issued before the poisoned timestamp.
   the checked-in source after the prescribed rename. Its source hash is unchanged. No new
   generated-verifier bypass was identified; the original cryptographic scope limits still apply.
 
-Reproduce the new findings from `contracts/`:
+Reproduce the new findings from `ethereum/`:
 
 ```sh
 yarn hardhat test test/PviumIdentity.audit.test.ts --grep 'follow-up audit'
@@ -348,7 +348,7 @@ cached owner must not silently redefine those existing semantics.
   generated-verifier bypass was identified within the previously stated scope.
 - Production contracts were not modified. This pass adds the reproduction and report update.
 
-Reproduce T1 from `contracts/`:
+Reproduce T1 from `ethereum/`:
 
 ```sh
 yarn hardhat test test/PviumIdentity.audit.test.ts --grep 'equal-time'

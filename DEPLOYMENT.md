@@ -9,12 +9,12 @@ addresses for the same identities, comparable to operating in a separate payment
 Payers must derive addresses for the chosen deployment; funds sent to Pvium's vaults and
 funds sent to your vaults belong to separate contracts.
 
-| | Use Pvium's deployment | Deploy your own setup |
-| --- | --- | --- |
-| Factory and vaults | Use the existing Pvium factory and its identity vaults | Deploy a factory that creates your identity vaults |
-| Policy | Managed by Pvium | Managed by you |
-| Your own verifier | Contact Pvium to register it before accepting payments through it | Approve it through your policy |
-| Vault addresses | Pvium's addresses for the selected environment | Different addresses when your factory address differs |
+|                    | Use Pvium's deployment                                            | Deploy your own setup                                 |
+| ------------------ | ----------------------------------------------------------------- | ----------------------------------------------------- |
+| Factory and vaults | Use the existing Pvium factory and its identity vaults            | Deploy a factory that creates your identity vaults    |
+| Policy             | Managed by Pvium                                                  | Managed by you                                        |
+| Your own verifier  | Contact Pvium to register it before accepting payments through it | Approve it through your policy                        |
+| Vault addresses    | Pvium's addresses for the selected environment                    | Different addresses when your factory address differs |
 
 A policy is attached to a factory and controls verifier approval and fee quotes for that
 factory's vaults. One policy can approve multiple verifiers. A verifier authenticates
@@ -52,7 +52,7 @@ With the reference contracts, the setup order is:
 2. Deploy `PviumP2IDPolicy(owner, [verifier])`. This policy approves the supplied verifier
    addresses and quotes zero fees. Its owner can later add or remove verifiers with
    `approveVerifier(verifier, true/false)`. A custom policy implements
-   [IP2IDPolicy](contracts/src/interfaces/IP2IDPolicy.sol) and defines its own admission
+   [IP2IDPolicy](ethereum/src/interfaces/IP2IDPolicy.sol) and defines its own admission
    and fee rules.
 3. Deploy `PviumP2IdVaultFactory` with your owner, namespace hash, policy, initial verifier,
    policy-change delay, refund-window bounds, and alpha signer. The initial verifier must
@@ -64,7 +64,7 @@ With the reference contracts, the setup order is:
 5. Publish your chain IDs, factory and verifier addresses, vault creation-code hash, and
    proof instructions. Configure payers and recipients to use those values.
 
-See the [factory constructor](contracts/src/PviumP2IdVaultFactory.sol) for the exact argument
+See the [factory constructor](ethereum/src/PviumP2IdVaultFactory.sol) for the exact argument
 order and limits. Policy-change delays must be 1–30 days; refund-window bounds must be
 between 1 hour and 365 days, with the minimum no greater than the maximum. These are
 requirements of the reference implementation.
@@ -101,15 +101,15 @@ or obtain the address directly from your factory.
 
 ## Implement a verifier
 
-Implement [IP2IDVerifier](contracts/src/interfaces/IP2IDVerifier.sol) and follow the
+Implement [IP2IDVerifier](ethereum/src/interfaces/IP2IDVerifier.sol) and follow the
 [protocol's verification requirements](P2ID.md#verification-and-claims):
 
-| Method | Required behavior |
-| --- | --- |
+| Method                                               | Required behavior                                                                                                                                                                                                                    |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `getIdentityWallet(identityHash, proof, constraint)` | Authenticate the supplied identity commitment and its linked wallet. Return a nonzero wallet and the attestation issue time in Unix seconds. Revert for an invalid proof, a different identity, or an unsatisfied nonzero constraint |
-| `supportsConstraints()` | Return whether the verifier supports nonzero funding constraints |
-| `revision()` | Change the revision when previously accepted identity proofs may no longer be trusted, so vaults invalidate cached wallets. A constant is appropriate only when trust cannot be revoked |
-| `vkHash()` | Return the verifier's pinned verification-key artifact SHA-256, read from trusted verifier configuration rather than caller-supplied proof metadata |
+| `supportsConstraints()`                              | Return whether the verifier supports nonzero funding constraints                                                                                                                                                                     |
+| `revision()`                                         | Change the revision when previously accepted identity proofs may no longer be trusted, so vaults invalidate cached wallets. A constant is appropriate only when trust cannot be revoked                                              |
+| `vkHash()`                                           | Return the verifier's pinned verification-key artifact SHA-256, read from trusted verifier configuration rather than caller-supplied proof metadata                                                                                  |
 
 Use the identity normalization and commitment formula in [P2ID.md](P2ID.md#identity-commitments).
 Your proof must authenticate both that commitment and the returned wallet. The wallet must
@@ -118,7 +118,7 @@ someone else's funds.
 
 The `proof` argument is opaque bytes. Define and document your encoding, proof-generation
 procedure, trusted sources, and revocation behavior. The standard does not require Privy
-or Pvium's proof format. [PviumVerifier.sol](contracts/src/PviumVerifier.sol) is one example:
+or Pvium's proof format. [PviumVerifier.sol](ethereum/src/PviumVerifier.sol) is one example:
 it decodes a zero-knowledge proof and public inputs, verifies them through `PviumIdentity`,
 and checks the identity and wallet commitments.
 
@@ -161,28 +161,36 @@ import { IdentityType, identityHash } from '@pvium/p2id-core';
 
 // signer is the payer's ethers Signer on the target chain.
 // factoryAddress, verifierAddress, and tokenAddress are deployed on that chain.
-const factory = new Contract(factoryAddress, [
-  'function minRefundWindow() view returns (uint64)',
-  'function fundWith(bytes32 identityHash, address verifier, address token, uint256 amount, bytes32 constraint, uint64 refundWindow, bytes32 ref) payable returns (address vault, uint256 depositId)',
-], signer);
-const token = new Contract(tokenAddress, [
-  'function approve(address spender, uint256 amount) returns (bool)',
-], signer);
+const factory = new Contract(
+  factoryAddress,
+  [
+    'function minRefundWindow() view returns (uint64)',
+    'function fundWith(bytes32 identityHash, address verifier, address token, uint256 amount, bytes32 constraint, uint64 refundWindow, bytes32 ref) payable returns (address vault, uint256 depositId)',
+  ],
+  signer,
+);
+const token = new Contract(
+  tokenAddress,
+  ['function approve(address spender, uint256 amount) returns (bool)'],
+  signer,
+);
 
 const recipient = identityHash(IdentityType.Email, 'you@example.com');
 const amount = 1_000_000n; // One token if this ERC-20 uses six decimals.
 const refundWindow = await factory.minRefundWindow();
 
 await (await token.approve(factoryAddress, amount)).wait();
-const receipt = await (await factory.fundWith(
-  recipient,
-  verifierAddress,
-  tokenAddress,
-  amount,
-  ZeroHash,      // No additional claim constraint.
-  refundWindow, // Seconds; must be within the factory's current bounds.
-  ZeroHash,      // No application reference.
-)).wait();
+const receipt = await (
+  await factory.fundWith(
+    recipient,
+    verifierAddress,
+    tokenAddress,
+    amount,
+    ZeroHash, // No additional claim constraint.
+    refundWindow, // Seconds; must be within the factory's current bounds.
+    ZeroHash, // No application reference.
+  )
+).wait();
 ```
 
 Read the vault's `Funded` event from the receipt to obtain the deposit ID and credited
@@ -196,11 +204,18 @@ value. With the factory and recipient from the example above:
 import { ZeroAddress, parseEther } from 'ethers';
 
 const nativeAmount = parseEther('0.001');
-await (await factory.fundWith(
-  recipient, verifierAddress, ZeroAddress, nativeAmount,
-  ZeroHash, refundWindow, ZeroHash,
-  { value: nativeAmount },
-)).wait();
+await (
+  await factory.fundWith(
+    recipient,
+    verifierAddress,
+    ZeroAddress,
+    nativeAmount,
+    ZeroHash,
+    refundWindow,
+    ZeroHash,
+    { value: nativeAmount },
+  )
+).wait();
 ```
 
 An ERC-20 call must send no native value. `ref` is an optional application reference emitted
@@ -214,7 +229,7 @@ Use `fundWith` when the payment must be claimed through your verifier.
 The recipient generates a proof in your verifier's format. For an unconstrained deposit,
 present it to the vault with `refreshProofAndSweep(verifier, proof, token, depositCountLimit)`.
 For a constrained deposit, use `sweepBucket` or `sweepBucketDeposits` with the matching
-constraint and evidence. See [IP2IDVault](contracts/src/interfaces/IP2IDVault.sol) for the
+constraint and evidence. See [IP2IDVault](ethereum/src/interfaces/IP2IDVault.sol) for the
 method signatures. The vault pays the authenticated wallet returned by your verifier.
 
 Before accepting real payments, test a successful claim, an invalid proof, an identity

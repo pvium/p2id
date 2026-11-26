@@ -6,7 +6,7 @@ on:
     paths:
       - 'sdks/node/p2id-core/**'
       - 'sdks/node/yarn.lock'
-      - 'contracts/src/**'
+      - 'ethereum/src/**'
       - '.github/workflows/publish-p2id-core.yml'
   workflow_dispatch:
 

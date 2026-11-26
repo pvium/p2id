@@ -8,12 +8,14 @@
 // and compares the attestation it returns with the file. This is the whole on-chain verification path
 // (adapter -> Sunspot Groth16 verifier) without a vault, so it needs no alpha approval and no funds.
 import { createHash } from 'crypto';
-import { existsSync, readFileSync } from 'fs';
-import { homedir } from 'os';
+import { readFileSync } from 'fs';
 import { join, resolve } from 'path';
 import { AnchorProvider, Idl, Program, Wallet } from '@coral-xyz/anchor';
 import { ComputeBudgetProgram, Connection, Keypair, PublicKey, Transaction } from '@solana/web3.js';
 import { clusterOf, loadEnv } from '../deploy.config';
+
+import { loadDeployer } from './lib/deployer';
+import { loadProgramKey } from './lib/programKeys';
 
 const ROOT = resolve(__dirname, '..');
 const BPF_LOADER_UPGRADEABLE = new PublicKey('BPFLoaderUpgradeab1e11111111111111111111111');
@@ -42,8 +44,7 @@ async function main() {
   const connection = new Connection(rpc, 'confirmed');
   // The simulation needs a funded fee payer (an unknown account is refused as AccountNotFound), so
   // use the deployer keypair; the transaction is never sent or signed.
-  const payerPath = (process.env.SOL_DEPLOYER_KEYPAIR ?? '~/.config/solana/id.json').replace(/^~/, homedir());
-  const payer = existsSync(payerPath) ? Keypair.fromSecretKey(Uint8Array.from(JSON.parse(readFileSync(payerPath, 'utf8')))) : Keypair.generate();
+  const payer = loadDeployer(cluster.environment);
   const provider = new AnchorProvider(connection, new Wallet(payer), { commitment: 'confirmed' });
 
   const doc = JSON.parse(readFileSync(resolve(f.proof), 'utf8'));
@@ -55,8 +56,12 @@ async function main() {
   let zkVerifier: PublicKey;
   if (doc.zkVerifier) zkVerifier = new PublicKey(doc.zkVerifier);
   else {
-    const kp = JSON.parse(readFileSync(resolve(ROOT, process.env.SOL_ZK_VERIFIER_KEYPAIR ?? zkEntry.keypair), 'utf8'));
-    zkVerifier = Keypair.fromSecretKey(Uint8Array.from(kp)).publicKey;
+    const derived = loadProgramKey(release, cluster.environment, 'zkVerifier', doc.circuitVersion ?? release.stackCircuit);
+    if (derived) zkVerifier = derived.publicKey;
+    else {
+      const kp = JSON.parse(readFileSync(resolve(ROOT, process.env.SOL_ZK_VERIFIER_KEYPAIR ?? zkEntry.keypair), 'utf8'));
+      zkVerifier = Keypair.fromSecretKey(Uint8Array.from(kp)).publicKey;
+    }
   }
   const idl = JSON.parse(readFileSync(join(ROOT, 'target', 'idl', `${circuit.verifierProgram}.json`), 'utf8')) as Idl;
   const verifier: any = new Program(idl, provider);

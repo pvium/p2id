@@ -1,6 +1,7 @@
 # Build-time inputs. `P2ID_ZK_VERIFIER` is the proof-system program (the Sunspot-generated Groth16
-# verifier) that `p2id_solana_verifier` fronts; this value is the local test backend, which accepts
-# every proof. A real build sets it in the environment, which takes precedence over this file:
+# verifier) that `p2id_solana_verifier` fronts. `yarn keys:derive <environment> --sync` updates it.
+# An explicit environment variable takes precedence over this file:
 #   P2ID_ZK_VERIFIER=<sunspot program id> anchor build -p p2id_solana_verifier
+# For local mock-backend tests, override it with the test_verifier program ID from Anchor.toml.
 [env]
-P2ID_ZK_VERIFIER = "CBpmjvYYEQnMkp6HeQxG5GdJXDXkZHmqb6MRFZEQpnsg"
+P2ID_ZK_VERIFIER = "5gCc81VSNwXYqgW9NBUirPk3DamNU5ZYWFn2i6xX1Ujd"

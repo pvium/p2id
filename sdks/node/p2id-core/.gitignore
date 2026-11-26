@@ -2,5 +2,5 @@ node_modules/
 dist/
 src/p2idConstants.ts
 *.tgz
-contracts/
+ethereum/
 solana/idl/

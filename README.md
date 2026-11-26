@@ -25,21 +25,21 @@ if they remain unclaimed.
   payment URIs, and contract requirements.
 - [Set up P2ID payments](DEPLOYMENT.md): use Pvium’s reference deployment or deploy your
   own setup, connect a verifier, and fund payments.
-- [Contract documentation](contracts/README.md): contract APIs and development commands.
+- [Contract documentation](ethereum/README.md): contract APIs and development commands.
 - [Self-host the HTTP prover](http-prover/README.md): configuration, Docker, Railway, VPS
   deployment, HTTP API, and tests.
 
 ## Repository layout
 
-| Folder                     | Contents                                                                                                                   |
-| -------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `circuit/`                 | Noir circuit, witness generator, and circuit tests                                                                         |
-| `contracts/`               | Solidity verifier, vault factory, vault proxy and implementation, and policy                                               |
-| `sdks/node/p2id-core/`     | `@pvium/p2id-core`: identity hashing, vault address derivation, and bundled Solidity sources; usable in browsers             |
-| `sdks/node/p2id-verifier/` | `@pvium/p2id-verifier`: off-chain Ethereum attestation verification with a bundled verification key                          |
-| `http-prover/`             | HTTP service that generates Ethereum proofs with Barretenberg or Solana proofs with Sunspot from Privy tokens                |
-| `solana-anchor/`           | Anchor CPI wrapper that forwards Sunspot proofs to a caller-selected Solana verifier program                                 |
-| `solana-test/`             | Local Solana clients for testing the verifier directly or through the Anchor wrapper                                         |
+| Folder                     | Contents                                                                                                         |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `circuit/`                 | Noir circuit, witness generator, and circuit tests                                                               |
+| `ethereum/`                | Solidity verifier, vault factory, vault proxy and implementation, and policy                                     |
+| `sdks/node/p2id-core/`     | `@pvium/p2id-core`: identity hashing, vault address derivation, and bundled Solidity sources; usable in browsers |
+| `sdks/node/p2id-verifier/` | `@pvium/p2id-verifier`: off-chain Ethereum attestation verification with a bundled verification key              |
+| `http-prover/`             | HTTP service that generates Ethereum proofs with Barretenberg or Solana proofs with Sunspot from Privy tokens    |
+| `solana-anchor/`           | Anchor CPI wrapper that forwards Sunspot proofs to a caller-selected Solana verifier program                     |
+| `solana-test/`             | Local Solana clients for testing the verifier directly or through the Anchor wrapper                             |
 
 ## Use the SDK
 
@@ -69,7 +69,7 @@ See the [core SDK guide](sdks/node/p2id-core/README.md) for funding examples and
 ## Develop locally
 
 Use Yarn for JavaScript and TypeScript packages. The prover requires Node 22.13 or newer;
-CI uses Node 24. Install dependencies separately in `contracts/`, `sdks/node/`, and
+CI uses Node 24. Install dependencies separately in `ethereum/`, `sdks/node/`, and
 `http-prover/` with `yarn install`.
 
 Run `yarn test` in each of those directories. The SDK workspace command tests both packages.

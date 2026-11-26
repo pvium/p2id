@@ -54,18 +54,18 @@ another claim. Nested braces are rejected so type and value must come from the s
 
 ## Interface
 
-| Name | Kind | Meaning |
-| --- | --- | --- |
-| `identity_type` | public input (u8) | Id from `identity.nr`; full table in [P2ID.md](../P2ID.md#identity-types) |
-| `wallet` | public input (Field) | EVM address of the wallet slot's account; the circuit decodes the `0x…` value it read from the token and asserts equality. Zero for base58 wallets or no wallet slot |
-| `signature` | private | ES256 `r ‖ s` from the token, **normalised to low-s** (see below) |
-| `signer_x`, `signer_y` | private | P-256 public key coordinates the token was signed with |
-| `signer_x_hi/lo`, `signer_y_hi/lo` | public output | those coordinates, each split into two 128-bit halves |
-| `iat` | public output (u64) | Token issued-at: when Privy attested the claim. Freshness policy belongs to the verifier |
-| `identity_hash_hi/lo` | public output | Commitment to (type, value), split into two 128-bit halves |
-| `linked_accounts_idx` | private | index of the top-level `"linked_accounts":"` key; the account object must lie inside that string |
-| `wallet_acct_start`, `wallet_acct_end`, `wallet_type_idx`, `wallet_value_idx`, `wallet_value_len` | private | offsets of the optional wallet account (`--wallet`); all zero when unused |
-| `wallet_hash_hi/lo` | public output | `sha256(prefix ‖ 12 ‖ normalize(address))` for that wallet, or zero |
+| Name                                                                                              | Kind                 | Meaning                                                                                                                                                              |
+| ------------------------------------------------------------------------------------------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `identity_type`                                                                                   | public input (u8)    | Id from `identity.nr`; full table in [P2ID.md](../P2ID.md#identity-types)                                                                                            |
+| `wallet`                                                                                          | public input (Field) | EVM address of the wallet slot's account; the circuit decodes the `0x…` value it read from the token and asserts equality. Zero for base58 wallets or no wallet slot |
+| `signature`                                                                                       | private              | ES256 `r ‖ s` from the token, **normalised to low-s** (see below)                                                                                                    |
+| `signer_x`, `signer_y`                                                                            | private              | P-256 public key coordinates the token was signed with                                                                                                               |
+| `signer_x_hi/lo`, `signer_y_hi/lo`                                                                | public output        | those coordinates, each split into two 128-bit halves                                                                                                                |
+| `iat`                                                                                             | public output (u64)  | Token issued-at: when Privy attested the claim. Freshness policy belongs to the verifier                                                                             |
+| `identity_hash_hi/lo`                                                                             | public output        | Commitment to (type, value), split into two 128-bit halves                                                                                                           |
+| `linked_accounts_idx`                                                                             | private              | index of the top-level `"linked_accounts":"` key; the account object must lie inside that string                                                                     |
+| `wallet_acct_start`, `wallet_acct_end`, `wallet_type_idx`, `wallet_value_idx`, `wallet_value_len` | private              | offsets of the optional wallet account (`--wallet`); all zero when unused                                                                                            |
+| `wallet_hash_hi/lo`                                                                               | public output        | `sha256(prefix ‖ 12 ‖ normalize(address))` for that wallet, or zero                                                                                                  |
 
 Everything else (`signing_input`, indexes into the decoded payload, `value_len`) is private.
 Public inputs are ordered `identity_type, wallet, signer_x_hi, signer_x_lo, signer_y_hi, signer_y_lo, iat,
@@ -73,12 +73,12 @@ identity_hash_hi, identity_hash_lo, wallet_hash_hi, wallet_hash_lo` (11 fields) 
 
 ## Limits
 
-| Constant | Value | Notes |
-| --- | --- | --- |
-| `MAX_B64_LEN` | 8000 | base64url payload chars; the sample token with 8 accounts uses 2023 |
-| `MAX_PAYLOAD_LEN` | 6000 | decoded payload bytes |
-| `MAX_HEADER_B64_LEN` | 128 | Privy's header (`alg`, `typ`, `kid`) encodes to 106 |
-| `MAX_VALUE_LEN` | 128 | identity value bytes |
+| Constant             | Value | Notes                                                               |
+| -------------------- | ----- | ------------------------------------------------------------------- |
+| `MAX_B64_LEN`        | 8000  | base64url payload chars; the sample token with 8 accounts uses 2023 |
+| `MAX_PAYLOAD_LEN`    | 6000  | decoded payload bytes                                               |
+| `MAX_HEADER_B64_LEN` | 128   | Privy's header (`alg`, `typ`, `kid`) encodes to 106                 |
+| `MAX_VALUE_LEN`      | 128   | identity value bytes                                                |
 
 Circuit size with these limits: ~265k ACIR opcodes / ~855k UltraHonk gates. Cost is roughly
 linear in `MAX_B64_LEN`; shrink it if browser proving time matters and users have few wallets.
@@ -98,7 +98,7 @@ python3 scripts/gen_prover.py --jwt "$(cat test/fixtures/sample_token.jwt)" --pu
 
 nargo execute witness            # prints the public outputs; compare with the script's "expected" block
 bb prove -b target/pvium_identity.json -w target/witness.gz -t evm --write_vk --verify -o target/proof
-bb write_solidity_verifier -k target/proof/vk -o ../contracts/src/PviumZKVerifier.sol
+bb write_solidity_verifier -k target/proof/vk -o ../ethereum/src/PviumZKVerifier.sol
 ```
 
 ## Anchoring (audit fix)

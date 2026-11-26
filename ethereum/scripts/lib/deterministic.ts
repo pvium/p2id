@@ -57,7 +57,7 @@ export interface StackAddresses {
 
 export const CURRENT_SCHEME = 'pvium.vault.v1';
 
-/** One circuit version's contracts (contracts/releases.json): fully qualified artifact names and the vk sha256. */
+/** One circuit version's contracts (ethereum/releases.json): fully qualified artifact names and the vk sha256. */
 export interface CircuitRelease {
   vkHash: string;
   /** The generated Honk verifier with this version's vk compiled in, e.g. src/PviumZKVerifierV2.sol:PviumZKVerifierV2. */
@@ -82,23 +82,28 @@ export function circuitRelease(circuitVersion: number): CircuitRelease {
   const entry = releases().circuits[String(circuitVersion)];
   if (!entry) {
     throw new Error(
-      `circuit version ${circuitVersion} has no entry in contracts/releases.json: add its vk sha256 and its own ` +
+      `circuit version ${circuitVersion} has no entry in ethereum/releases.json: add its vk sha256 and its own ` +
         `PviumZKVerifierV${circuitVersion} / PviumVerifierV${circuitVersion} sources (released files are never edited)`,
     );
   }
   return entry;
 }
-/** Every circuit version in contracts/releases.json, ascending. */
+/** Every circuit version in ethereum/releases.json, ascending. */
 export function circuitVersions(): number[] {
-  return Object.keys(releases().circuits).map(Number).sort((a, b) => a - b);
+  return Object.keys(releases().circuits)
+    .map(Number)
+    .sort((a, b) => a - b);
 }
 /** The circuit version a scheme's factory was deployed with: part of the factory address. */
 export function stackCircuitVersion(scheme: string): number {
   const v = releases().stackCircuit[scheme];
-  if (v === undefined) throw new Error(`contracts/releases.json has no stackCircuit for scheme ${scheme}`);
+  if (v === undefined)
+    throw new Error(
+      `ethereum/releases.json has no stackCircuit for scheme ${scheme}`,
+    );
   return v;
 }
-/** Owner-managed settings an environment's chains should have now (contracts/releases.json: environments). */
+/** Owner-managed settings an environment's chains should have now (ethereum/releases.json: environments). */
 export interface EnvironmentSettings {
   alphaAttester?: string;
   constraintSigners?: string[];
@@ -108,7 +113,9 @@ export function environmentSettings(environment: string): EnvironmentSettings {
   return releases().environments?.[environment] ?? {};
 }
 /** Vault implementations released after the factory's built-in P2IDVault, in order. */
-export function vaultImplementationReleases(scheme: string): VaultImplementationRelease[] {
+export function vaultImplementationReleases(
+  scheme: string,
+): VaultImplementationRelease[] {
   return releases().vaultImplementations?.[scheme] ?? [];
 }
 
@@ -142,9 +149,12 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * Whether `address` has code, tolerating load-balanced RPCs (e.g. the public Base endpoints) whose
  * backends lag behind each other: "no code" is only believed after several reads agree.
  */
-export async function hasCode(address: string, opts: { reads?: number; delayMs?: number } = {}): Promise<boolean> {
+export async function hasCode(
+  address: string,
+  opts: { reads?: number; delayMs?: number } = {},
+): Promise<boolean> {
   // The in-process Hardhat chain has a single consistent state: one read is exact.
-  const reads = network.name === 'hardhat' ? 1 : (opts.reads ?? 3);
+  const reads = network.name === 'hardhat' ? 1 : opts.reads ?? 3;
   for (let i = 0; i < reads; i++) {
     if ((await ethers.provider.getCode(address)) !== '0x') return true;
     if (i < reads - 1) await sleep(opts.delayMs ?? 1500);
@@ -176,7 +186,10 @@ export async function deployDeterministic(
     log(`${name.padEnd(14)} ${address}  already deployed, skipped`);
     return address;
   }
-  const request = { to: DETERMINISTIC_DEPLOYER, data: ethers.concat([salt, initCode]) };
+  const request = {
+    to: DETERMINISTIC_DEPLOYER,
+    data: ethers.concat([salt, initCode]),
+  };
   try {
     await signer.call(request);
   } catch (err) {
@@ -186,16 +199,21 @@ export async function deployDeterministic(
       log(`${name.padEnd(14)} ${address}  already deployed, skipped`);
       return address;
     }
-    throw new Error(`deploying ${name} to ${address} would revert: ${(err as Error).message}`);
+    throw new Error(
+      `deploying ${name} to ${address} would revert: ${(err as Error).message}`,
+    );
   }
   const tx = await signer.sendTransaction(request);
   log(`${name.padEnd(14)} ${address}  deploying, tx ${tx.hash}`);
   const receipt = await tx.wait();
-  if (!receipt || receipt.status !== 1) throw new Error(`deploying ${name}: transaction ${tx.hash} reverted`);
+  if (!receipt || receipt.status !== 1)
+    throw new Error(`deploying ${name}: transaction ${tx.hash} reverted`);
   // A successful proxy call means the contract exists (the proxy reverts otherwise). Wait until the
   // RPC shows it, so later steps and the final checks read consistent state.
   if (!(await hasCode(address, { reads: 20, delayMs: 3000 }))) {
-    throw new Error(`deploying ${name}: ${tx.hash} succeeded but ${address} still shows no code after 60s; re-run to continue`);
+    throw new Error(
+      `deploying ${name}: ${tx.hash} succeeded but ${address} still shows no code after 60s; re-run to continue`,
+    );
   }
   log(`${name.padEnd(14)} ${address}  deployed`);
   return address;
@@ -229,15 +247,29 @@ export async function deployStack(
   log?: DeployLog,
 ): Promise<StackAddresses> {
   if (signer !== null) await ensureDeterministicDeployer();
-  if (!/^pvium\.vault\.v[1-9][0-9]*$/.test(p.scheme)) throw new Error(`bad scheme "${p.scheme}" (expected pvium.vault.vN)`);
+  if (!/^pvium\.vault\.v[1-9][0-9]*$/.test(p.scheme))
+    throw new Error(`bad scheme "${p.scheme}" (expected pvium.vault.vN)`);
   const nsHash = ethers.id(p.scheme);
   const salt = p.salt ?? nsHash;
-  const { relationsLib, transcriptLib, zkVerifier, pviumIdentity, pviumVerifier } = await deployVerifierSet(p, signer, log);
+  const {
+    relationsLib,
+    transcriptLib,
+    zkVerifier,
+    pviumIdentity,
+    pviumVerifier,
+  } = await deployVerifierSet(p, signer, log);
   // The launch policy binds once to its factory (setFactory), so a policy must never be shared
   // by two factory builds. Its salt therefore commits to the factory's creation code: any factory
   // change yields a fresh policy (and so a fresh factory), still identical on every chain.
-  const factoryCodeHash = ethers.keccak256((await ethers.getContractFactory('PviumP2IdVaultFactory')).bytecode);
-  const policySalt = ethers.keccak256(ethers.AbiCoder.defaultAbiCoder().encode(['bytes32', 'bytes32'], [salt, factoryCodeHash]));
+  const factoryCodeHash = ethers.keccak256(
+    (await ethers.getContractFactory('PviumP2IdVaultFactory')).bytecode,
+  );
+  const policySalt = ethers.keccak256(
+    ethers.AbiCoder.defaultAbiCoder().encode(
+      ['bytes32', 'bytes32'],
+      [salt, factoryCodeHash],
+    ),
+  );
   const policy = await deployDeterministic(
     await initCodeOf('PviumP2IDPolicy', [p.owner, [pviumVerifier]]),
     policySalt,
@@ -253,7 +285,9 @@ export async function deployStack(
       p.policyChangeDelay,
       p.minRefundWindow,
       p.maxRefundWindow,
-      !p.alphaAttester || p.alphaAttester === ethers.ZeroAddress ? p.owner : p.alphaAttester,
+      !p.alphaAttester || p.alphaAttester === ethers.ZeroAddress
+        ? p.owner
+        : p.alphaAttester,
     ]),
     salt,
     signer,
@@ -272,7 +306,16 @@ export async function deployStack(
 }
 
 /** What a circuit version's verifier set needs: a subset of StackParams. */
-export type VerifierSetParams = Pick<StackParams, 'scheme' | 'salt' | 'owner' | 'circuitVersion' | 'vkHash' | 'signerKeys' | 'attester'>;
+export type VerifierSetParams = Pick<
+  StackParams,
+  | 'scheme'
+  | 'salt'
+  | 'owner'
+  | 'circuitVersion'
+  | 'vkHash'
+  | 'signerKeys'
+  | 'attester'
+>;
 
 export interface VerifierSetAddresses {
   relationsLib: string;
@@ -295,7 +338,8 @@ export async function deployVerifierSet(
   log?: DeployLog,
 ): Promise<VerifierSetAddresses> {
   if (signer !== null) await ensureDeterministicDeployer();
-  if (!/^pvium\.vault\.v[1-9][0-9]*$/.test(p.scheme)) throw new Error(`bad scheme "${p.scheme}" (expected pvium.vault.vN)`);
+  if (!/^pvium\.vault\.v[1-9][0-9]*$/.test(p.scheme))
+    throw new Error(`bad scheme "${p.scheme}" (expected pvium.vault.vN)`);
   const salt = p.salt ?? ethers.id(p.scheme);
   // Each generated verifier file declares the same library names, so they are addressed by file.
   const release = circuitRelease(p.circuitVersion);
@@ -336,80 +380,181 @@ export async function deployVerifierSet(
     { name: 'pviumIdentity', log },
   );
   const pviumVerifier = await deployDeterministic(
-    await initCodeOf(release.verifier, [pviumIdentity, p.owner, p.attester === ethers.ZeroAddress ? [] : [p.attester]]),
+    await initCodeOf(release.verifier, [
+      pviumIdentity,
+      p.owner,
+      p.attester === ethers.ZeroAddress ? [] : [p.attester],
+    ]),
     salt,
     signer,
     { name: 'pviumVerifier', log },
   );
-  return { relationsLib, transcriptLib, zkVerifier, pviumIdentity, pviumVerifier };
+  return {
+    relationsLib,
+    transcriptLib,
+    zkVerifier,
+    pviumIdentity,
+    pviumVerifier,
+  };
 }
 
 /** For each contract of the stack, whether it already has code on the current network. */
-export async function stackStatus(a: StackAddresses): Promise<Record<keyof StackAddresses, boolean>> {
+export async function stackStatus(
+  a: StackAddresses,
+): Promise<Record<keyof StackAddresses, boolean>> {
   const out = {} as Record<keyof StackAddresses, boolean>;
-  for (const [name, address] of Object.entries(a) as [keyof StackAddresses, string][]) out[name] = await hasCode(address, { reads: 2 });
+  for (const [name, address] of Object.entries(a) as [
+    keyof StackAddresses,
+    string,
+  ][])
+    out[name] = await hasCode(address, { reads: 2 });
   return out;
 }
 
 /** Canonical order for a key set (by x, then y), so JWKS ordering can never move an address. */
-export function sortedKeys(keys: { x: bigint; y: bigint }[]): { x: bigint; y: bigint }[] {
-  if (keys.length === 0) throw new Error('at least one Privy signing key is required');
-  return [...keys].sort((a, b) => (a.x === b.x ? (a.y < b.y ? -1 : a.y > b.y ? 1 : 0) : a.x < b.x ? -1 : 1));
+export function sortedKeys(
+  keys: { x: bigint; y: bigint }[],
+): { x: bigint; y: bigint }[] {
+  if (keys.length === 0)
+    throw new Error('at least one Privy signing key is required');
+  return [...keys].sort((a, b) =>
+    a.x === b.x ? (a.y < b.y ? -1 : a.y > b.y ? 1 : 0) : a.x < b.x ? -1 : 1,
+  );
 }
 
 /** Read back a deployed stack and fail loudly if anything is not wired as configured. */
-export async function checkStack(p: StackParams, a: StackAddresses, expectedVaultInitCodeHash?: string): Promise<void> {
+export async function checkStack(
+  p: StackParams,
+  a: StackAddresses,
+  expectedVaultInitCodeHash?: string,
+): Promise<void> {
   const fail = (what: string, got: unknown, want: unknown) => {
-    throw new Error(`deployment check failed: ${what} is ${got}, expected ${want}`);
+    throw new Error(
+      `deployment check failed: ${what} is ${got}, expected ${want}`,
+    );
   };
   const same = (x: string, y: string) => x.toLowerCase() === y.toLowerCase();
   for (const [name, address] of Object.entries(a)) {
     if (name === 'baseImplementation') continue; // checked below, with its binding and registration
-    if (!(await hasCode(address, { reads: 5, delayMs: 2000 }))) fail(`${name} code at ${address}`, 'empty', 'deployed');
+    if (!(await hasCode(address, { reads: 5, delayMs: 2000 })))
+      fail(`${name} code at ${address}`, 'empty', 'deployed');
   }
   const identity = await ethers.getContractAt('PviumIdentity', a.pviumIdentity);
-  if (!same(await identity.verifier(), a.zkVerifier)) fail('PviumIdentity.verifier', await identity.verifier(), a.zkVerifier);
-  if ((await identity.vkHash()).toLowerCase() !== p.vkHash.toLowerCase()) fail('vkHash', await identity.vkHash(), p.vkHash);
-  if (Number(await identity.circuitVersion()) !== p.circuitVersion) fail('circuitVersion', await identity.circuitVersion(), p.circuitVersion);
-  if (!same(await identity.owner(), p.owner)) fail('PviumIdentity.owner', await identity.owner(), p.owner);
-  if (Number(await identity.signerKeyCount()) !== p.signerKeys.length) fail('signerKeyCount', await identity.signerKeyCount(), p.signerKeys.length);
-  for (const k of p.signerKeys) if (!(await identity.isSignerKey(k.x, k.y))) fail(`signer key ${k.x.toString(16).slice(0, 12)}…`, 'missing', 'accepted');
-  const verifier = await ethers.getContractAt(circuitRelease(p.circuitVersion).verifier, a.pviumVerifier);
-  if (!same(await verifier.pviumIdentity(), a.pviumIdentity)) fail('PviumVerifier.pviumIdentity', await verifier.pviumIdentity(), a.pviumIdentity);
-  if (!same(await verifier.owner(), p.owner)) fail('PviumVerifier.owner', await verifier.owner(), p.owner);
+  if (!same(await identity.verifier(), a.zkVerifier))
+    fail('PviumIdentity.verifier', await identity.verifier(), a.zkVerifier);
+  if ((await identity.vkHash()).toLowerCase() !== p.vkHash.toLowerCase())
+    fail('vkHash', await identity.vkHash(), p.vkHash);
+  if (Number(await identity.circuitVersion()) !== p.circuitVersion)
+    fail('circuitVersion', await identity.circuitVersion(), p.circuitVersion);
+  if (!same(await identity.owner(), p.owner))
+    fail('PviumIdentity.owner', await identity.owner(), p.owner);
+  if (Number(await identity.signerKeyCount()) !== p.signerKeys.length)
+    fail(
+      'signerKeyCount',
+      await identity.signerKeyCount(),
+      p.signerKeys.length,
+    );
+  for (const k of p.signerKeys)
+    if (!(await identity.isSignerKey(k.x, k.y)))
+      fail(
+        `signer key ${k.x.toString(16).slice(0, 12)}…`,
+        'missing',
+        'accepted',
+      );
+  const verifier = await ethers.getContractAt(
+    circuitRelease(p.circuitVersion).verifier,
+    a.pviumVerifier,
+  );
+  if (!same(await verifier.pviumIdentity(), a.pviumIdentity))
+    fail(
+      'PviumVerifier.pviumIdentity',
+      await verifier.pviumIdentity(),
+      a.pviumIdentity,
+    );
+  if (!same(await verifier.owner(), p.owner))
+    fail('PviumVerifier.owner', await verifier.owner(), p.owner);
   const expectSigner = p.attester !== ethers.ZeroAddress;
   // With no registered signer the circuit v1 PviumVerifier reports false and later ones true (a payer may name any signer).
-  if (expectSigner && !(await verifier.supportsConstraints())) fail('PviumVerifier.supportsConstraints', false, true);
-  if (expectSigner && !(await verifier.isConstraintSigner(p.attester))) fail('constraintSigner', 'not registered', p.attester);
-  const factory = await ethers.getContractAt('PviumP2IdVaultFactory', a.factory);
-  const expectedAlphaAttester = !p.alphaAttester || p.alphaAttester === ethers.ZeroAddress ? p.owner : p.alphaAttester;
+  if (expectSigner && !(await verifier.supportsConstraints()))
+    fail('PviumVerifier.supportsConstraints', false, true);
+  if (expectSigner && !(await verifier.isConstraintSigner(p.attester)))
+    fail('constraintSigner', 'not registered', p.attester);
+  const factory = await ethers.getContractAt(
+    'PviumP2IdVaultFactory',
+    a.factory,
+  );
+  const expectedAlphaAttester =
+    !p.alphaAttester || p.alphaAttester === ethers.ZeroAddress
+      ? p.owner
+      : p.alphaAttester;
   if (!(await factory.isAlpha(p.vkHash))) fail('factory.isAlpha', false, true);
-  if (!same(await factory.defaultAttester(), expectedAlphaAttester)) fail('factory.defaultAttester', await factory.defaultAttester(), expectedAlphaAttester);
-  if (!same(await factory.owner(), p.owner)) fail('factory.owner', await factory.owner(), p.owner);
-  if (!same(await factory.defaultVerifier(), a.pviumVerifier)) fail('factory.defaultVerifier', await factory.defaultVerifier(), a.pviumVerifier);
-  if (!same(await factory.policy(), a.policy)) fail('factory.policy', await factory.policy(), a.policy);
-  const policyFactory: string = await (await ethers.getContractAt('PviumP2IDPolicy', a.policy)).factory();
-  if (policyFactory !== ethers.ZeroAddress && !same(policyFactory, a.factory)) fail('policy.factory', policyFactory, a.factory);
+  if (!same(await factory.defaultAttester(), expectedAlphaAttester))
+    fail(
+      'factory.defaultAttester',
+      await factory.defaultAttester(),
+      expectedAlphaAttester,
+    );
+  if (!same(await factory.owner(), p.owner))
+    fail('factory.owner', await factory.owner(), p.owner);
+  if (!same(await factory.defaultVerifier(), a.pviumVerifier))
+    fail(
+      'factory.defaultVerifier',
+      await factory.defaultVerifier(),
+      a.pviumVerifier,
+    );
+  if (!same(await factory.policy(), a.policy))
+    fail('factory.policy', await factory.policy(), a.policy);
+  const policyFactory: string = await (
+    await ethers.getContractAt('PviumP2IDPolicy', a.policy)
+  ).factory();
+  if (policyFactory !== ethers.ZeroAddress && !same(policyFactory, a.factory))
+    fail('policy.factory', policyFactory, a.factory);
   const baseAddress = await factory.initialImplementation();
-  const expectedBase = a.baseImplementation ?? ethers.getCreateAddress({ from: a.factory, nonce: 1 });
-  if (!same(baseAddress, expectedBase)) fail('factory.initialImplementation', baseAddress, expectedBase);
-  if (!(await hasCode(baseAddress))) fail('base implementation code', 'empty', 'deployed');
+  const expectedBase =
+    a.baseImplementation ??
+    ethers.getCreateAddress({ from: a.factory, nonce: 1 });
+  if (!same(baseAddress, expectedBase))
+    fail('factory.initialImplementation', baseAddress, expectedBase);
+  if (!(await hasCode(baseAddress)))
+    fail('base implementation code', 'empty', 'deployed');
   const base = await ethers.getContractAt('P2IDVault', baseAddress);
-  if (!same(await base.factory(), a.factory)) fail('base implementation factory', await base.factory(), a.factory);
-  if (!(await factory.isRegisteredImplementation(baseAddress))) fail('base implementation registered', false, true);
+  if (!same(await base.factory(), a.factory))
+    fail('base implementation factory', await base.factory(), a.factory);
+  if (!(await factory.isRegisteredImplementation(baseAddress)))
+    fail('base implementation registered', false, true);
   const currentBase = await factory.baseImplementation();
-  if (!(await hasCode(currentBase))) fail('current default implementation code', 'empty', 'deployed');
-  if (!(await factory.isRegisteredImplementation(currentBase))) fail('current default registered', false, true);
+  if (!(await hasCode(currentBase)))
+    fail('current default implementation code', 'empty', 'deployed');
+  if (!(await factory.isRegisteredImplementation(currentBase)))
+    fail('current default registered', false, true);
   const current = await ethers.getContractAt('P2IDVault', currentBase);
-  if (!same(await current.factory(), a.factory)) fail('current default factory', await current.factory(), a.factory);
-  if (Number(await factory.minRefundWindow()) !== p.minRefundWindow) fail('minRefundWindow', await factory.minRefundWindow(), p.minRefundWindow);
-  if (Number(await factory.maxRefundWindow()) !== p.maxRefundWindow) fail('maxRefundWindow', await factory.maxRefundWindow(), p.maxRefundWindow);
+  if (!same(await current.factory(), a.factory))
+    fail('current default factory', await current.factory(), a.factory);
+  if (Number(await factory.minRefundWindow()) !== p.minRefundWindow)
+    fail('minRefundWindow', await factory.minRefundWindow(), p.minRefundWindow);
+  if (Number(await factory.maxRefundWindow()) !== p.maxRefundWindow)
+    fail('maxRefundWindow', await factory.maxRefundWindow(), p.maxRefundWindow);
   const policy = await ethers.getContractAt('PviumP2IDPolicy', a.policy);
-  if (!same(await policy.owner(), p.owner)) fail('policy.owner', await policy.owner(), p.owner);
-  if (!(await policy.isVerifierAllowed(a.pviumVerifier))) fail('default verifier allowed by the policy', false, true);
-  if ((await factory.nsHash()) !== ethers.id(p.scheme)) fail('factory.nsHash', await factory.nsHash(), ethers.id(p.scheme));
-  if (Number(await factory.policyChangeDelay()) !== p.policyChangeDelay) fail('policyChangeDelay', await factory.policyChangeDelay(), p.policyChangeDelay);
-  if (expectedVaultInitCodeHash && (await factory.initCodeHash()) !== expectedVaultInitCodeHash) {
-    fail('factory.initCodeHash', await factory.initCodeHash(), `${expectedVaultInitCodeHash} (sdks/node/p2id-core/src/p2id.json)`);
+  if (!same(await policy.owner(), p.owner))
+    fail('policy.owner', await policy.owner(), p.owner);
+  if (!(await policy.isVerifierAllowed(a.pviumVerifier)))
+    fail('default verifier allowed by the policy', false, true);
+  if ((await factory.nsHash()) !== ethers.id(p.scheme))
+    fail('factory.nsHash', await factory.nsHash(), ethers.id(p.scheme));
+  if (Number(await factory.policyChangeDelay()) !== p.policyChangeDelay)
+    fail(
+      'policyChangeDelay',
+      await factory.policyChangeDelay(),
+      p.policyChangeDelay,
+    );
+  if (
+    expectedVaultInitCodeHash &&
+    (await factory.initCodeHash()) !== expectedVaultInitCodeHash
+  ) {
+    fail(
+      'factory.initCodeHash',
+      await factory.initCodeHash(),
+      `${expectedVaultInitCodeHash} (sdks/node/p2id-core/src/p2id.json)`,
+    );
   }
 }

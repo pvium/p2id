@@ -1,6 +1,6 @@
 // Embed the P2ID address schemes from src/p2id.json into src/p2idConstants.ts. Run by `yarn build`;
 // the .ts is generated and gitignored. When the Hardhat artifact for the vault proxy is present
-// (../../contracts compiled), the CURRENT scheme's init code hash is recomputed from it and must
+// (../../ethereum compiled), the CURRENT scheme's init code hash is recomputed from it and must
 // match. `--update` rewrites it, but only while that scheme is unreleased (no production factory
 // recorded): a released scheme is frozen, and a vault change then needs a new scheme entry with its own salt name (e.g. pvium.vault.v2).
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
@@ -86,8 +86,13 @@ if (process.argv.includes('--update') && existsSync(deployments)) {
     if (frozen && sol.factories.production.address !== factory.address) {
       throw new Error(`${file}: production factory ${factory.address} differs from the recorded ${sol.factories.production.address}; a new stack is a new scheme entry`);
     }
+    // The program ids are part of the scheme. Until a production factory is recorded they follow the
+    // deployment (the sandbox stack is redeployed freely); afterwards a different id is a new scheme.
     for (const [name, want] of [['router', rec.programs.router], ['policy', rec.programs.policy], ['implementation', rec.programs.implementation]]) {
-      if (sol.programs[name] !== want) throw new Error(`${file}: ${name} program ${want} differs from ${sol.programs[name]} in src/p2id.json`);
+      if (sol.programs[name] === want) continue;
+      if (sol.factories.production !== null) throw new Error(`${file}: ${name} program ${want} differs from ${sol.programs[name]} in src/p2id.json; a new stack is a new scheme entry`);
+      console.log(`updated ${cfg.current} solana.programs.${name} ${sol.programs[name]} -> ${want}`);
+      sol.programs[name] = want;
     }
     sol.factories[env] = factory;
     sol.verifiers[env][String(rec.config.circuitVersion)] = verifier;
@@ -120,7 +125,7 @@ for (const [name, s] of Object.entries(cfg.schemes)) {
   }
 }
 
-const artifact = join(root, '..', '..', '..', 'contracts', 'artifacts', 'src', 'PviumP2IDVaultProxy.sol', 'PviumP2IDVaultProxy.json');
+const artifact = join(root, '..', '..', '..', 'ethereum', 'artifacts', 'src', 'PviumP2IDVaultProxy.sol', 'PviumP2IDVaultProxy.json');
 if (existsSync(artifact)) {
   const { bytecode } = JSON.parse(readFileSync(artifact, 'utf8'));
   const hex = bytecode.startsWith('0x') ? bytecode.slice(2) : bytecode;

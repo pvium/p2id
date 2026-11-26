@@ -78,7 +78,9 @@ const to = p2idAddress({
 });
 
 // the native coin (BNB on BNB Chain, ETH on Base)
-await (await signer.sendTransaction({ to, value: ethers.parseEther('0.1') })).wait();
+await (
+  await signer.sendTransaction({ to, value: ethers.parseEther('0.1') })
+).wait();
 
 // an ERC-20
 const USDC = '0x…'; // the token's contract address on the chain you are paying on
@@ -122,9 +124,11 @@ const ref = ethers.id('invoice-42'); // application-defined bytes32; ethers.Zero
 
 // Native coin: use the zero address for `token` and send `amount` as transaction value.
 const amount = ethers.parseEther('0.1');
-await (await factory.fund(id, ethers.ZeroAddress, amount, NO_CONSTRAINT, WEEK, ref, {
-  value: amount,
-})).wait();
+await (
+  await factory.fund(id, ethers.ZeroAddress, amount, NO_CONSTRAINT, WEEK, ref, {
+    value: amount,
+  })
+).wait();
 
 // an ERC-20: approve the factory, then fund
 const USDC = '0x…'; // the token's contract address
@@ -134,7 +138,9 @@ const usdc = new ethers.Contract(
   signer,
 );
 await (await usdc.approve(await factory.getAddress(), 25_000_000n)).wait();
-const receipt = await (await factory.fund(id, USDC, 25_000_000n, NO_CONSTRAINT, WEEK, ref)).wait();
+const receipt = await (
+  await factory.fund(id, USDC, 25_000_000n, NO_CONSTRAINT, WEEK, ref)
+).wait();
 ```
 
 `fund` records the factory's default verifier for the deposit. Read the vault's `Funded`
@@ -168,9 +174,17 @@ Use `fundWith` to select an approved verifier for that payment. With the ERC-20 
 and factory from the example above:
 
 ```ts
-const receipt = await (await factory.fundWith(
-  id, verifierAddress, USDC, 25_000_000n, NO_CONSTRAINT, WEEK, ref,
-)).wait();
+const receipt = await (
+  await factory.fundWith(
+    id,
+    verifierAddress,
+    USDC,
+    25_000_000n,
+    NO_CONSTRAINT,
+    WEEK,
+    ref,
+  )
+).wait();
 ```
 
 For native currency, pass `ethers.ZeroAddress` for the token and provide `{ value: amount }`.
@@ -206,21 +220,21 @@ identity provider: it does not accept provider-specific account types (e.g. Priv
 these to the numeric IDs used in identity hashes, and `identityTypeName` gives the P2ID name of an
 ID. The type table is append-only.
 
-| `IdentityType.`       |  Id | Value            | Example                 | Lowercased |
-| --------------------- | --: | ---------------- | ----------------------- | :--------: |
-| `Email`               |   0 | address          | `you@example.com`       |    yes     |
-| `Phone`               |   1 | E.164 number     | `+15551234567`          |     no     |
-| `Google` (deprecated)              |   2 | email            | `you@gmail.com`         |    yes     |
-| `X` (alias `Twitter`) |   3 | username, no `@` | `jack`                  |    yes     |
-| `Discord`             |   4 | username + discriminator | `wumpus#0`       |    yes     |
-| `Github`              |   5 | username         | `octocat`               |    yes     |
-| `Linkedin` (deprecated)            |   6 | email            | `you@example.com`       |    yes     |
-| `Apple` (deprecated)               |   7 | email            | `you@icloud.com`        |    yes     |
-| `Telegram`            |   8 | username         | `durov`                 |    yes     |
-| `Tiktok`              |   9 | username         | `charlidamelio`         |    yes     |
-| `Instagram`           |  10 | username         | `instagram`             |    yes     |
-| `Farcaster`           |  11 | username         | `dwr`                   |    yes     |
-| `Wallet`              |  12 | address          | `0xA01b…0f98` or base58 | only `0x…` |
+| `IdentityType.`         |  Id | Value                    | Example                 | Lowercased |
+| ----------------------- | --: | ------------------------ | ----------------------- | :--------: |
+| `Email`                 |   0 | address                  | `you@example.com`       |    yes     |
+| `Phone`                 |   1 | E.164 number             | `+15551234567`          |     no     |
+| `Google` (deprecated)   |   2 | email                    | `you@gmail.com`         |    yes     |
+| `X` (alias `Twitter`)   |   3 | username, no `@`         | `jack`                  |    yes     |
+| `Discord`               |   4 | username + discriminator | `wumpus#0`              |    yes     |
+| `Github`                |   5 | username                 | `octocat`               |    yes     |
+| `Linkedin` (deprecated) |   6 | email                    | `you@example.com`       |    yes     |
+| `Apple` (deprecated)    |   7 | email                    | `you@icloud.com`        |    yes     |
+| `Telegram`              |   8 | username                 | `durov`                 |    yes     |
+| `Tiktok`                |   9 | username                 | `charlidamelio`         |    yes     |
+| `Instagram`             |  10 | username                 | `instagram`             |    yes     |
+| `Farcaster`             |  11 | username                 | `dwr`                   |    yes     |
+| `Wallet`                |  12 | address                  | `0xA01b…0f98` or base58 | only `0x…` |
 
 `Google` (2), `Linkedin` (6), and `Apple` (7) are deprecated. `identityHash`, `p2idAddress`,
 and `resolveIdentityType` reject their enum values and string names with an error directing
@@ -301,13 +315,22 @@ IDLs, so with [`@coral-xyz/anchor`](https://www.npmjs.com/package/@coral-xyz/anc
 ```ts
 import { Program, AnchorProvider, BN } from '@coral-xyz/anchor';
 import { PublicKey } from '@solana/web3.js';
-import { identityHash, fundAccounts, p2idAddress, IdentityType } from '@pvium/p2id-core/solana';
+import {
+  identityHash,
+  fundAccounts,
+  p2idAddress,
+  IdentityType,
+} from '@pvium/p2id-core/solana';
 import vaultIdl from '@pvium/p2id-core/solana/idl/p2id_vault.json' with { type: 'json' };
 import routerIdl from '@pvium/p2id-core/solana/idl/p2id_router.json' with { type: 'json' };
 
 const provider = AnchorProvider.env();
 const id = identityHash(IdentityType.Email, 'you@example.com');
-const vault = p2idAddress({ identityType: IdentityType.Email, identityValue: 'you@example.com', environment: 'sandbox' });
+const vault = p2idAddress({
+  identityType: IdentityType.Email,
+  identityValue: 'you@example.com',
+  environment: 'sandbox',
+});
 
 // The deposit id is the vault's next sequence number: 0 while the vault does not exist yet.
 const router = new Program(routerIdl as any, provider);
@@ -315,7 +338,10 @@ const state = await router.account.vault.fetchNullable(new PublicKey(vault));
 const depositId = state ? state.depositSeq.toNumber() : 0;
 
 const { program, accounts } = fundAccounts({
-  identityHash: id, depositId, funder: provider.publicKey.toBase58(), environment: 'sandbox',
+  identityHash: id,
+  depositId,
+  funder: provider.publicKey.toBase58(),
+  environment: 'sandbox',
 });
 const WEEK = 7 * 24 * 3600;
 const NO_CONSTRAINT = new Array(32).fill(0);
@@ -358,8 +384,8 @@ Compute `identityHash` off chain and pass it to `verifyIdentity` to keep the raw
 value out of the call's arguments:
 
 ```solidity
-import {IPviumIdentity} from "@pvium/p2id-core/contracts/interfaces/IPviumIdentity.sol";
-import {P2IDHash} from "@pvium/p2id-core/contracts/lib/P2IDHash.sol";
+import {IPviumIdentity} from "@pvium/p2id-core/ethereum/interfaces/IPviumIdentity.sol";
+import {P2IDHash} from "@pvium/p2id-core/ethereum/lib/P2IDHash.sol";
 
 contract PayByEmail {
     IPviumIdentity public immutable pvium;
@@ -399,13 +425,13 @@ hashing a non-EVM identifier does not enable an EVM vault to transfer assets to 
 
 ## Exports
 
-| Export                                                                             | Purpose                                                                                        |
-| ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `p2idAddress(input)`                                                               | Derive a vault address from `{ identityType, identityValue, environment?, scheme?, factory? }` |
-| `p2idAddressForHash(hash, opts?)`                                                  | Derive a vault address from an identity hash                                                   |
-| `identityHash(type, value, scheme?)`                                               | Compute the identity commitment used as the vault salt                                         |
-| `P2ID_SCHEME`, `P2ID_SCHEMES`, `p2idScheme(name?)`                                 | Read address-scheme constants                                                                  |
-| `IdentityType`, `IdentityTypeName`, `IDENTITY_TYPE_BY_NAME`, `resolveIdentityType` | Identity type IDs and name mappings (including reserved deprecated types)                                                            |
-| `isDeprecatedIdentityType(type)` | Check whether a type is deprecated for new identity generation |
-| `completeIdentityValue`, `normalizeIdentityValue`, `isCaseInsensitive`, `HASH_PREFIX`                       | Identity normalisation rules and hash prefix                                                   |
-| `checksumAddress`, `toHex`                                                         | Address checksum and hexadecimal encoding                                                      |
+| Export                                                                                | Purpose                                                                                        |
+| ------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `p2idAddress(input)`                                                                  | Derive a vault address from `{ identityType, identityValue, environment?, scheme?, factory? }` |
+| `p2idAddressForHash(hash, opts?)`                                                     | Derive a vault address from an identity hash                                                   |
+| `identityHash(type, value, scheme?)`                                                  | Compute the identity commitment used as the vault salt                                         |
+| `P2ID_SCHEME`, `P2ID_SCHEMES`, `p2idScheme(name?)`                                    | Read address-scheme constants                                                                  |
+| `IdentityType`, `IdentityTypeName`, `IDENTITY_TYPE_BY_NAME`, `resolveIdentityType`    | Identity type IDs and name mappings (including reserved deprecated types)                      |
+| `isDeprecatedIdentityType(type)`                                                      | Check whether a type is deprecated for new identity generation                                 |
+| `completeIdentityValue`, `normalizeIdentityValue`, `isCaseInsensitive`, `HASH_PREFIX` | Identity normalisation rules and hash prefix                                                   |
+| `checksumAddress`, `toHex`                                                            | Address checksum and hexadecimal encoding                                                      |

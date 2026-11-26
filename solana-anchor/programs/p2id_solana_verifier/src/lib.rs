@@ -14,7 +14,7 @@ pub mod witness;
 
 use witness::{parse_public_witness, PW_LEN};
 
-declare_id!("9WgYShJxUEFQmjird4GKbauXtq32uXbrRD8EdTcjoBxj");
+declare_id!("7DoBQ1FcAXB8rf3PVXo5gikJCw4mamQswKXDeVE8rBYu");
 
 /// The proof-system program: a Sunspot-generated Groth16 verifier for the P2ID circuit.
 pub const ZK_VERIFIER: Pubkey =

@@ -103,20 +103,20 @@ cannot be caught), which is why the policy only books receipts, and a zero fee s
 
 ## Claims, owner cache and refunds (EVM P2IDVault parity)
 
-| EVM | Solana (program) |
-| --- | --- |
+| EVM                                                                           | Solana (program)                                                                                                                                                                                                                                         |
+| ----------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `fund`, `fundWith(verifier, …)`, `fundWithRefunder(…, refundAddress, …)` (V2) | one instruction per asset: `fund_sol` / `fund_token(amount, constraint, refund_window, refunder?, reference)` (implementation); the verifier is the `verifier_config` account passed (the default's for plain funding), `refunder` null means the funder |
-| `refreshProof(verifier, proof)` | `refresh_proof(proof)` with any allowed `verifier_program` (implementation); the verifier's accounts follow as remaining accounts |
-| `refreshProofAndSweep` / `sweepDeposits` | `claim_sol` / `claim_token(id, proof)` (implementation) |
-| `sweep` (proofless, cached owner) | the same instructions with an empty `proof` |
-| `sweepBucket(…, Constraint{commitment, signature}, …)` | the same instructions, preceded in the transaction by an Ed25519 instruction (see below) |
-| `*WithAttestation(…, AlphaAttestation)` / `executeWithAttestation` | the same instructions, preceded by the alpha attester's Ed25519 instruction while the verifier is in alpha (see below) |
-| `setAlpha(vkHash, enabled)`, `setDefaultAttester` | `set_alpha(enabled)` per verifier config, `set_alpha_attester` on the factory |
-| `sweepUntracked(token)` | `sweep_untracked_sol` / `sweep_untracked_token` (router) |
-| `refund(depositId)` | `refund_sol` / `refund_token(id)` (router) |
-| (none: consumed deposits cost nothing to keep on EVM) | `close_deposit(id)` (router, permissionless): returns a consumed deposit record's rent to its funder |
-| `upgradeTo(implementation)` on a vault | `set_vault_implementation(program)` (router, cached owner signs) |
-| `Funded`, `Claimed`, `Refunded`, `OwnerRefreshed`, `Swept` events | `Funded`, `Claimed`, `Refunded`, `OwnerRefreshed`, `UntrackedSwept`, plus `ImplementationRegistered`, `VaultImplementationChanged` (all emitted by the router) |
+| `refreshProof(verifier, proof)`                                               | `refresh_proof(proof)` with any allowed `verifier_program` (implementation); the verifier's accounts follow as remaining accounts                                                                                                                        |
+| `refreshProofAndSweep` / `sweepDeposits`                                      | `claim_sol` / `claim_token(id, proof)` (implementation)                                                                                                                                                                                                  |
+| `sweep` (proofless, cached owner)                                             | the same instructions with an empty `proof`                                                                                                                                                                                                              |
+| `sweepBucket(…, Constraint{commitment, signature}, …)`                        | the same instructions, preceded in the transaction by an Ed25519 instruction (see below)                                                                                                                                                                 |
+| `*WithAttestation(…, AlphaAttestation)` / `executeWithAttestation`            | the same instructions, preceded by the alpha attester's Ed25519 instruction while the verifier is in alpha (see below)                                                                                                                                   |
+| `setAlpha(vkHash, enabled)`, `setDefaultAttester`                             | `set_alpha(enabled)` per verifier config, `set_alpha_attester` on the factory                                                                                                                                                                            |
+| `sweepUntracked(token)`                                                       | `sweep_untracked_sol` / `sweep_untracked_token` (router)                                                                                                                                                                                                 |
+| `refund(depositId)`                                                           | `refund_sol` / `refund_token(id)` (router)                                                                                                                                                                                                               |
+| (none: consumed deposits cost nothing to keep on EVM)                         | `close_deposit(id)` (router, permissionless): returns a consumed deposit record's rent to its funder                                                                                                                                                     |
+| `upgradeTo(implementation)` on a vault                                        | `set_vault_implementation(program)` (router, cached owner signs)                                                                                                                                                                                         |
+| `Funded`, `Claimed`, `Refunded`, `OwnerRefreshed`, `Swept` events             | `Funded`, `Claimed`, `Refunded`, `OwnerRefreshed`, `UntrackedSwept`, plus `ImplementationRegistered`, `VaultImplementationChanged` (all emitted by the router)                                                                                           |
 
 Nobody signs a claim but the transaction fee payer: `owner` is a plain destination account, so a
 relayer can submit a user's proof and pay the fees, as on EVM. With a proof, `owner` must be the
@@ -252,9 +252,67 @@ anchor build
 Keep the generated keypair private and out of version control. `anchor keys sync` updates the
 program IDs in `Anchor.toml` and each program's `declare_id!` to match them. Build the verifier for a
 real circuit with `P2ID_ZK_VERIFIER=<sunspot program id> anchor build -p p2id_solana_verifier`.
-Local tests run against the workspace programs with `anchor test --validator legacy`; they load the
+Local tests run against the workspace programs with
+`P2ID_ZK_VERIFIER=CBpmjvYYEQnMkp6HeQxG5GdJXDXkZHmqb6MRFZEQpnsg anchor test --validator legacy`
+to select the mock verifier explicitly; they load the
 programs upgradeable and burn the upgrade authority of the implementation and both verifier
 programs first, since the router admits nothing else.
+
+### Deterministic program IDs
+
+To derive all five program keypairs, set `SOL_PROGRAM_MASTER_SEED_SANDBOX` and
+`SOL_PROGRAM_MASTER_SEED_PROD` in `.env` to separate, randomly generated 32-byte hex
+seeds (64 hex characters). Back them up independently of the deployer keys. A
+changed deployer does not change program IDs. Empty seeds retain the existing
+file-based program IDs; setting a seed opts that environment into new IDs.
+
+Derivation uses the pinned `ed25519-hd-key` library implementing
+[SLIP-0010 Ed25519](https://github.com/satoshilabs/slips/blob/master/slip-0010.md).
+Our fixed application path is `m/44'/501'/7472'/environment'/role'/release'`, with
+every component hardened. `7472` is this application's namespace, not a registered
+coin type. Environment indices are sandbox `0`, production `1`; role indices are
+router `0`, policy `1`, implementation `2`, P2ID verifier `3`, Sunspot verifier `4`.
+These indices and the path format never change for an existing derivation scheme.
+`releases.json` pins scheme version `1`, the router/policy/implementation key
+releases under `programKeyDerivation.releases`, and each circuit's verifier key
+releases under `circuits[N].programKeyReleases`.
+
+```sh
+cd solana-anchor
+yarn keys:derive sandbox          # preview public IDs; writes nothing
+yarn keys:derive sandbox --sync   # prepare keys and inject IDs into source/build config
+# Build the Sunspot artifacts first (preserves the derived Sunspot program keypair):
+sh ../circuit/scripts/sunspot-build.sh sandbox
+anchor build                    # uses the synced ZK verifier ID
+yarn deploy:predict --cluster devnet
+```
+
+Use `production` in the preparation commands for production artifacts (its Sunspot
+build requires ceremony keys), and `--cluster mainnet` for prediction. The `--write` option prepares only keypair files. The `--sync` option also updates
+Rust `declare_id!` declarations, the selected environment's Anchor cluster tables, and
+`P2ID_ZK_VERIFIER` in `.cargo/config.toml` before building. Run it whenever changing
+environments or key releases; it never deploys programs. The write
+command uses `SOL_PROGRAM_KEYPAIR_DIR` (default `target/deploy`) for Anchor program
+keys and `SOL_ZK_VERIFIER_KEYPAIR` or the manifest path for Sunspot. `anchor keys
+sync` reads `target/deploy`, so custom key directories must also be staged there
+before syncing/building. It refuses conflicting keypairs before writing any files;
+use a separate checkout/build directory or archive the previous build to prepare
+new IDs. Build each environment separately because its program IDs differ.
+Preparation prints only public IDs, never the seeds or private keys.
+
+Deployment derives program keypairs in memory when a scoped master seed is set,
+checks Anchor IDs against the compiled IDL, and supplies temporary private key files
+to the CLI. `verify-proof` also resolves the circuit's derived Sunspot ID. The
+Sunspot program does not embed its own id, so an existing `pvium_identity.so` deploys
+unchanged under the derived keypair; only the P2ID verifier is rebuilt, for that id.
+Deriving a keypair does not replace the Groth16 trusted setup or its proving/verifying
+keys: never re-run `sunspot setup` for a key that proofs or a deployment already use.
+
+To fix an immutable release, append/version its source and increment the affected
+program's key release for the new manifest entry, then prepare and rebuild that
+release. Never change a shipped release's recorded derivation or rebuild it under
+the old ID. Old manifests and backed-up seeds reproduce old IDs; new program IDs
+still require the protocol's registration, notice or migration process.
 
 ## Deploy
 
@@ -269,9 +327,17 @@ yarn deploy --cluster mainnet          # production
 yarn deploy:plan --cluster mainnet     # read the cluster, write the authority instructions, send nothing
 ```
 
+Set `SOL_DEPLOYER_PRIVATE_KEY_SANDBOX` (devnet/localnet) and
+`SOL_DEPLOYER_PRIVATE_KEY_PROD` (mainnet) in `.env` to separate base58 private keys
+(32-byte seeds or 64-byte secret keys), or 32-byte hex seeds. Each command requires
+its environment's key and derives the public key automatically. Shared keys and
+local CLI wallets are never used as fallbacks. Deployment creates a temporary
+wallet file for the Solana CLI with owner-only permissions and removes it when
+the command finishes.
+
 The cluster decides the environment (`deploy.config.ts`: devnet and a local validator are
 `sandbox`, mainnet is `production`), and every environment-specific setting is read with that suffix
-from `.env`: the Privy keys (shared with the EVM stack, so they fall back to `contracts/.env`), the
+from `.env`: the Privy keys (shared with the EVM stack, so they fall back to `ethereum/.env`), the
 authority (a Squads vault) and the alpha attester. `releases.json` says what the stack is built
 from: the circuit version the factory is initialized with and the sha256 of its Sunspot verifying
 key, the policy rate, the program crates, the Sunspot artifact, and the authority settings every
@@ -282,12 +348,28 @@ A run deploys the Sunspot program and burns its upgrade authority, builds the P2
 program, deploys the policy, router and implementation programs, burns the implementation's and
 verifier's authorities, initializes the policy and the factory, burns the router's authority, and
 then works out the authority transactions the cluster still lacks (bind the policy, attester, signers).
-Those are sent when the deployer is the authority; otherwise they are written to
+Production deployments burn all five programs' upgrade authorities, including the policy, without
+requiring an extra flag. `SOL_AUTHORITY_PROD` retains the administrative permissions in the frozen code.
+In sandbox, the policy program's upgrade authority is transferred from the deployer to
+`SOL_AUTHORITY_SANDBOX`, including when that authority is a Squads vault.
+Reruns skip completed transfers and immutable policies; an unexpected current upgrade authority
+causes an error. `--plan` reports the burn or transfer without sending it. The deployment record includes
+the policy program's current upgrade authority.
+Before reporting a successful deployment (including `--stack-only`), the script reads back all
+five programs: all must be immutable in production. In sandbox, both verifiers, the implementation
+and router must be immutable; the policy must be immutable or have `SOL_AUTHORITY_SANDBOX` as its
+upgrade authority. Missing programs,
+unknown loaders and unexpected authorities fail this check. Every program's upgrade authority is
+included in the deployment record. `--plan` records the current state without enforcing completion.
+Use `--finalize-policy` to also burn the sandbox policy upgrade authority. If an existing policy's
+upgrade authority was already transferred, its current authority must burn it (through Squads when
+it is a Squads vault); a production deployment fails until that burn is complete.
+Policy and factory administrative instructions are sent when the deployer is the authority; otherwise they are written to
 `deployments/squads/` as unsigned instructions to import into Squads. Every step is skipped when the
 cluster already has it, so the command is re-runnable and is how a cluster picks up a new release.
 Each run writes `deployments/<scheme>.<environment>.<cluster>.json` (program ids, PDAs, params
 hash, configuration, live status), and refuses a configuration whose factory PDA differs from an
-earlier record of the same environment. A local validator needs no `.env`: unset values default to
+earlier record of the same environment. A local validator requires `SOL_DEPLOYER_PRIVATE_KEY_SANDBOX`; other unset values default to
 the deployer as authority and attester, a built-in Privy key and, when no sandbox Sunspot artifact has
 been built, the test verifier as the ZK backend; nothing is recorded.
 
@@ -322,4 +404,3 @@ To check a deployed verifier with a real proof, make one with `circuit/scripts/s
 it simulates the P2ID verifier's `verify` on the cluster and compares the attestation it returns
 with the wallet and hashes the proof should carry. The HTTP prover proves for Solana with the same
 artifacts (`SUNSPOT_*` in its `.env`).
-

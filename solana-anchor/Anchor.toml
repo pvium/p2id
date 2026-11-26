@@ -8,10 +8,10 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-p2id_policy = "32CHoykPA8eVDvuY84uc8yvJCgkjj6kwsJqweX76G7oJ"
-p2id_router = "4Xy1ad1x63e6o3dMgrEE2JvKtem2jQvqSV4tRaHmvuc3"
-p2id_solana_verifier = "9WgYShJxUEFQmjird4GKbauXtq32uXbrRD8EdTcjoBxj"
-p2id_vault = "A48yVmhHBvP2Hf3zc2p9XGzV9CtVStFmq8DRuwWgGp53"
+p2id_policy = "7Pk7qV1WMJn5iN4mfS1eKJxJgzWska4Uk8X1nej8A2VX"
+p2id_router = "2zhNs3tEhpreRbmb98icGSwDuom6i2JWDbid9Ur6P4QH"
+p2id_solana_verifier = "7DoBQ1FcAXB8rf3PVXo5gikJCw4mamQswKXDeVE8rBYu"
+p2id_vault = "HeCmyjbG5nVMY2msxiUkfhf8WqPMEVqh7gR1nFEmAfdt"
 test_hook = "ETVm4N6WjGkF8NVT8NYJvY54zKqaNuR1EPupuYrJvSV9"
 test_verifier = "CBpmjvYYEQnMkp6HeQxG5GdJXDXkZHmqb6MRFZEQpnsg"
 
@@ -29,3 +29,9 @@ test = "yarn run test"
 upgradeable = true
 
 [hooks]
+
+[programs.devnet]
+p2id_router = "2zhNs3tEhpreRbmb98icGSwDuom6i2JWDbid9Ur6P4QH"
+p2id_policy = "7Pk7qV1WMJn5iN4mfS1eKJxJgzWska4Uk8X1nej8A2VX"
+p2id_vault = "HeCmyjbG5nVMY2msxiUkfhf8WqPMEVqh7gR1nFEmAfdt"
+p2id_solana_verifier = "7DoBQ1FcAXB8rf3PVXo5gikJCw4mamQswKXDeVE8rBYu"

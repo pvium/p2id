@@ -81,21 +81,21 @@ separators, or a length prefix.
 
 ### Identity types
 
-| Id | Type | Value | Normalized |
-| --: | --- | --- | :---: |
-| 0 | `email` | email address, proven by any account that holds it (see below) | ASCII lowercase |
-| 1 | `phone` | E.164 phone number | unchanged |
-| 2 | `google` (deprecated) | Google account email | ASCII lowercase |
-| 3 | `x` | X handle | ASCII lowercase |
-| 4 | `discord` | Discord username with discriminator (`alice#0`) | ASCII lowercase |
-| 5 | `github` | GitHub username | ASCII lowercase |
-| 6 | `linkedin` (deprecated) | LinkedIn account email | ASCII lowercase |
-| 7 | `apple` (deprecated) | Apple ID email | ASCII lowercase |
-| 8 | `telegram` | Telegram username | ASCII lowercase |
-| 9 | `tiktok` | TikTok username | ASCII lowercase |
-| 10 | `instagram` | Instagram username | ASCII lowercase |
-| 11 | `farcaster` | Farcaster username | ASCII lowercase |
-| 12 | `wallet` | EVM or other wallet identifier | see normalization |
+|  Id | Type                    | Value                                                          |    Normalized     |
+| --: | ----------------------- | -------------------------------------------------------------- | :---------------: |
+|   0 | `email`                 | email address, proven by any account that holds it (see below) |  ASCII lowercase  |
+|   1 | `phone`                 | E.164 phone number                                             |     unchanged     |
+|   2 | `google` (deprecated)   | Google account email                                           |  ASCII lowercase  |
+|   3 | `x`                     | X handle                                                       |  ASCII lowercase  |
+|   4 | `discord`               | Discord username with discriminator (`alice#0`)                |  ASCII lowercase  |
+|   5 | `github`                | GitHub username                                                |  ASCII lowercase  |
+|   6 | `linkedin` (deprecated) | LinkedIn account email                                         |  ASCII lowercase  |
+|   7 | `apple` (deprecated)    | Apple ID email                                                 |  ASCII lowercase  |
+|   8 | `telegram`              | Telegram username                                              |  ASCII lowercase  |
+|   9 | `tiktok`                | TikTok username                                                |  ASCII lowercase  |
+|  10 | `instagram`             | Instagram username                                             |  ASCII lowercase  |
+|  11 | `farcaster`             | Farcaster username                                             |  ASCII lowercase  |
+|  12 | `wallet`                | EVM or other wallet identifier                                 | see normalization |
 
 An `email` identity is the address itself, not the way it was verified: a verifier SHOULD accept
 an address from any account that carries one (a verified email account, or a Google, LinkedIn or
@@ -171,20 +171,20 @@ hashing. Literal `%`, `?`, `#`, and spaces in a value MUST be percent-encoded.
 
 The following parameters are defined when present:
 
-| Parameter | Meaning |
-| --- | --- |
-| `amount` | Decimal amount in token units. |
-| `token` | `native`, a token symbol, or an ERC-20 address. |
-| `chain` | EIP-155 chain identifier. |
-| `constraint` | `bytes32` commitment supplied when funding. |
+| Parameter          | Meaning                                                                      |
+| ------------------ | ---------------------------------------------------------------------------- |
+| `amount`           | Decimal amount in token units.                                               |
+| `token`            | `native`, a token symbol, or an ERC-20 address.                              |
+| `chain`            | EIP-155 chain identifier.                                                    |
+| `constraint`       | `bytes32` commitment supplied when funding.                                  |
 | `constraintSigner` | Signer named in the constraint commitment; absent for any registered signer. |
-| `constraintPolicy` | `bytes32` policy hash in the constraint commitment. |
-| `constraintSalt` | `bytes32` salt in the constraint commitment. |
-| `verifier` | Verifier address selected when funding. |
-| `window` | Refund window in seconds. |
-| `ref` | Application-defined reference for the funding event. |
-| `memo` | Application-defined text. |
-| `claim` | `<chainId>:<depositId>` for a recorded deposit. |
+| `constraintPolicy` | `bytes32` policy hash in the constraint commitment.                          |
+| `constraintSalt`   | `bytes32` salt in the constraint commitment.                                 |
+| `verifier`         | Verifier address selected when funding.                                      |
+| `window`           | Refund window in seconds.                                                    |
+| `ref`              | Application-defined reference for the funding event.                         |
+| `memo`             | Application-defined text.                                                    |
+| `claim`            | `<chainId>:<depositId>` for a recorded deposit.                              |
 
 Consumers MUST ignore parameters they do not recognize. A URI without `amount` or `claim`
 identifies an identity. A URI with `amount` is a payment request. A URI with `claim` identifies
@@ -192,7 +192,7 @@ a recorded deposit.
 
 ## Verification and claims
 
-A P2ID verifier MUST implement [`IP2IDVerifier`](contracts/src/interfaces/IP2IDVerifier.sol):
+A P2ID verifier MUST implement [`IP2IDVerifier`](ethereum/src/interfaces/IP2IDVerifier.sol):
 
 ```solidity
 function getIdentityWallet(

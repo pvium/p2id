@@ -96,7 +96,7 @@ documented. The invariant should state its token assumptions.
 - Mock verifiers isolate vault state transitions; these reproductions do not establish a
   cryptographic forgery. Existing `PviumVerifier` tests exercise real proof verification.
 
-Run from `contracts/`, with the repository's Node installation first on `PATH`:
+Run from `ethereum/`, with the repository's Node installation first on `PATH`:
 
 ```sh
 yarn hardhat test test/P2IDVault.test.ts test/P2IDFees.test.ts test/PviumP2IdVaultFactory.test.ts test/PviumVerifier.test.ts test/P2IDVault.audit.test.ts

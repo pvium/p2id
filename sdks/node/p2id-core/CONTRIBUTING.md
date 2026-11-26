@@ -4,7 +4,7 @@ For maintainers. Not shipped in the npm package.
 
 ```sh
 yarn install                           # from sdks/node (a yarn workspace)
-yarn workspace @pvium/p2id-core test    # copies ../../../contracts/src, embeds src/p2id.json, builds, tests
+yarn workspace @pvium/p2id-core test    # copies ../../../ethereum/src, embeds src/p2id.json, builds, tests
 ```
 
 - `src/p2id.json` records every address scheme. While the current scheme has no factory recorded,
@@ -16,7 +16,7 @@ yarn workspace @pvium/p2id-core test    # copies ../../../contracts/src, embeds 
   `yarn deploy` writes to `../../../solana-anchor/deployments/`; the build recomputes the factory
   PDA from the recorded authority and parameters and fails on any mismatch. A recorded production
   factory freezes the block like the EVM one. The program ids come from the programs' `declare_id!`.
-- `contracts/` is generated from `../../../contracts/src` at build time, `solana/idl/` from
+- `ethereum/` is generated from `../../../ethereum/src` at build time, `solana/idl/` from
   `../../../solana-anchor/target/idl` (run `anchor build` there first). Never edit either here.
 - **Publishing.** The SDK may be published before a production factory is recorded. In that state,
   `p2idAddress()` rejects production derivation unless the caller supplies `factory` explicitly;

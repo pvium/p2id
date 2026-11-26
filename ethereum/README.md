@@ -33,11 +33,11 @@ yarn fixtures   # after re-proving in ../circuit: refresh test fixtures + regene
     Both values are passed as hashes (`P2IDHash`, or the SDK's `identityHash`), so the raw
     identity never appears in calldata. `P2IDHash.walletHash` takes an `address`, or a string
     for a wallet on another chain.
-  It reverts (`IdentityMismatch`, `WalletMismatch`, `IdentityTypeMismatch`, `NoWallet`,
-  `UnknownSigner`, `InvalidProof`) unless the attestation binds exactly those values, and returns
-  when Privy issued the underlying token. Freshness is the caller's policy.
-  `verifyAttestation(proof, publicInputs)` is the lower-level form returning every field,
-  including the proven `wallet` address, for Pvium's own vault contracts.
+    It reverts (`IdentityMismatch`, `WalletMismatch`, `IdentityTypeMismatch`, `NoWallet`,
+    `UnknownSigner`, `InvalidProof`) unless the attestation binds exactly those values, and returns
+    when Privy issued the underlying token. Freshness is the caller's policy.
+    `verifyAttestation(proof, publicInputs)` is the lower-level form returning every field,
+    including the proven `wallet` address, for Pvium's own vault contracts.
 - `src/lib/P2IDHash.sol` — the commitment formula (`sha256("p2id.identity.v1" ‖ type ‖ normalize(value))`)
   and normalisation rules, byte-for-byte what the circuit and the Node SDK compute.
 - `src/PviumVerifier.sol` — `IP2IDVerifier` backed by `PviumIdentity`: resolves a proof to the
@@ -124,8 +124,8 @@ yarn add @pvium/p2id-core
 ```
 
 ```solidity
-import {IPviumIdentity} from "@pvium/p2id-core/contracts/interfaces/IPviumIdentity.sol";
-import {P2IDHash} from "@pvium/p2id-core/contracts/lib/P2IDHash.sol";
+import {IPviumIdentity} from "@pvium/p2id-core/ethereum/interfaces/IPviumIdentity.sol";
+import {P2IDHash} from "@pvium/p2id-core/ethereum/lib/P2IDHash.sol";
 
 // identityHash is computed off chain (the SDK's identityHash), so the email never reaches calldata
 uint64 issuedAt = IPviumIdentity(PVIUM_IDENTITY).verifyIdentity(
@@ -184,7 +184,7 @@ npx hardhat run scripts/deploy-deterministic.ts --network base          # produc
 ```
 
 The network decides the Pvium environment (`deploy.config.ts`), and the script reads only that
-environment's settings from `contracts/.env`: `PRIVY_JWKS_URL_SANDBOX` / `_PROD`, `OWNER_…`,
+environment's settings from `ethereum/.env`: `PRIVY_JWKS_URL_SANDBOX` / `_PROD`, `OWNER_…`,
 `ATTESTER_…` (constraint signer), and optional `ALPHA_ATTESTER_…` (factory alpha signer;
 defaults to `OWNER_…`). Set both attester variables to the same address to share a key.
 The factory stores one alpha signer; constraint signer membership remains in the verifier.
@@ -236,15 +236,15 @@ deployment salt, so a later stack under another salt name is a separate stack at
 
 `verify(bytes proof, bytes32[11] publicInputs)` takes the inputs in this order:
 
-| # | Name | Contents |
-| --- | --- | --- |
-| 0 | `identity_type` | identity type id, 0 = email … 12 = wallet; full table in [P2ID.md](../P2ID.md#identity-types) |
-| 1 | `wallet` | EVM address of the linked wallet, checked in-circuit against the token; zero for non-EVM wallets or no wallet |
-| 2, 3 | `signer_x_hi`, `signer_x_lo` | signer public key X as two 128-bit halves |
-| 4, 5 | `signer_y_hi`, `signer_y_lo` | signer public key Y as two 128-bit halves |
-| 6 | `iat` | token issued-at: when Privy attested the claim; freshness policy is the caller's |
-| 7, 8 | `identity_hash_hi`, `identity_hash_lo` | `sha256("p2id.identity.v1" ‖ type ‖ normalize(value))` as two halves |
-| 9, 10 | `wallet_hash_hi`, `wallet_hash_lo` | same formula with type 12 for a wallet linked in the same token; zero if the proof carries none |
+| #     | Name                                   | Contents                                                                                                      |
+| ----- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| 0     | `identity_type`                        | identity type id, 0 = email … 12 = wallet; full table in [P2ID.md](../P2ID.md#identity-types)                 |
+| 1     | `wallet`                               | EVM address of the linked wallet, checked in-circuit against the token; zero for non-EVM wallets or no wallet |
+| 2, 3  | `signer_x_hi`, `signer_x_lo`           | signer public key X as two 128-bit halves                                                                     |
+| 4, 5  | `signer_y_hi`, `signer_y_lo`           | signer public key Y as two 128-bit halves                                                                     |
+| 6     | `iat`                                  | token issued-at: when Privy attested the claim; freshness policy is the caller's                              |
+| 7, 8  | `identity_hash_hi`, `identity_hash_lo` | `sha256("p2id.identity.v1" ‖ type ‖ normalize(value))` as two halves                                          |
+| 9, 10 | `wallet_hash_hi`, `wallet_hash_lo`     | same formula with type 12 for a wallet linked in the same token; zero if the proof carries none               |
 
 `normalize` lowercases every type except `wallet`, and lowercases `0x…` wallet addresses (hex),
 leaving base58 (Solana) addresses untouched.
@@ -253,13 +253,13 @@ Reassemble a hash as `bytes32((hi << 128) | lo)`.
 
 ## Measured on the sample proof
 
-| Metric | Value |
-| --- | --- |
-| `PviumZKVerifier` bytecode | 18 419 bytes |
+| Metric                             | Value               |
+| ---------------------------------- | ------------------- |
+| `PviumZKVerifier` bytecode         | 18 419 bytes        |
 | `RelationsLib` / `ZKTranscriptLib` | 8 127 / 6 269 bytes |
-| Proof size | 10 304 bytes |
-| `PviumZKVerifier.verify` gas | ~4.31M |
-| `PviumIdentity.verifyIdentity` gas | ~4.45M |
+| Proof size                         | 10 304 bytes        |
+| `PviumZKVerifier.verify` gas       | ~4.31M              |
+| `PviumIdentity.verifyIdentity` gas | ~4.45M              |
 
 The gas figure is for the ZK flavour of Honk, which is required here because the proof must not
 leak the token or the identity value. Budget for it on L2.

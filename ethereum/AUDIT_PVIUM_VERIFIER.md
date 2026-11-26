@@ -72,7 +72,7 @@ registering a verifier in a factory policy.
 
 ## Validation
 
-From `contracts/`:
+From `ethereum/`:
 
 ```sh
 yarn hardhat test test/PviumVerifier.test.ts

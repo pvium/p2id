@@ -4,7 +4,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { DEPLOY_NETWORKS, envFor } from './deploy.config';
 
-// Deployment settings come from contracts/.env (git-ignored; see .env.example). Tests need none.
+// Deployment settings come from ethereum/.env (git-ignored; see .env.example). Tests need none.
 const envFile = join(__dirname, '.env');
 if (existsSync(envFile)) (process as any).loadEnvFile?.(envFile);
 

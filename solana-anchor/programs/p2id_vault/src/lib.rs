@@ -19,7 +19,7 @@ pub mod errors;
 
 use errors::VaultError;
 
-declare_id!("A48yVmhHBvP2Hf3zc2p9XGzV9CtVStFmq8DRuwWgGp53");
+declare_id!("HeCmyjbG5nVMY2msxiUkfhf8WqPMEVqh7gR1nFEmAfdt");
 
 #[program]
 pub mod p2id_vault {

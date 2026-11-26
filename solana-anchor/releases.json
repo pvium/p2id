@@ -12,7 +12,7 @@
       "verifierProgram": "p2id_solana_verifier",
       "zkVerifier": {
         "sandbox": {
-          "vkHash": null,
+          "vkHash": "0x3032c70ed03cf803fd426789d694cc8575ebd8d39fc91e9b6263a6e4a919c59e",
           "vk": "../circuit/target/sunspot/sandbox/pvium_identity.vk",
           "so": "../circuit/target/sunspot/sandbox/pvium_identity.so",
           "keypair": "../circuit/target/sunspot/sandbox/pvium_identity-keypair.json"
@@ -23,6 +23,10 @@
           "so": "../circuit/target/sunspot/production/pvium_identity.so",
           "keypair": "../circuit/target/sunspot/production/pvium_identity-keypair.json"
         }
+      },
+      "programKeyReleases": {
+        "verifier": 1,
+        "zkVerifier": 1
       }
     }
   },
@@ -38,5 +42,13 @@
       "retiredConstraintSigners": []
     }
   },
-  "notes": "What the Solana stack of each address scheme is built from, so any checkout reproduces the deployed addresses. stackCircuit: the circuit version whose verifier the scheme's factory was initialized with (its first default verifier); it is part of the factory PDA and never changes. policyFeeBps: the rate of the policy PDA the factory was initialized with (a seed of that PDA; a new rate is a new policy, proposed and activated behind notice). programs: the crate of each program (its id is target/deploy/<crate>-keypair.json, which must match the declare_id! in its source). circuits: one entry per circuit version: the verifier crate built in front of the Sunspot program (P2ID_ZK_VERIFIER=<zk program id> anchor build -p <crate>) and, per environment, the Sunspot artifacts circuit/scripts/sunspot-build.sh <environment> produces (paths relative to solana-anchor/; SOL_VK_FILE / SOL_ZK_VERIFIER_SO / SOL_ZK_VERIFIER_KEYPAIR override them) with the sha256 of the verifying key (null until built; part of the factory PDA for the stack circuit). Sandbox keys come from Sunspot's single-party setup, production keys from the phase-2 ceremony (circuit/scripts/sunspot-ceremony.sh), so the two environments run different Sunspot programs. A released program is never rebuilt under its id: a new circuit version is a new verifier crate with its own keypair and a new entry here. environments: authority-managed settings every cluster of an environment should have now, where they differ from what the stack was initialized with (the initial values are part of the factory PDA and stay in solana-anchor/.env): the factory alpha attester, the constraint signers the default verifier should accept, and signers to remove. The deploy script turns any difference on a cluster into authority transactions."
+  "notes": "What the Solana stack of each address scheme is built from, so any checkout reproduces the deployed addresses. stackCircuit: the circuit version whose verifier the scheme's factory was initialized with (its first default verifier); it is part of the factory PDA and never changes. policyFeeBps: the rate of the policy PDA the factory was initialized with (a seed of that PDA; a new rate is a new policy, proposed and activated behind notice). programs: the crate of each program (its id is target/deploy/<crate>-keypair.json, which must match the declare_id! in its source). circuits: one entry per circuit version: the verifier crate built in front of the Sunspot program (P2ID_ZK_VERIFIER=<zk program id> anchor build -p <crate>) and, per environment, the Sunspot artifacts circuit/scripts/sunspot-build.sh <environment> produces (paths relative to solana-anchor/; SOL_VK_FILE / SOL_ZK_VERIFIER_SO / SOL_ZK_VERIFIER_KEYPAIR override them) with the sha256 of the verifying key (null until built; part of the factory PDA for the stack circuit). Sandbox keys come from Sunspot's single-party setup, production keys from the phase-2 ceremony (circuit/scripts/sunspot-ceremony.sh), so the two environments run different Sunspot programs. A released program is never rebuilt under its id: a new circuit version is a new verifier crate with its own keypair and a new entry here. environments: authority-managed settings every cluster of an environment should have now, where they differ from what the stack was initialized with (the initial values are part of the factory PDA and stay in solana-anchor/.env): the factory alpha attester, the constraint signers the default verifier should accept, and signers to remove. The deploy script turns any difference on a cluster into authority transactions. Optional deterministic identities: setting SOL_PROGRAM_MASTER_SEED_SANDBOX/PROD enables SLIP-0010 Ed25519 derivation version 1 at m/44h/501h/7472h/environmenth/roleh/releaseh (h means hardened). programKeyDerivation.releases pins router/policy/implementation releases; circuits[N].programKeyReleases pins verifier/zkVerifier releases. Indices and shipped release entries are immutable. Unset seeds retain legacy file-based identities.",
+  "programKeyDerivation": {
+    "version": 1,
+    "releases": {
+      "router": 1,
+      "policy": 1,
+      "implementation": 1
+    }
+  }
 }

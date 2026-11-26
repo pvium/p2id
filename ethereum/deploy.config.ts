@@ -4,7 +4,7 @@
 // signing keys, so each is its own stack at its own addresses; within an environment every chain
 // gets the identical configuration and therefore the identical addresses.
 //
-// Settings are read from contracts/.env. Per-environment values carry a suffix — _SANDBOX or _PROD —
+// Settings are read from ethereum/.env. Per-environment values carry a suffix — _SANDBOX or _PROD —
 // so a testnet run can never pick up production keys or owners, and vice versa. See .env.example.
 
 export type P2IDEnvironment = 'sandbox' | 'production';
@@ -76,7 +76,7 @@ export function requireEnvFor(
   const v = envFor(name, environment);
   if (v === undefined)
     throw new Error(
-      `${name}_${ENV_SUFFIX[environment]} is required for the ${environment} environment (contracts/.env)`,
+      `${name}_${ENV_SUFFIX[environment]} is required for the ${environment} environment (ethereum/.env)`,
     );
   return v;
 }

@@ -2,9 +2,12 @@ import { ethers } from 'hardhat';
 import { circuitRelease } from '../../scripts/lib/deterministic';
 
 /** The circuit the fixtures' proofs were made with: circuit/version.json. */
-export const CURRENT_CIRCUIT: { circuitVersion: number; vkSha256: string } = require('../../../circuit/version.json');
+export const CURRENT_CIRCUIT: {
+  circuitVersion: number;
+  vkSha256: string;
+} = require('../../../circuit/version.json');
 /**
- * That circuit's contracts (contracts/releases.json). Every circuit version keeps its own generated
+ * That circuit's contracts (ethereum/releases.json). Every circuit version keeps its own generated
  * ZK verifier and PviumVerifier, so tests name them through this instead of a fixed contract name.
  */
 export const CURRENT = circuitRelease(CURRENT_CIRCUIT.circuitVersion);
@@ -18,7 +21,10 @@ export async function deployVerifier() {
   const source = CURRENT.zkVerifier.split(':')[0];
   const relations = await ethers.deployContract(`${source}:RelationsLib`);
   const transcript = await ethers.deployContract(`${source}:ZKTranscriptLib`);
-  await Promise.all([relations.waitForDeployment(), transcript.waitForDeployment()]);
+  await Promise.all([
+    relations.waitForDeployment(),
+    transcript.waitForDeployment(),
+  ]);
 
   const verifier = await ethers.deployContract(CURRENT.zkVerifier, {
     libraries: {
@@ -41,7 +47,14 @@ export async function deployIdentityProof(
 ) {
   const keys = [{ x: signerX, y: signerY }, ...extraKeys];
   owner ??= (await ethers.getSigners())[0].address;
-  const proof = await ethers.deployContract('PviumIdentity', [verifierAddress, circuitVersion, CURRENT_CIRCUIT.vkSha256, owner, keys.map((k) => k.x), keys.map((k) => k.y)]);
+  const proof = await ethers.deployContract('PviumIdentity', [
+    verifierAddress,
+    circuitVersion,
+    CURRENT_CIRCUIT.vkSha256,
+    owner,
+    keys.map((k) => k.x),
+    keys.map((k) => k.y),
+  ]);
   await proof.waitForDeployment();
   return proof;
 }

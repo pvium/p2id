@@ -26,12 +26,12 @@
       "require": "./dist/cjs/solana/index.js",
       "default": "./dist/esm/solana/index.js"
     },
-    "./contracts/*": "./contracts/*",
+    "./ethereum/*": "./ethereum/*",
     "./solana/idl/*": "./solana/idl/*"
   },
   "files": [
     "dist",
-    "contracts",
+    "ethereum",
     "solana",
     "README.md"
   ],

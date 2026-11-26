@@ -107,10 +107,10 @@ Arbitrary token balance/transfer behavior is outside the conventional-token resu
 ## Changes and validation
 
 Added six factory audit tests and one deployment-validation test. Corrected explorer targets,
-expanded checkStack, and updated proxy deployment/maintenance documentation in contracts/README.md
+expanded checkStack, and updated proxy deployment/maintenance documentation in ethereum/README.md
 and DEPLOYMENT.md. No Solidity execution changes, circuit rebuild or generated verifier edits.
 
-Run from contracts/ with the prescribed Node PATH:
+Run from ethereum/ with the prescribed Node PATH:
 
 ```sh
 yarn hardhat test

@@ -2,7 +2,7 @@
 # Copy the latest proof produced by `bb prove ... -o target/proof_email` in ../circuit
 # into test/fixtures, and regenerate the Solidity verifier from its verification key.
 #
-# Every circuit version keeps its own generated verifier file, named in contracts/releases.json
+# Every circuit version keeps its own generated verifier file, named in ethereum/releases.json
 # (circuits.<N>.zkVerifier, e.g. src/PviumZKVerifierV2.sol:PviumZKVerifierV2). The version being
 # refreshed is circuit/version.json's circuitVersion. A version whose entry records a different vk
 # is released: its file is not rewritten; bump circuitVersion and add an entry for the new one.
@@ -14,13 +14,13 @@ VERSION=$(node -p "require('../circuit/version.json').circuitVersion")
 TARGET=$(node -p "(require('./releases.json').circuits['$VERSION'] || {}).zkVerifier || ''")
 RELEASED_VK=$(node -p "(require('./releases.json').circuits['$VERSION'] || {}).vkHash || ''")
 if [ -z "$TARGET" ]; then
-  echo "circuit version $VERSION has no entry in contracts/releases.json." >&2
+  echo "circuit version $VERSION has no entry in ethereum/releases.json." >&2
   echo "Add circuits.$VERSION with zkVerifier src/PviumZKVerifierV$VERSION.sol:PviumZKVerifierV$VERSION, its own PviumVerifier and the vk sha256, then run again." >&2
   exit 1
 fi
 VK_SHA="0x$(shasum -a 256 "$SRC/vk" | cut -d' ' -f1)"
 if [ "$VK_SHA" != "$RELEASED_VK" ]; then
-  echo "the compiled circuit's vk is $VK_SHA, but contracts/releases.json records $RELEASED_VK for circuit version $VERSION." >&2
+  echo "the compiled circuit's vk is $VK_SHA, but ethereum/releases.json records $RELEASED_VK for circuit version $VERSION." >&2
   echo "A changed circuit is a new version: bump circuit/version.json and add its entry (a released verifier file is never rewritten)." >&2
   exit 1
 fi

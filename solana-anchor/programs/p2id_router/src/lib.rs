@@ -27,7 +27,7 @@ use errors::RouterError;
 use hash::{factory_params_hash, sha256};
 use state::*;
 
-declare_id!("4Xy1ad1x63e6o3dMgrEE2JvKtem2jQvqSV4tRaHmvuc3");
+declare_id!("2zhNs3tEhpreRbmb98icGSwDuom6i2JWDbid9Ur6P4QH");
 
 // ------------------------------------------------------------------ events (EVM IP2IDVault names)
 

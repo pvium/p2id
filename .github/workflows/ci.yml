@@ -8,14 +8,14 @@ on:
     branches: [develop]
     paths:
       - 'circuit/**'
-      - 'contracts/**'
+      - 'ethereum/**'
       - 'http-prover/**'
       - 'sdks/node/**'
       - '.github/workflows/ci.yml'
   pull_request:
     paths:
       - 'circuit/**'
-      - 'contracts/**'
+      - 'ethereum/**'
       - 'http-prover/**'
       - 'sdks/node/**'
       - '.github/workflows/ci.yml'
@@ -50,12 +50,12 @@ jobs:
               - '.github/workflows/ci.yml'
             contracts:
               - *workflow
-              - 'contracts/**'
-            # p2id-core ships contracts/src at build time (sync-contracts.sh).
+              - 'ethereum/**'
+            # p2id-core ships ethereum/src at build time (sync-contracts.sh).
             sdk:
               - *workflow
               - 'sdks/node/**'
-              - 'contracts/src/**'
+              - 'ethereum/src/**'
             circuit:
               - *workflow
               - 'circuit/**'
@@ -74,7 +74,7 @@ jobs:
           {
             node-version: 22,
             cache: yarn,
-            cache-dependency-path: contracts/yarn.lock,
+            cache-dependency-path: ethereum/yarn.lock,
           }
       - run: yarn install --frozen-lockfile
       - run: yarn test
