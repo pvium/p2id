@@ -1,8 +1,11 @@
 {
   "circuitVersion": 2,
   "vkSha256": "0x6c6f145bd929a5e3a8ca1e3c875f3c0e13e7be11f71fc8ad7bbaad9ddb5e9a78",
+  "circuitHash": "1271198581041919219",
+  "sunspotCircuitHash": "5734078211215968364",
   "nargo": "1.0.0-beta.26",
+  "sunspotNargo": "1.0.0-beta.22",
   "barretenberg": "5.0.0",
   "publicInputCount": 11,
-  "notes": "Bump circuitVersion whenever the compiled circuit (and so the vk) changes. Every consumer pins one version: the SDK release, the prover image, the deployed PviumIdentity contract."
+  "notes": "Bump circuitVersion whenever the compiled circuit (and so the vk) changes. Every consumer pins one version: the SDK release, the prover image, the deployed PviumIdentity contract. circuitHash is the `hash` of the nargo artifact the vk was generated from and sunspotCircuitHash that of the Noir beta.22 artifact the Sunspot keys were generated from: the prover refuses artifacts with any other hash. Recompiling the same source does not reproduce either (Nargo.toml pulls libraries from git without a lock), so a rebuilt artifact is a new circuit version with new keys, not a refresh."
 }

@@ -101,14 +101,20 @@ and queue counts and limits, and outbox counts by status.
 results include `pending`, `delivered` or `failed` delivery status, attempts and the last error.
 Unknown job IDs return 404.
 
-The service checks the verification key's SHA-256 hash against `circuit/version.json` at startup.
-Ethereum requests also check that `bb` exactly matches the version recorded for the circuit before
+The service checks the artifacts against `circuit/version.json` at startup: the verification key's
+SHA-256 hash, and the circuit's nargo `hash` (`circuitHash`; `sunspotCircuitHash` for the Sunspot
+ACIR when Solana is enabled). The circuit check exists because recompiling the same Noir source does
+not reproduce the committed artifact (the libraries come from git with no lock file), and a rebuilt
+circuit would pass the vk check and then prove against keys for a different circuit, which the
+on-chain verifiers reject. A rebuilt circuit is a new circuit version, never a refresh of the
+committed one. Ethereum requests also check that `bb` exactly matches the version recorded for the circuit before
 proving. This check is intentionally not version-agnostic: the Ethereum proof backend, verification
-key and SDK must use compatible Barretenberg builds. Solana requests do not use `bb`; they require
-`SUNSPOT_BIN`, `SUNSPOT_ACIR_PATH`, `SUNSPOT_CCS_PATH` and `SUNSPOT_PK_PATH`. The full ACIR, CCS
-and PK must match the circuit that produced the noir_js witness. The normal `CIRCUIT_JSON` is
-stripped for noir_js/Barretenberg and is not suitable as Sunspot's ACIR input. These Sunspot files
-are only needed when a Solana request is made.
+key and SDK must use compatible Barretenberg builds. Solana proving, when enabled (see below), is
+checked the same way at startup: the keys are fetched or hashed, the resident prover is started and
+has to load the key before the service listens, and `/healthz` answers 503 while it is not ready.
+Every attestation carries the `vkHash` of the key it is for: Ethereum, the Barretenberg vk;
+Solana, the Sunspot vk as deployed in the on-chain program (the factory's vkHash), which tells a
+sandbox proof from a production one. Both backends check that the proof's `iat` is the token's.
 
 ## Running
 
@@ -137,130 +143,45 @@ For a production-style build instead of the development server, run `yarn build`
 version metadata; startup extracts the compressed circuit automatically. You do not need to
 recompile the circuit for the Ethereum demo.
 
-### Solana/Sunspot setup
+### Solana
 
-For the Solana demo, `sunspot` and the matching ACIR, CCS, and proving key must be available at
-the `.env` paths. Compile or refresh those artifacts only when needed:
+Solana proofs are Groth16 proofs made by [Sunspot](https://github.com/reilabs/sunspot) from the same
+circuit compiled with the Noir release Sunspot reads. The service solves the witness with noir_js
+from `circuit/pvium_identity.sunspot.json` (committed gzipped, inflated at startup like the Ethereum
+circuit; `yarn sync` refreshes it from `circuit/scripts/sunspot-build.sh`'s output) and proves with
+`sunspotd`, a small resident prover (`sunspotd/main.go`, built inside the pinned Sunspot module by
+`circuit/scripts/sunspot-install.sh` and by the Docker image). It loads the ACIR, the constraint
+system and the proving key once, at startup, then proves on request over stdin/stdout. The proving
+key is 2.6 GB and takes about 30 s to load, so this is the difference between about 11 s and about
+70 s per proof, and between one resident copy of the key and one per request. Memory: about 8 GB
+for the resident prover while proving.
 
-```sh
-cd ../circuit
-nargo compile
-cd ../http-prover
-yarn sync
-sunspot compile ../circuit/target/pvium_identity.json
-# For a local smoke test only: this command performs an unsafe, non-ceremonial trusted setup.
-sunspot setup ../circuit/target/pvium_identity.ccs
-```
+The constraint system (276 MB) is not shipped: the first start compiles it from the ACIR (about
+15 s, deterministic) and writes it next to the proving key, named after the ACIR's hash
+(`pvium_identity.<hash>.ccs`), and later starts read it in a couple of seconds. A changed ACIR gets a
+different name and is recompiled; deleting the file has the same effect. `SUNSPOT_CCS_PATH` names
+the file explicitly, for instance `circuit/target/sunspot/pvium_identity.ccs` from the build script
+when running locally.
 
-Set `SUNSPOT_ACIR_PATH=../circuit/target/pvium_identity.json`,
-`SUNSPOT_CCS_PATH=../circuit/target/pvium_identity.ccs` and
-`SUNSPOT_PK_PATH=../circuit/target/pvium_identity.pk` in `.env`, then send the normal request with
-`"network": "solana"` (the same `identityType`, `identityValue`, `jwt` and optional `wallet`
-fields are used). For anything beyond local testing, use a properly conducted trusted setup for
-the CCS; do not use `sunspot setup`'s built-in setup for production keys.
-
-Sunspot's upstream documentation currently specifies Noir `1.0.0-beta.22`, while this repository's
-circuit and `noir_js` are pinned to `1.0.0-beta.26`. Confirm that the Sunspot build being used
-accepts this repository's ACIR and witness format before attempting an end-to-end Solana proof;
-do not independently change only the circuit compiler or `noir_js` version.
-
-The Linux `bb` binary requires a 64-bit system with glibc 2.34 or newer, such as Ubuntu 22.04+
-or Debian 12+. Use Node 22.13+ for `node:sqlite` and the pinned `bb` version
-`5.0.0`. The service uses `~/.bb/bb` when present, otherwise `bb` on `PATH`;
-`BB_BIN` overrides this location.
-
-Configuration uses environment variables; see `.env.example`. `PRIVY_JWKS_URL` accepts
-comma-separated JWKS URLs for multiple Privy apps. The signature determines the signing key;
-the response's `kid` identifies that key when available. Verification must use the corresponding
-environment's trusted keys.
-
-### Sizing
-
-Measurements on a 14-core machine are approximately 8 s per attestation: 3 s solving in
-single-threaded WASM and 5 s proving, with about 3 GB peak memory. Allow at least 4 GB for an
-instance running one proof at a time. Measure memory and latency before increasing
-`MAX_CONCURRENCY`, leaving headroom for Node and the host.
-
-### VPS with PM2
+Keys are per environment. Sandbox keys come from Sunspot's single-party setup and are only for
+devnet and local use; production keys come from the phase-2 ceremony
+(`circuit/scripts/sunspot-ceremony.sh`). Neither is in the repository or the image: locally,
+`SUNSPOT_PK_PATH` and `SUNSPOT_VK_PATH` point at what `sunspot-build.sh <environment>` wrote; a
+deployment sets `SUNSPOT_PK_URL` and `SUNSPOT_PK_SHA256` (and the same for the vk) and the service
+fetches the key onto its data volume once and checks its hash on every start. A proving key from the
+wrong setup would mint proofs the deployed verifier rejects, which is what the hash check and the
+`vkHash` in every attestation are for. Solana is off, and `network: "solana"` requests are refused
+with 400, until a proving key is configured.
 
 ```sh
-yarn global add pm2
-pm2 start ecosystem.config.cjs && pm2 save && pm2 startup
+cd ..
+circuit/scripts/sunspot-install.sh && source .tools/env.sh
+circuit/scripts/sunspot-build.sh sandbox
+cd http-prover && yarn sync          # refresh circuit/pvium_identity.sunspot.json.gz (never the Ethereum artifact: that needs --evm and a new circuit version)
+# .env: SUNSPOTD_BIN=$SUNSPOTD_BIN, SUNSPOT_PK_PATH / SUNSPOT_VK_PATH from sunspot-build.sh's output
+yarn dev
 ```
 
-### Railway
-
-Set **Root Directory** to `/http-prover` and **Watch Paths** to `/http-prover/**`.
-`railway.json` selects the Dockerfile and `/healthz` check. Mount a persistent volume at
-`/app/data` for the outbox and set the variables from `.env.example`. The image supplies
-`WORK_DIR`, `DB_PATH`, `CIRCUIT_JSON` and `VK_PATH`; allow at least 4 GB for one concurrent proof.
-
-The image includes the committed artifacts in `circuit/`. `pvium_identity.json.gz` contains the
-compiled circuit without source maps, approximately 4.6 MB compressed. Startup extracts it when
-the uncompressed file is absent.
-
-### Docker
-
-```sh
-docker build -t pvium-prover .
-docker run --env-file .env -p 8787:8787 --shm-size=1g -v prover-data:/app/data pvium-prover
-```
-
-The image defaults `WORK_DIR` to `/dev/shm`, a tmpfs filesystem. Witness files contain token
-data; their storage and swap behavior depend on the host configuration.
-
-## Deploying from CI
-
-`.github/workflows/deploy-prover.yml` deploys over SSH on a `prover-v*` tag or a manual run,
-using the GitHub `production` environment. Configure required reviewers and deployment rules
-in that environment, and add these secrets:
-
-| Secret | Value |
-| --- | --- |
-| `VPS_HOST`, `VPS_USER` | host and deployment user with Node 22.13+, Yarn and PM2; deployment installs or updates `bb` in `~/.bb` |
-| `VPS_PASSWORD` | deployment user's password, supplied through `sshpass` |
-| `VPS_APP_DIR` | service directory; create its `.env` from `.env.example` on the host; CI excludes it from file synchronization |
-
-The workflow compiles the circuit using a source-based cache, checks the vk hash against
-`circuit/version.json`, builds the service, syncs runtime files, reloads PM2 and checks `/healthz`.
-To use SSH keys, generate a key with `ssh-keygen -t ed25519`, add the public key to the host's
-`~/.ssh/authorized_keys`, store the private key as an environment secret, and replace
-`sshpass -e ssh` with `ssh -i` using that key. Keep deployment secrets in the protected environment,
-review `.github/` changes (see `CODEOWNERS`), and pin third-party actions to commit SHAs.
-
-## Logging
-
-One line per request on stdout, plus one per callback delivery attempt:
-
-```
-2026-09-14T10:00:00.000Z POST /attestations 202 14ms ip=203.0.113.7 mode=async type=email wallet=0x… job=3f2c…
-2026-09-14T10:00:09.100Z job 3f2c… ok type=email wallet=0x… callback=api.example.com delivery=delivered
-```
-
-Request logs omit the token and identity-value fields. PM2 and Railway collect stdout;
-on a VPS, use `pm2-logrotate` to limit log growth.
-
-## Security notes
-
-- Keep the service and its bearer secret accessible only to your backend. A caller with a valid
-  token can request a proof for any wallet linked in that token.
-- Authentication uses `timingSafeEqual` for equal-length bearer credentials.
-- Proof generation removes its temporary directory in a cleanup block. Abrupt process
-  termination can leave files behind.
-- Callback records contain identity values, wallets and results; protect the outbox database.
-
-## Development
-
-If you change and rebuild the circuit, run `yarn sync` from `http-prover/`. This copies the
-compiled circuit, verification key, and version metadata from `../circuit/` into the service
-and refreshes the compressed circuit artifact. Commit the updated `.gz`, `vk`, and
-`version.json` with the circuit version bump. This step is only needed when updating the
-service to a rebuilt circuit.
-
-```sh
-yarn test
-```
-
-Tests compare the TypeScript witness builder with `circuit/scripts/gen_prover.py` byte for byte,
-exercise the HTTP layer, queue and callback delivery, and verify generated attestations with
-`@pvium/p2id-verifier` when `bb` and the circuit artifacts are available.
+Then send the normal request with `"network": "solana"` and the Solana wallet address to bind. The
+response's `proof` and `publicWitness` are exactly the bytes the on-chain verifier takes;
+`solana-anchor`'s `yarn verify-proof` checks such a response against a deployed verifier.

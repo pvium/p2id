@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { checksumAddress, identityHash, p2idAddress, p2idAddressForHash, p2idScheme, P2ID_SCHEME, P2ID_SCHEMES } from '../src/p2id.js';
+import { checksumAddress, p2idAddress, p2idAddressForHash } from '../src/evm/address.js';
+import { identityHash, p2idScheme, P2ID_SCHEME, P2ID_SCHEMES } from '../src/scheme.js';
 import { IdentityType, isDeprecatedIdentityType, identityHash as rawIdentityHash, completeIdentityValue, normalizeIdentityValue } from '../src/identity.js';
 import { identityTypeName, resolveIdentityType } from '../src/identityNames.js';
 
@@ -124,7 +125,7 @@ test('deprecated email-provider types keep their IDs but cannot generate identit
 });
 
 test('funding verifier: the newest recorded circuit version per environment', async () => {
-  const { p2idFundingVerifier, p2idVerifier } = await import('../src/p2id.js');
+  const { p2idFundingVerifier, p2idVerifier } = await import('../src/evm/address.js');
   // circuit v1's verifiers, as deployed with the stacks
   assert.equal(p2idVerifier(1, { environment: 'production' }), '0x310020527Bc13a765F85976217A34c394bF2F1f2');
   assert.equal(p2idVerifier(1, { environment: 'sandbox' }), '0x2BF1c5Addbf202dB65779829Bb9deC183409ec48');

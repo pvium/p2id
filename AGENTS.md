@@ -56,7 +56,12 @@ Install with `yarn install`, run scripts with `yarn <script>`, run binaries with
   new `circuitVersion`, a new `releases.json` entry, and its own verifier files.
 - **Circuit versioning**: `circuit/version.json` names the current build (`circuitVersion`, vk sha256).
   Bump `circuitVersion` whenever the compiled circuit changes, then sync all consumers (`yarn fixtures`
-  in contracts, `yarn sync` in sdks/node and http-prover). The prover serves one version and echoes it
+  in contracts, `yarn sync` in sdks/node, `yarn sync --evm` in http-prover). `version.json` also pins
+  the nargo `hash` of both artifacts (`circuitHash` for bb, `sunspotCircuitHash` for the Sunspot ACIR):
+  the prover refuses to start, and `yarn sync` refuses to copy, with any other hash. Recompiling the
+  same source does not reproduce the committed bytecode (git dependencies, no `Nargo.lock`), so a
+  rebuild is a new version with new keys, never a refresh; http-prover's `yarn sync` therefore only
+  touches the Sunspot artifact and `version.json` unless passed `--evm`. The prover serves one version and echoes it
   in every attestation (one release branch and prover deployment per version, e.g.
   `releases/circuit/v1`); `PviumIdentity` is deployed once per version. `@pvium/p2id-verifier`
   bundles every shipped version's vk side by side (`src/circuits/v<N>.{vk,json}`; `yarn sync` adds

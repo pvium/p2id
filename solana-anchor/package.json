@@ -5,7 +5,8 @@
     "test": "mocha -r ts-node/register tests/**/*.ts --timeout 300000",
     "deploy": "ts-node scripts/deploy.ts",
     "deploy:predict": "ts-node scripts/deploy.ts --predict",
-    "deploy:plan": "ts-node scripts/deploy.ts --plan"
+    "deploy:plan": "ts-node scripts/deploy.ts --plan",
+    "verify-proof": "ts-node scripts/verify-proof.ts"
   },
   "devDependencies": {
     "@coral-xyz/anchor": "0.32.1",

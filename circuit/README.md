@@ -6,6 +6,8 @@ without revealing the token or the value.
 
 Toolchain: `nargo 1.0.0-beta.26`, `bb 5.0.0` (install with `noirup -v 1.0.0-beta.26`
 and `bbup -v 5.0.0`).
+The Solana path compiles the same source with `nargo 1.0.0-beta.22` (`noirup -v 1.0.0-beta.22`), the
+release Sunspot reads; `scripts/sunspot-install.sh` and `scripts/sunspot-build.sh` handle it.
 
 ## Sample token
 

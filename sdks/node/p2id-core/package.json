@@ -1,7 +1,7 @@
 {
   "name": "@pvium/p2id-core",
   "version": "1.1.1",
-  "description": "P2ID protocol core: identity types and hashing, chain-agnostic P2ID address derivation, and the Solidity sources",
+  "description": "P2ID protocol core: identity types and hashing, P2ID vault address derivation on EVM and Solana, the Solidity sources and the Anchor IDLs",
   "license": "MIT",
   "type": "module",
   "main": "./dist/cjs/index.js",
@@ -14,11 +14,25 @@
       "require": "./dist/cjs/index.js",
       "default": "./dist/esm/index.js"
     },
-    "./contracts/*": "./contracts/*"
+    "./evm": {
+      "types": "./dist/esm/evm/index.d.ts",
+      "import": "./dist/esm/evm/index.js",
+      "require": "./dist/cjs/evm/index.js",
+      "default": "./dist/esm/evm/index.js"
+    },
+    "./solana": {
+      "types": "./dist/esm/solana/index.d.ts",
+      "import": "./dist/esm/solana/index.js",
+      "require": "./dist/cjs/solana/index.js",
+      "default": "./dist/esm/solana/index.js"
+    },
+    "./contracts/*": "./contracts/*",
+    "./solana/idl/*": "./solana/idl/*"
   },
   "files": [
     "dist",
     "contracts",
+    "solana",
     "README.md"
   ],
   "repository": {
@@ -26,12 +40,14 @@
     "url": "git+https://github.com/pvium/p2id.git"
   },
   "scripts": {
-    "build": "sh scripts/sync-contracts.sh && node scripts/embed-p2id.mjs && tsc -p tsconfig.esm.json && tsc -p tsconfig.cjs.json && node scripts/finalize-dist.mjs",
+    "build": "sh scripts/sync-contracts.sh && sh scripts/sync-solana.sh && node scripts/embed-p2id.mjs && tsc -p tsconfig.esm.json && tsc -p tsconfig.cjs.json && node scripts/finalize-dist.mjs",
     "test": "yarn build && node --test --import tsx test/*.test.ts",
     "prepublishOnly": "yarn test"
   },
   "dependencies": {
-    "@noble/hashes": "^1.5.0"
+    "@noble/curves": "^1.9.0",
+    "@noble/hashes": "^1.5.0",
+    "@scure/base": "^1.2.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

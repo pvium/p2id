@@ -1,45 +1,40 @@
-The following steps compile the Noir circuit and prepare the Sunspot artifacts used for Solana
-proof generation. Run the circuit commands from the repository root.
+The Solana proof path uses [Sunspot](https://github.com/reilabs/sunspot): the Noir circuit is
+compiled into a gnark Groth16 constraint system, proofs are made with a proving key, and an
+on-chain verifier program carries the matching verifying key. The scripts in `circuit/scripts/`
+install the toolchain and produce every artifact; run them from the repository root.
 
-Change to the circuit directory:
-
-```bash
-cd ./circuit
-```
-
-Compile the Noir circuit and generate its build artifacts:
+Install Sunspot and the ceremony tool (pinned, built from source into `.tools/`, nothing outside the
+repository), then load the environment they need:
 
 ```bash
-nargo compile
+circuit/scripts/sunspot-install.sh
+source .tools/env.sh
 ```
 
-Compile the generated ACIR into a constraint system (CCS) for Sunspot:
+Build the sandbox artifacts (devnet and local use):
 
 ```bash
-sunspot compile target/pvium_identity.json
+circuit/scripts/sunspot-build.sh sandbox
 ```
 
-For Sunspot installation and troubleshooting, see the
-[Sunspot installation guide](https://github.com/reilabs/sunspot/blob/main/INSTALLATION.md).
+This compiles the circuit with the Noir release Sunspot reads, writes the constraint system, generates
+a proving and verifying key with Sunspot's built-in setup, and builds the verifier program with its
+program keypair into `circuit/target/sunspot/sandbox/`.
 
-Generate local proving and verification keys from the CCS:
+> **Warning:** Sunspot's built-in setup is a single-party setup. It is not a trusted setup and is
+> never used for production.
+
+Production keys come from a multi-party phase-2 ceremony over the Perpetual Powers of Tau, run with
+`circuit/scripts/sunspot-ceremony.sh` (`phase1`, `init`, one `contribute` per participant, `verify`,
+`finish`), after which `circuit/scripts/sunspot-build.sh production` builds the production verifier
+program. See the script header for the coordinator and contributor steps.
+
+To make a proof by hand and check it against the verifier deployed on a cluster:
 
 ```bash
-sunspot setup target/pvium_identity.ccs
+circuit/scripts/sunspot-prove.sh sandbox
+cd solana-anchor && yarn verify-proof --cluster localnet --proof ../circuit/target/sunspot/sandbox/proofs/sample-solana.json
 ```
-
-> **Warning:** Sunspot's built-in setup is for local testing only. It is not a production trusted
-> setup. Use an appropriately conducted trusted setup for production deployments.
-
-Build the Solana verifier program using the generated verification key:
-
-```bash
-sunspot deploy target/pvium_identity.vk
-```
-
-If Sunspot reports that `GNARK_VERIFIER_BIN` is not set, configure it to point to the Rust
-`verifier-bin` crate directory as described in the
-[installation guide](https://github.com/reilabs/sunspot/blob/main/INSTALLATION.md#configure-gnark_verifier_bin).
 
 ## Start the HTTP prover
 

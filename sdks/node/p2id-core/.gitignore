@@ -3,3 +3,4 @@ dist/
 src/p2idConstants.ts
 *.tgz
 contracts/
+solana/idl/

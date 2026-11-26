@@ -1,4 +1,5 @@
 import { toHex } from '@pvium/p2id-core';
+import { PUBLIC_WITNESS_HEADER, splitPublicWitness } from './solana/groth16.js';
 
 /** Number of public inputs the circuit emits: 2 inputs + 9 outputs. */
 export const PUBLIC_INPUT_COUNT = 11;
@@ -47,12 +48,20 @@ export interface IdentityClaim {
   walletHash: `0x${string}` | null;
 }
 
-/** Accepts the raw 320-byte `public_inputs` file or an array of 32-byte hex fields. */
+/**
+ * Accepts the raw 352-byte `public_inputs` file (Ethereum), Sunspot's public witness file (Solana:
+ * the same fields behind a 12-byte header) or an array of 32-byte hex fields.
+ */
 export type PublicInputs = Uint8Array | readonly string[];
 
 /** Normalise public inputs to the `string[]` form bb.js expects (0x-prefixed, 32 bytes each). */
 export function toPublicInputFields(inputs: PublicInputs): string[] {
   if (inputs instanceof Uint8Array) {
+    if (inputs.length === PUBLIC_INPUT_COUNT * 32 + PUBLIC_WITNESS_HEADER) {
+      const fields = splitPublicWitness(inputs);
+      if (!fields) throw new Error('expected a Sunspot public witness: the header does not match');
+      inputs = fields;
+    }
     if (inputs.length !== PUBLIC_INPUT_COUNT * 32) {
       throw new Error(`expected ${PUBLIC_INPUT_COUNT * 32} bytes of public inputs, got ${inputs.length}`);
     }

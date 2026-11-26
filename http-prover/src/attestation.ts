@@ -1,4 +1,4 @@
-import { checkBb, ensureCircuitJson, loadCircuitVersion, type CircuitVersion, type ProverConfig } from './config.js';
+import { checkBb, ensureCircuitJson, ensureSunspotArtifacts, loadCircuitVersion, solanaEnabled, type CircuitVersion, type ProverConfig } from './config.js';
 import { InputError } from './errors.js';
 import { PUBLIC_INPUT_COUNT, PUBLIC_INPUT_IAT, TYPES, type IdentityTypeName } from './identity.js';
 import { Prover, type ProofNetwork } from './prove.js';
@@ -36,15 +36,31 @@ export interface Attestation {
   issuedAt: number;
   /** Which circuit build produced this proof; verifiers must use the matching vk / contract. */
   circuitVersion: number;
-  /** Ethereum Barretenberg verification-key hash; omitted for Solana proofs. */
+  /**
+   * sha256 of the verifying key this proof is for: Ethereum, the Barretenberg vk (circuit/version.json);
+   * Solana, the Sunspot vk as deployed (the factory's vkHash), which tells a sandbox proof from a
+   * production one. Verifiers must use the matching vk / contract / program.
+   */
   vkHash?: string;
   /** kid of the Privy key that signed the token, when the token carried one. */
   kid?: string;
 }
 
+export interface SolanaStatus {
+  enabled: boolean;
+  /** sunspotd is up with the proving key loaded. Always false when not enabled. */
+  ready: boolean;
+  vkHash?: string;
+  constraints?: number;
+  publicInputs?: number;
+  loadMs?: number;
+}
+
 export class AttestationService {
   private readonly prover: Prover;
   private bbChecked = false;
+  private solanaVkHash?: string;
+  private solanaReady?: Promise<void>;
   readonly version: CircuitVersion;
 
   constructor(private readonly cfg: ProverConfig) {
@@ -55,6 +71,33 @@ export class AttestationService {
 
   get stats() {
     return this.prover.stats;
+  }
+
+  /** Whether Solana proving is configured, and what the resident prover reports once started. */
+  get solana(): SolanaStatus {
+    const d = this.prover.sunspotd;
+    return solanaEnabled(this.cfg)
+      ? { enabled: true, ready: d.running && d.info !== undefined, vkHash: this.solanaVkHash, ...d.info }
+      : { enabled: false, ready: false };
+  }
+
+  /**
+   * Bring the Solana side up: artifacts in place and hashed, sunspotd started with the key loaded.
+   * Called at startup when Solana is enabled so a bad deployment fails its health check instead of
+   * the first user's request; a request arriving earlier waits for the same promise.
+   */
+  startSolana(): Promise<void> {
+    if (!solanaEnabled(this.cfg)) return Promise.resolve();
+    this.solanaReady ??= (async () => {
+      const { vkHash } = await ensureSunspotArtifacts(this.cfg);
+      this.solanaVkHash = vkHash;
+      const info = await this.prover.startSolana();
+      if (info.publicInputs !== PUBLIC_INPUT_COUNT) {
+        throw new Error(`Sunspot ACIR has ${info.publicInputs} public inputs, expected ${PUBLIC_INPUT_COUNT}`);
+      }
+      console.log(`sunspotd ready: ${info.constraints} constraints, constraint system ${info.ccs ?? 'compiled'}, key loaded in ${info.loadMs} ms, vkHash ${vkHash}`);
+    })().catch((e) => { this.solanaReady = undefined; throw e; });
+    return this.solanaReady;
   }
 
   close(): Promise<void> {
@@ -85,12 +128,15 @@ export class AttestationService {
       checkBb(this.cfg);
       this.bbChecked = true;
     }
-    const { proof, publicInputs, publicWitness } = await this.prover.prove(inputs, network);
-    if (network === 'ethereum') {
-      if (publicInputs.length !== PUBLIC_INPUT_COUNT * 32) throw new Error(`unexpected public input size ${publicInputs.length}`);
-      const iatOut = Number(BigInt('0x' + publicInputs.subarray(PUBLIC_INPUT_IAT * 32, (PUBLIC_INPUT_IAT + 1) * 32).toString('hex')));
-      if (iatOut !== iat) throw new Error('circuit iat does not match token iat');
+    if (network === 'solana') {
+      if (!solanaEnabled(this.cfg)) throw new InputError('Solana proofs are not available from this prover');
+      await this.startSolana();
     }
+    const { proof, publicInputs, publicWitness } = await this.prover.prove(inputs, network);
+    // The proof's iat must be the token's: a mismatch means the witness builder and the circuit
+    // disagree about the token, whichever backend proved it.
+    const iatOut = network === 'ethereum' ? ethereumIat(publicInputs) : solanaIat(publicWitness!);
+    if (iatOut !== iat) throw new Error('circuit iat does not match token iat');
     return {
       proof: proof.toString('base64'),
       publicInputs: publicInputs.toString('base64'),
@@ -100,10 +146,28 @@ export class AttestationService {
       identityType: req.identityType,
       issuedAt: iat,
       circuitVersion: this.version.circuitVersion,
-      ...(network === 'ethereum' && { vkHash: this.version.vkSha256 }),
+      vkHash: network === 'ethereum' ? this.version.vkSha256 : this.solanaVkHash,
       kid: signer.kid,
     };
   }
+}
+
+function ethereumIat(publicInputs: Buffer): number {
+  if (publicInputs.length !== PUBLIC_INPUT_COUNT * 32) throw new Error(`unexpected public input size ${publicInputs.length}`);
+  return Number(BigInt('0x' + publicInputs.subarray(PUBLIC_INPUT_IAT * 32, (PUBLIC_INPUT_IAT + 1) * 32).toString('hex')));
+}
+
+/** Sunspot's public witness: a 12-byte header (the input count as u32 and u64, big-endian), then the 11 inputs as 32-byte big-endian fields. */
+export const SUNSPOT_PW_HEADER = 12;
+export const SUNSPOT_PW_LEN = SUNSPOT_PW_HEADER + PUBLIC_INPUT_COUNT * 32;
+
+export function solanaIat(publicWitness: Buffer): number {
+  if (publicWitness.length !== SUNSPOT_PW_LEN) throw new Error(`unexpected public witness size ${publicWitness.length}`);
+  if (publicWitness.readUInt32BE(0) !== PUBLIC_INPUT_COUNT || publicWitness.readBigUInt64BE(4) !== BigInt(PUBLIC_INPUT_COUNT)) {
+    throw new Error('unexpected public witness header');
+  }
+  const start = SUNSPOT_PW_HEADER + PUBLIC_INPUT_IAT * 32;
+  return Number(BigInt('0x' + publicWitness.subarray(start, start + 32).toString('hex')));
 }
 
 function validate(req: AttestationRequest): void {

@@ -1,43 +1,23 @@
 import { keccak_256 } from '@noble/hashes/sha3';
-import { IdentityType, identityHash as hashIdentity, toHex } from './identity.js';
-import { resolveIdentityType, type IdentityTypeName } from './identityNames.js';
-import { P2ID_SCHEME, P2ID_SCHEMES, type P2IDScheme, type P2IDSchemeName } from './p2idConstants.js';
-
-export { P2ID_SCHEME, P2ID_SCHEMES };
-export type { P2IDScheme, P2IDSchemeName };
-
-/** A Pvium environment: `production` (mainnets) or `sandbox` (testnets). Each has its own factory. */
-export type P2IDEnvironment = 'production' | 'sandbox';
+import { toHex, type IdentityType } from '../identity.js';
+import type { IdentityTypeName } from '../identityNames.js';
+import { assertEnvironment, identityHash, p2idScheme, P2ID_SCHEME, type P2IDEnvironment, type P2IDSchemeName } from '../scheme.js';
 
 /**
- * P2ID address derivation.
+ * P2ID address derivation on EVM chains.
  *
  *   identityHash = sha256(identityDomain ‖ byte(typeId) ‖ normalize(value))
  *   p2id         = keccak256(0xff ‖ factory ‖ identityHash ‖ vaultInitCodeHash)[12..]
  *
- * `normalize` ASCII-lowercases every type except phone and wallet, and lowercases `0x…` wallet
- * addresses. A *scheme* (`pvium.vault.v1`, or a later `pvium.vault.vN`) fixes the three constants: the identity domain, the
- * vault creation-code hash and the factory. The factory is deployed through the deterministic
- * deployment proxy, so it is at the same address on every EVM chain: a P2ID address is
- * chain-agnostic, like any wallet address. (The vault contract still has to be deployed on each
- * chain where it is claimed; anyone can do that, and funds sent before then are claimable once
- * it is.)
+ * The factory is deployed through the deterministic deployment proxy, so it is at the same address
+ * on every EVM chain: a P2ID address is chain-agnostic, like any wallet address. (The vault
+ * contract still has to be deployed on each chain where it is claimed; anyone can do that, and
+ * funds sent before then are claimable once it is.)
  *
  * Each Pvium environment is its own stack: `production` (mainnets, the production Privy app) and
  * `sandbox` (testnets, the sandbox Privy app) have different factories, so the same identity has
  * a different address in each. Production is the default.
- *
- * Schemes are history. A change to the vault bytecode moves every address, so it ships as the
- * next scheme and becomes `P2ID_SCHEME`; earlier schemes stay in `P2ID_SCHEMES` so addresses
- * people were already given can be derived, and claimed, forever.
  */
-
-/** Constants of a scheme; defaults to the current one. */
-export function p2idScheme(name: P2IDSchemeName | string = P2ID_SCHEME): P2IDScheme {
-  const s = (P2ID_SCHEMES as Record<string, P2IDScheme>)[name];
-  if (!s) throw new Error(`unknown P2ID scheme "${name}" (known: ${Object.keys(P2ID_SCHEMES).join(', ')})`);
-  return s;
-}
 
 /**
  * The verifier new payments should fund under (`fundWith`) in an environment: the approved
@@ -48,7 +28,7 @@ export function p2idFundingVerifier(
   options: { environment?: P2IDEnvironment; scheme?: P2IDSchemeName | string } = {},
 ): { circuitVersion: number; verifier: `0x${string}` } | null {
   const env = options.environment ?? 'production';
-  if (env !== 'production' && env !== 'sandbox') throw new Error(`unknown environment "${env}"`);
+  assertEnvironment(env);
   const recorded = p2idScheme(options.scheme).verifiers[env];
   const newest = Object.keys(recorded).map(Number).sort((a, b) => b - a)[0];
   return newest === undefined ? null : { circuitVersion: newest, verifier: recorded[String(newest)] };
@@ -60,15 +40,6 @@ export function p2idVerifier(
   options: { environment?: P2IDEnvironment; scheme?: P2IDSchemeName | string } = {},
 ): `0x${string}` | null {
   return p2idScheme(options.scheme).verifiers[options.environment ?? 'production'][String(circuitVersion)] ?? null;
-}
-
-/** The identity commitment: the CREATE2 salt of the identity's vault and the value proofs bind. */
-export function identityHash(
-  type: IdentityType | IdentityTypeName,
-  value: string,
-  scheme: P2IDSchemeName | string = P2ID_SCHEME,
-): `0x${string}` {
-  return hashIdentity(resolveIdentityType(type), value, p2idScheme(scheme).identityDomain);
 }
 
 export interface P2IDAddressInput {
@@ -96,7 +67,7 @@ export function p2idAddressForHash(
 ): `0x${string}` {
   const scheme = p2idScheme(opts.scheme);
   const environment = opts.environment ?? 'production';
-  if (environment !== 'production' && environment !== 'sandbox') throw new Error(`unknown environment "${environment}"`);
+  assertEnvironment(environment);
   const factory = opts.factory ?? scheme.factories[environment];
   if (!factory) {
     throw new Error(`scheme ${opts.scheme ?? P2ID_SCHEME} has no ${environment} factory address in this release yet; pass \`factory\` explicitly`);

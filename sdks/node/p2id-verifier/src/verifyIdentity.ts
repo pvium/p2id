@@ -1,23 +1,38 @@
 import { IdentityType, identityHash, resolveIdentityType, type IdentityTypeName } from '@pvium/p2id-core';
+import { sha256 } from '@noble/hashes/sha256';
 import { decodeClaim, type P256PublicKey, type PublicInputs } from './publicInputs.js';
 import { parseP256PublicKeyPem } from './signer.js';
-import { verifyProof } from './verify.js';
+import { parseSolanaVerifyingKey, solanaVerifyingKey, verifyProof, verifySolanaProof } from './verify.js';
 import { AttestationSigner, PVIUM_ENVIRONMENTS, type PviumEnvironmentName } from './environments.js';
-import { CIRCUITS, CIRCUIT_VERSIONS } from './vk.js';
+import { CIRCUITS, CIRCUIT_VERSIONS, SOLANA_CIRCUITS } from './vk.js';
+import type { GnarkVerifyingKey } from './solana/groth16.js';
+
+/** Which chain's verifier a proof was made for: Ethereum (UltraHonk) or Solana (Groth16, via Sunspot). */
+export type AttestationNetwork = 'ethereum' | 'solana';
 
 /** What Pvium's resolution API returns for an identity: the proof plus the address it binds. */
 export interface Attestation {
   /** Proof bytes, or base64 of them. */
   proof: Uint8Array | string;
-  /** Public inputs: raw bytes, base64 of them, or the hex fields. */
+  /**
+   * Public inputs: raw bytes, base64 of them, or the hex fields. For a Solana attestation this is
+   * Sunspot's public witness (the same fields behind a 12-byte header), as the prover returns it.
+   */
   publicInputs: PublicInputs | string;
+  /** Solana attestations also carry the public witness under this name; either is accepted. */
+  publicWitness?: Uint8Array | string;
   /** The wallet address the proof binds to the identity, exactly as linked in Privy. */
   wallet: string;
+  /** Which chain the proof was made for. Omitted means Ethereum. */
+  network?: AttestationNetwork;
   /** Circuit version that produced the proof, as reported by the prover. Selects the
    *  verification key; when absent, `vkHash` selects it, and failing both every supported
    *  version is tried (newest first). */
   circuitVersion?: number;
-  /** sha256 of the vk the prover used; must match the version's bundled vk when present. */
+  /**
+   * sha256 of the verification key the prover used; must match the bundled key when present.
+   * On Solana it also tells which environment's trusted setup the proof is under.
+   */
   vkHash?: string;
 }
 
@@ -38,6 +53,11 @@ export interface VerifyIdentityInput {
   signer: Signer;
   identityType: IdentityType | IdentityTypeName;
   identityValue: string;
+  /**
+   * Solana only: verify under this Sunspot verifying key (gnark's raw `.vk` bytes) instead of the
+   * keys bundled for Pvium's environments. For a self-hosted trusted setup.
+   */
+  solanaVerifyingKey?: Uint8Array;
 }
 
 export type VerifyIdentityResult =
@@ -49,6 +69,8 @@ export type VerifyIdentityResult =
       issuedAt: number;
       /** The circuit version whose verification key accepted the proof. */
       circuitVersion: number;
+      /** The chain the proof was verified for; the wallet is an address on it. */
+      network: AttestationNetwork;
     }
   | { valid: false; reason: string };
 
@@ -61,7 +83,7 @@ export async function verifyIdentity(input: VerifyIdentityInput): Promise<Verify
   return verifyIdentityFor(input, CIRCUIT_VERSIONS);
 }
 
-/** Which bundled circuit versions may have produced `att`, or why none can. */
+/** Which bundled Ethereum circuit versions may have produced `att`, or why none can. */
 function candidateVersions(att: Attestation, supported: readonly number[]): number[] | string {
   const describe = supported.length === 1 ? `version ${supported[0]}` : `versions ${supported.join(', ')}`;
   if (att.circuitVersion !== undefined) {
@@ -80,6 +102,48 @@ function candidateVersions(att: Attestation, supported: readonly number[]): numb
   return [...supported].reverse(); // no metadata: try each, newest first
 }
 
+interface SolanaCandidate {
+  circuitVersion: number;
+  vk: GnarkVerifyingKey;
+}
+
+/**
+ * Which bundled Solana verifying keys may have produced `att`, or why none can. A key belongs to
+ * one environment's trusted setup, so a signer naming an environment restricts the keys to it: a
+ * proof under the sandbox setup never backs a production attestation.
+ */
+export function solanaCandidates(att: Attestation, supported: readonly number[], signer: Signer, custom?: Uint8Array): SolanaCandidate[] | string {
+  const versions = att.circuitVersion === undefined ? [...supported].reverse() : [att.circuitVersion];
+  if (att.circuitVersion !== undefined && !supported.includes(att.circuitVersion)) {
+    const describe = supported.length === 1 ? `version ${supported[0]}` : `versions ${supported.join(', ')}`;
+    return `attestation is for circuit version ${att.circuitVersion}; this verifier supports ${describe}`;
+  }
+  const vkHash = att.vkHash?.toLowerCase();
+  if (custom) {
+    if (vkHash !== undefined && vkHash !== toHex(sha256(custom))) return 'attestation was not produced for the given Solana verifying key';
+    const vk = parseSolanaVerifyingKey(custom);
+    return versions.map((circuitVersion) => ({ circuitVersion, vk }));
+  }
+  const signerEnv = typeof signer === 'string' && signer in PVIUM_ENVIRONMENTS ? (signer as PviumEnvironmentName) : undefined;
+  const environments: PviumEnvironmentName[] = signerEnv ? [signerEnv] : ['production', 'sandbox'];
+  const all = environments.flatMap((env) =>
+    versions.filter((v) => SOLANA_CIRCUITS[env][v]).map((v) => ({ env, circuitVersion: v, vkSha256: SOLANA_CIRCUITS[env][v].vkSha256 })),
+  );
+  const matching = vkHash === undefined ? all : all.filter((c) => c.vkSha256 === vkHash);
+  if (matching.length === 0) {
+    const other = (['production', 'sandbox'] as const).find((env) => Object.values(SOLANA_CIRCUITS[env]).some((c) => c.vkSha256 === vkHash));
+    if (other && signerEnv && other !== signerEnv) {
+      return `attestation was proven under the ${other} Solana trusted setup; signer is ${signerEnv}`;
+    }
+    if (all.length === 0) {
+      const where = signerEnv ? ` for the ${signerEnv} environment` : '';
+      return `no Solana verifying key is bundled${where} for circuit ${versions.length === 1 ? `version ${versions[0]}` : `versions ${supported.join(', ')}`}`;
+    }
+    return 'attestation was produced by a Solana verifier build this SDK does not know';
+  }
+  return matching.map((c) => ({ circuitVersion: c.circuitVersion, vk: solanaVerifyingKey(c.env, c.circuitVersion) }));
+}
+
 /** verifyIdentity, restricted to the given bundled circuit versions. */
 export async function verifyIdentityFor(input: VerifyIdentityInput, supported: readonly number[]): Promise<VerifyIdentityResult> {
   let type: IdentityType;
@@ -90,11 +154,12 @@ export async function verifyIdentityFor(input: VerifyIdentityInput, supported: r
   }
 
   const att = input.attestation;
-  const versions = candidateVersions(att, supported);
-  if (typeof versions === 'string') return { valid: false, reason: versions };
-  const proof = typeof input.attestation.proof === 'string' ? fromBase64(input.attestation.proof) : input.attestation.proof;
-  const publicInputs =
-    typeof input.attestation.publicInputs === 'string' ? fromBase64(input.attestation.publicInputs) : input.attestation.publicInputs;
+  const network = att.network ?? 'ethereum';
+  if (network !== 'ethereum' && network !== 'solana') return { valid: false, reason: `unknown attestation network "${String(network)}"` };
+  const proof = typeof att.proof === 'string' ? fromBase64(att.proof) : att.proof;
+  const rawInputs = network === 'solana' ? (att.publicInputs ?? att.publicWitness) : att.publicInputs;
+  if (rawInputs === undefined) return { valid: false, reason: 'malformed attestation: no public inputs' };
+  const publicInputs = typeof rawInputs === 'string' ? fromBase64(rawInputs) : rawInputs;
 
   let claim;
   try {
@@ -117,28 +182,47 @@ export async function verifyIdentityFor(input: VerifyIdentityInput, supported: r
     return { valid: false, reason: 'identity value mismatch' };
   }
   if (claim.walletHash === null) return { valid: false, reason: 'attestation carries no wallet' };
-  if (identityHash(IdentityType.Wallet, input.attestation.wallet) !== claim.walletHash) {
+  if (identityHash(IdentityType.Wallet, att.wallet) !== claim.walletHash) {
     return { valid: false, reason: 'wallet mismatch' };
   }
   // For an EVM wallet the circuit also exposes the address it read from the token; it must agree.
-  const w = input.attestation.wallet;
+  const w = att.wallet;
   if (w.toLowerCase().startsWith('0x') && claim.wallet !== w.toLowerCase()) {
     return { valid: false, reason: 'wallet mismatch' };
   }
+
   let proven: number | undefined;
-  try {
-    for (const version of versions) {
-      if (await verifyProof({ proof, publicInputs }, version)) {
-        proven = version;
+  if (network === 'solana') {
+    let candidates: SolanaCandidate[] | string;
+    try {
+      candidates = solanaCandidates(att, supported, input.signer, input.solanaVerifyingKey);
+    } catch (e) {
+      return { valid: false, reason: `malformed Solana verifying key: ${(e as Error).message}` };
+    }
+    if (typeof candidates === 'string') return { valid: false, reason: candidates };
+    for (const c of candidates) {
+      if (verifySolanaProof({ proof, publicInputs }, c.vk)) {
+        proven = c.circuitVersion;
         break;
       }
     }
-  } catch (e) {
-    return { valid: false, reason: (e as Error).message }; // the backend failed; says so, not "invalid proof"
+  } else {
+    const versions = candidateVersions(att, supported);
+    if (typeof versions === 'string') return { valid: false, reason: versions };
+    try {
+      for (const version of versions) {
+        if (await verifyProof({ proof, publicInputs }, version)) {
+          proven = version;
+          break;
+        }
+      }
+    } catch (e) {
+      return { valid: false, reason: (e as Error).message }; // the backend failed; says so, not "invalid proof"
+    }
   }
   if (proven === undefined) return { valid: false, reason: 'invalid proof' };
 
-  return { valid: true, wallet: input.attestation.wallet, issuedAt: claim.iat, circuitVersion: proven };
+  return { valid: true, wallet: att.wallet, issuedAt: claim.iat, circuitVersion: proven, network };
 }
 
 async function trustedKeys(signer: Signer, claimSigner?: P256PublicKey): Promise<P256PublicKey[]> {
@@ -189,4 +273,8 @@ function b64urlToBigInt(s: string): bigint {
   let v = 0n;
   for (const b of fromBase64(s)) v = (v << 8n) | BigInt(b);
   return v;
+}
+
+function toHex(b: Uint8Array): string {
+  return '0x' + Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
 }

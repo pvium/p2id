@@ -13,7 +13,7 @@ export function verifyIdentity(input: VerifyIdentityInput): Promise<VerifyIdenti
   return verifyIdentityFor(input, [CIRCUIT_VERSION]);
 }
 
-export type { Attestation, Signer, VerifyIdentityInput, VerifyIdentityResult } from './verifyIdentity.js';
+export type { Attestation, AttestationNetwork, Signer, VerifyIdentityInput, VerifyIdentityResult } from './verifyIdentity.js';
 export { decodeClaim, toPublicInputFields, PUBLIC_INPUT_COUNT } from './publicInputs.js';
 export type { IdentityClaim, P256PublicKey, PublicInputs } from './publicInputs.js';
 export { PVIUM_ENVIRONMENTS, AttestationSigner } from './environments.js';

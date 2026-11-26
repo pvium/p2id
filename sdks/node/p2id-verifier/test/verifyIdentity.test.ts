@@ -20,7 +20,7 @@ after(() => shutdown());
 
 test('returns the wallet and issuedAt for a matching identity', async () => {
   const r = await verifyIdentity({ attestation, signer: pem, identityType: 'email', identityValue: 'test-9988@privy.io' });
-  assert.deepEqual(r, { valid: true, wallet: WALLET, issuedAt: 1789240094, circuitVersion: CIRCUIT_VERSION });
+  assert.deepEqual(r, { valid: true, wallet: WALLET, issuedAt: 1789240094, circuitVersion: CIRCUIT_VERSION, network: 'ethereum' });
 });
 
 test('accepts the enum, base64 transport, and any casing of the identity value', async () => {
@@ -88,7 +88,7 @@ const EMAIL = { signer: pem, identityType: 'email', identityValue: 'test-9988@pr
 test('the root entry verifies both circuit versions, selected by circuitVersion, vkHash or by trying each', async () => {
   assert.deepEqual([...CIRCUIT_VERSIONS], [1, 2]);
   for (const [att, version] of [[attestationV1, 1], [attestation, 2]] as const) {
-    const expected = { valid: true, wallet: WALLET, issuedAt: 1789240094, circuitVersion: version };
+    const expected = { valid: true, wallet: WALLET, issuedAt: 1789240094, circuitVersion: version, network: 'ethereum' };
     assert.deepEqual(await verifyIdentity({ ...EMAIL, attestation: { ...att, circuitVersion: version } }), expected);
     assert.deepEqual(await verifyIdentity({ ...EMAIL, attestation: { ...att, vkHash: version === 1 ? V1.VK_SHA256 : V2.VK_SHA256 } }), expected);
     assert.deepEqual(await verifyIdentity({ ...EMAIL, attestation: att }), expected); // no metadata

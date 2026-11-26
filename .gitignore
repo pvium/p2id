@@ -59,6 +59,7 @@ http-prover/dist/
 http-prover/data/
 # full 13 MB build; the committed artifact is the stripped .json.gz
 http-prover/circuit/pvium_identity.json
+http-prover/circuit/pvium_identity.sunspot.json
 
 # --- Python (scripts) -----------------------------------------------------------
 __pycache__/
@@ -91,3 +92,5 @@ solana-anchor/.anchor/
 solana-test/data.json
 
 Prover.toml
+# --- local toolchains (circuit/scripts/sunspot-install.sh) ---------------------
+.tools/

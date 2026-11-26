@@ -6,4 +6,6 @@ data
 !.env.example
 *.tgz
 test
+# inflated at startup from the committed .gz files
 circuit/pvium_identity.json
+circuit/pvium_identity.sunspot.json

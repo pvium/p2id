@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ANY_REGISTERED_SIGNER, constraintClaimSignature, constraintCommitment, constraintTypedData } from '../src/constraint.js';
+import { ANY_REGISTERED_SIGNER, constraintClaimSignature, constraintCommitment, constraintTypedData } from '../src/evm/constraint.js';
 
 // Vectors computed with ethers' AbiCoder / keccak256, matching PviumVerifier.constraintCommitment.
 const POLICY = '0x8799d081d7c863f1ac12b9d6337ea605e82dbf40770bcc1f19f377f9e441a1c4';

@@ -95,15 +95,30 @@ the first deploy with a kept program id.
   The one-shot proof-carrying claim is covered by a test that builds a v0 transaction with an
   address lookup table holding the claim's accounts (388-byte proof + 364-byte witness) and asserts
   the same claim does not serialize as a legacy transaction. The SDK needs both paths.
-- [ ] **Real verifier end to end.** Blocked on tooling: this machine has no `sunspot` CLI, no
-  compiled Sunspot verifier `.so` for the 11-input circuit, and no Solana-format proof
-  (`circuit/target/proof_p2id` is a 10 KB Barretenberg proof for the EVM path). Needs: Sunspot
-  installed, `pvium_identity.so` + keypair built from the current circuit, one Groth16 proof with
-  its 364-byte public witness and the wallet it names. Then: build `p2id_solana_verifier` with
-  `P2ID_ZK_VERIFIER=<sunspot id>`, load the Sunspot program finalized (or finalize it in `before`),
-  a factory whose default verifier is it, `deploy_vault` for the witness's identity hash,
-  `refresh_proof`, assert the cached owner. The interface and the Sunspot payload format
-  (`proof || witness`, forwarded unchanged) are already what `solana-test/verify-anchor.js` sends.
+- [x] **Real verifier end to end.** Toolchain and artifacts: `circuit/scripts/sunspot-install.sh`
+  (Sunspot and Reilabs' trusted-setup, pinned commits, built into `.tools/`), `sunspot-build.sh
+  <environment>` (Noir beta.22 compile in a staging dir, `sunspot compile`, keys, `sunspot deploy`),
+  `sunspot-prove.sh` (witness, proof, `.json` for the verifier), `sunspot-ceremony.sh` (production
+  phase 2 over the Perpetual Powers of Tau), `yarn verify-proof` (simulate the deployed adapter with a
+  real proof). Done locally for sandbox: 5,152,321 constraints (power 23), 2.6 GB proving key, 1680
+  byte vk, 197 KB verifier program; `yarn deploy --cluster localnet` deployed it, built the adapter
+  against it and the binding probe passed; a real proof from the sample token (Solana wallet) was
+  accepted by the adapter and returned the expected attestation. The prover's noir_js (beta.26)
+  executes the beta.22 ACIR unchanged. The beta.22 compiler's Brillig-constraint lint rejects the
+  sha256 library (false positive beta.26 no longer reports); the build skips that lint, which does not
+  change the circuit. The ceremony chain was rehearsed on a tiny circuit: PSE's PPoT mirror
+  (`ppot_0080_NN.ptau`; the Hermez mirrors return 403), `trusted-setup ptau/init/contribute x2/
+  verify/extract-keys`, then `sunspot prove` with the ceremony pk and `sunspot verify`/`sunspot
+  deploy` with the vk re-encoded raw (`keyraw`: the tool writes compressed points, Sunspot's
+  generator reads raw). Open: the production ceremony itself (the 2^23 ptau file is 9.7 GB; phase 2
+  over 5.2M constraints wants a 36 GB class machine; two or more contributors), a devnet run of the
+  sandbox artifacts (the 2.6 GB sandbox pk must then be kept for the prover, and the program keypair
+  for redeploys), and the suite still runs against `test_verifier` (the adapter in `target/deploy`
+  is rebuilt for it by `anchor build`). The http-prover's Solana path was confirmed live (the sample
+  token, Solana wallet: proof accepted by the deployed adapter) and then reworked: a resident
+  prover (`http-prover/sunspotd`, loads the 2.6 GB key once, ~11 s per proof instead of ~70 s),
+  keys fetched onto the volume by URL and hash-checked at startup, `vkHash` on Solana attestations,
+  the iat check for both backends, 503 health until the key is loaded, sunspotd built in the image.
 - [x] **Alpha attestation.** EVM gates every payout (`refreshProof`, `refreshProofAndSweep`,
   `sweepBucket*`, proxy `upgradeTo`) behind the backend attester's signature while the verifier's vk
   is in alpha. Solana: `Factory.alpha_attester` (an `initialize_factory` argument, in `params_hash`;
@@ -175,8 +190,10 @@ and factory, burn the router, bind the policy; second run skips everything). Bef
 
 1. Generate and vault the program keypairs (`SOL_PROGRAM_KEYPAIR_DIR`); their ids must be the ones
    declared in the sources, so set them once and commit the ids.
-2. Build the Sunspot verifier for the current circuit and set `SOL_VK_FILE` once so the script
-   records the circuit's vkHash in `releases.json` (part of the factory PDA).
+2. Build the environment's Sunspot verifier (`circuit/scripts/sunspot-build.sh sandbox` for devnet;
+   for mainnet run the ceremony first, then `sunspot-build.sh production`) and vault the program
+   keypair it made (`SOL_ZK_VERIFIER_KEYPAIR_PROD`). The deploy script reads the vk from
+   `releases.json`'s entry and records the environment's vkHash there on the first run.
 3. Fill `.env` for the environment: Privy keys (or let them come from `contracts/.env`), Squads
    authority, alpha attester (the backend's ed25519 key).
 4. `yarn deploy:predict`, then `yarn deploy` on devnet; the verifier starts in alpha, release it with

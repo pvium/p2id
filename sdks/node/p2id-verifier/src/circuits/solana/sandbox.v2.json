@@ -1,0 +1,7 @@
+{
+  "circuitVersion": 2,
+  "environment": "sandbox",
+  "vkSha256": "0x3032c70ed03cf803fd426789d694cc8575ebd8d39fc91e9b6263a6e4a919c59e",
+  "zkVerifier": "7ehscHUVUMxpsEZmXeSx9U3egVmwrBfyyn3pkBCbpF8n",
+  "notes": "Sunspot verifying key of the sandbox trusted setup for circuit version 2; zkVerifier is the Solana program built from it."
+}

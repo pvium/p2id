@@ -1,11 +1,12 @@
 import { execFile } from 'node:child_process';
-import { access, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { Worker } from 'node:worker_threads';
 import type { ProverConfig } from './config.js';
 import { InputError } from './errors.js';
+import { SunspotDaemon, type SunspotdReady } from './sunspotd.js';
 import type { CircuitInputs } from './witness.js';
 
 const execFileAsync = promisify(execFile);
@@ -28,12 +29,15 @@ export class QueueFullError extends Error {
 }
 
 /**
- * Solves the circuit in a worker thread (noir_js WASM) and proves with the native bb binary.
- * Jobs are gated to `maxConcurrency` at a time (each prove peaks ~3 GB) with a bounded wait queue.
+ * Solves the circuit in a worker thread (noir_js WASM) and proves with the native bb binary
+ * (Ethereum) or the resident sunspotd prover (Solana). Jobs are gated to `maxConcurrency` at a time
+ * (an Ethereum prove peaks ~3 GB; a Solana prove runs inside sunspotd, which holds the proving key
+ * resident and proves one at a time) with a bounded wait queue.
  */
 export class Prover {
   private worker: Worker;
   private sunspotWorker?: Worker;
+  readonly sunspotd: SunspotDaemon;
   private nextId = 1;
   private pending = new Map<number, { worker: Worker; resolve: (w: Uint8Array) => void; reject: (e: Error) => void }>();
   private running = 0;
@@ -41,6 +45,12 @@ export class Prover {
 
   constructor(private readonly cfg: ProverConfig) {
     this.worker = this.createWorker(cfg.circuitJson);
+    this.sunspotd = new SunspotDaemon(cfg);
+  }
+
+  /** Start the Solana prover now (loads the proving key) instead of on the first request. */
+  startSolana(): Promise<SunspotdReady> {
+    return this.sunspotd.start();
   }
 
   get stats() {
@@ -58,12 +68,14 @@ export class Prover {
   }
 
   async close(): Promise<void> {
-    await Promise.all([this.worker.terminate(), this.sunspotWorker?.terminate()]);
+    await Promise.all([this.worker.terminate(), this.sunspotWorker?.terminate(), this.sunspotd.close()]);
   }
 
   private solve(inputs: CircuitInputs, network: ProofNetwork): Promise<Uint8Array> {
     const id = this.nextId++;
-    const worker = network === 'solana' && this.cfg.sunspotAcirPath
+    // Solana witnesses come from the ACIR Sunspot reads (compiled with its Noir release), never
+    // from the Ethereum artifact: the two circuits' witness layouts are not interchangeable.
+    const worker = network === 'solana'
       ? (this.sunspotWorker ??= this.createWorker(resolve(this.cfg.sunspotAcirPath)))
       : this.worker;
     // Keep the process alive while a solve is in flight; the worker is unref'd when idle so an
@@ -104,8 +116,11 @@ export class Prover {
     return worker;
   }
 
+  /** The witness never touches the disk here; sunspotd keeps it on its work dir for the prove. */
   private async runSunspot(witness: Uint8Array): Promise<ProofBundle> {
-    return runSunspot(this.cfg, witness);
+    if (!this.cfg.sunspotPkPath) throw new Error('Solana proving is not configured; set SUNSPOT_PK_PATH or SUNSPOT_PK_URL');
+    const { proof, publicWitness } = await this.sunspotd.prove(witness);
+    return { proof, publicWitness, publicInputs: publicWitness };
   }
 
   /** bb proves and, with --verify, checks its own output against the vk before we return it. */
@@ -140,45 +155,5 @@ export class Prover {
   private release(): void {
     this.running--;
     this.queue.shift()?.();
-  }
-}
-
-export async function runSunspot(cfg: ProverConfig, witness: Uint8Array): Promise<ProofBundle> {
-  const ccsPath = cfg.sunspotCcsPath;
-  const pkPath = cfg.sunspotPkPath;
-  if (!ccsPath || !pkPath) {
-    throw new Error('Solana proving is not configured; set SUNSPOT_CCS_PATH and SUNSPOT_PK_PATH');
-  }
-
-  const acirPath = resolve(cfg.sunspotAcirPath ?? cfg.circuitJson);
-  const absoluteCcsPath = resolve(ccsPath);
-  const absolutePkPath = resolve(pkPath);
-  await Promise.all([access(acirPath), access(absoluteCcsPath), access(absolutePkPath)]);
-
-  const dir = await mkdtemp(join(cfg.workDir, 'pvium-prove-'));
-  try {
-    const witnessPath = join(dir, 'witness.gz');
-    const ccsLink = join(dir, 'circuit.ccs');
-    const outputBase = join(dir, 'circuit');
-    await Promise.all([
-      writeFile(witnessPath, witness),
-      symlink(absoluteCcsPath, ccsLink),
-    ]);
-    await execFileAsync(
-      cfg.sunspotBin,
-      ['prove', acirPath, witnessPath, ccsLink, absolutePkPath],
-      { timeout: 180_000, maxBuffer: 8 * 1024 * 1024 },
-    );
-    const [proof, publicWitness] = await Promise.all([
-      readFile(`${outputBase}.proof`),
-      readFile(`${outputBase}.pw`),
-    ]);
-    return {
-      proof,
-      publicWitness,
-      publicInputs: publicWitness,
-    };
-  } finally {
-    await rm(dir, { recursive: true, force: true });
   }
 }

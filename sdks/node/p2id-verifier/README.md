@@ -6,6 +6,10 @@ types and hashing rules, then checks the attestation's zero-knowledge proof loca
 bundled circuit verification key and configured trusted signing keys. `p2id-core` is installed
 automatically as this package's runtime dependency.
 
+Attestations for Ethereum (UltraHonk proofs) and Solana (Groth16 proofs) are verified by the same
+call; the attestation's `network` field selects the proof system (see
+[Solana attestations](#solana-attestations)).
+
 Learn more about P2ID in the [P2ID protocol specification](https://github.com/pvium/zkid/blob/main/P2ID.md).
 
 ## Install
@@ -51,9 +55,14 @@ JSON representation:
   "proof": "<base64>",
   "publicInputs": "<base64>",
   "wallet": "0xA01b6E60D51eDB3fEB9f86a62b846f4F90070f98",
-  "circuitVersion": 1
+  "network": "ethereum",
+  "circuitVersion": 2,
+  "vkHash": "0x6c6f…9a78"
 }
 ```
+
+`network` is `ethereum` (the default when absent) or `solana`. `circuitVersion` and `vkHash`
+select the verification key; keep them with the attestation.
 
 **Pvium API or SDK:** recipient resolution can return an attestation summary. Fetch the full
 attestation and pass it to `verifyIdentity` (see
@@ -75,13 +84,15 @@ Pass the response to `verifyIdentity` with `signer` set to your Privy app's JWKS
 
 | `result` | Meaning |
 | --- | --- |
-| `{ valid: true, wallet, issuedAt, circuitVersion }` | The signed token links the requested identity and wallet. `issuedAt` is the token's issue time; `circuitVersion` is the circuit whose verification key accepted the proof. |
+| `{ valid: true, wallet, issuedAt, circuitVersion, network }` | The signed token links the requested identity and wallet. `issuedAt` is the token's issue time; `circuitVersion` is the circuit whose verification key accepted the proof; `network` is the chain the wallet is an address on. |
 | `reason: 'identity value mismatch'` / `'identity type mismatch'` | The public inputs do not match the requested identity. |
 | `reason: 'wallet mismatch'` | The wallet does not match the public inputs. |
 | `reason: 'attestation carries no wallet'` | The public inputs contain no wallet commitment. |
 | `reason: 'not signed by a trusted key'` | The signing key is not accepted by the configured `signer`. |
 | `reason: 'invalid proof'` | The proof does not verify. |
 | `reason: 'attestation is for circuit version N; …'` or `'… circuit build …'` | The declared circuit version or verification-key hash is not one this entry point verifies (see [Versioning](#versioning)). |
+| `reason: 'no Solana verifying key is bundled …'`, `'… proven under the sandbox Solana trusted setup; signer is production'`, `'… Solana verifier build this SDK does not know'` | A Solana attestation names a key this release does not bundle, or one from another environment than the signer's (see [Solana attestations](#solana-attestations)). |
+| `reason: 'unknown attestation network "…"'` | `network` is neither `ethereum` nor `solana`. |
 | `reason: 'malformed attestation: …'` | The public inputs could not be decoded. |
 | `reason: 'unknown identity type "…"'` / `'unrecognised signer: …'` | The identity type or signer argument is unsupported. |
 
@@ -97,6 +108,46 @@ if (!result.valid) throw new Error(result.reason);
 const age = Date.now() / 1000 - result.issuedAt;
 if (age < 0 || age > MAX_AGE) throw new Error('attestation outside the accepted time window');
 ```
+
+## Solana attestations
+
+A Solana attestation carries a Groth16 proof for the same circuit, made for the P2ID verifier
+program on Solana. The prover returns it with `network: "solana"`, the public inputs as the
+prover's public witness (also present as `publicWitness`), the wallet as a base58 address and
+`vkHash`, the hash of the verifying key the proof is under:
+
+```json
+{
+  "network": "solana",
+  "proof": "<base64>",
+  "publicInputs": "<base64>",
+  "publicWitness": "<base64>",
+  "wallet": "EXnVUEeELHiYynvjoQ9YhgxfMSDJC6tJm7VkFQY2b8Wj",
+  "circuitVersion": 2,
+  "vkHash": "0x3032…c59e"
+}
+```
+
+`verifyIdentity` takes it unchanged, with the same `signer`, `identityType` and `identityValue`:
+
+```ts
+const result = await verifyIdentity({ attestation, signer: AttestationSigner.Sandbox, identityType: 'email', identityValue: 'you@example.com' });
+// result.valid && result.network === 'solana': result.wallet is a Solana address
+```
+
+Points to know:
+
+- **No backend.** Groth16 proofs are checked in pure JavaScript (`@noble/curves`), in tens of
+  milliseconds, in Node and browsers alike. `shutdown()` is only for the Ethereum backend.
+- **One key per environment.** Each Pvium environment has its own trusted setup, so its own
+  verifying key and Solana program; `SOLANA_CIRCUITS[environment][circuitVersion]` lists what this
+  release bundles. A signer of `'production'` or `'sandbox'` only accepts that environment's keys: a
+  proof under the sandbox setup is never a production attestation, and the result says so.
+  With a JWKS URL, PEM or `{ x, y }` signer, keys of both environments are tried.
+- **Self-hosted setup.** Pass your own Sunspot verifying key (the `.vk` file, gnark's raw
+  encoding) as `solanaVerifyingKey` to verify under it instead of the bundled keys.
+- **Wallets are exact.** Base58 addresses are case-sensitive; pass the wallet as the attestation
+  carries it.
 
 ## In a server
 
@@ -189,6 +240,7 @@ require one; for identity payees, retry resolution when the proof is available.
 | `shutdown()` | Release the verification backend |
 | `CIRCUIT_VERSIONS` | Every circuit version this release verifies |
 | `CIRCUIT_VERSION`, `VK_SHA256` | The newest circuit version and its verification-key hash (on `/v1`, `/v2`: that entry point's version) |
+| `SOLANA_CIRCUITS` | Per environment and circuit version: the bundled Solana verifying key's hash and the program built from it |
 | `IdentityType`, `IdentityTypeName` | Identity types re-exported from `@pvium/p2id-core` |
 
 Proof bytes and public inputs accept `Uint8Array` or base64 strings. Public inputs also accept
@@ -198,7 +250,9 @@ an array of hexadecimal fields.
 
 Each release bundles the verification key of every circuit version it supports
 (`CIRCUIT_VERSIONS`), so one install verifies attestations from all of them.
-`@aztec/bb.js` is pinned to the matching Barretenberg version (`5.0.0`).
+`@aztec/bb.js` is pinned to the matching Barretenberg version (`5.0.0`). Solana keys are bundled
+per environment from circuit version 2 (`SOLANA_CIRCUITS`); earlier versions have no Solana
+verifier.
 
 The package root accepts any supported version. It selects the verification key from the
 attestation's `circuitVersion`, or else its `vkHash`; with neither, it tries each version, newest

@@ -1,5 +1,5 @@
 import { keccak_256 } from '@noble/hashes/sha3';
-import { toHex } from './identity.js';
+import { toHex } from '../identity.js';
 
 /** Domain tag of a constraint commitment. */
 export const CONSTRAINT_DOMAIN = 'p2id.constraint.v1';

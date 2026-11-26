@@ -48,7 +48,12 @@ export function createApp(cfg: ProverConfig, secret: string) {
   app.use(express.json({ limit: '64kb' }));
 
   app.get('/healthz', (_req, res) => {
-    res.json({ ok: true, circuitVersion: service.version.circuitVersion, vkHash: service.version.vkSha256, ...service.stats, jobs: outbox.counts() });
+    const solana = service.solana;
+    const ok = !solana.enabled || solana.ready;
+    res.status(ok ? 200 : 503).json({
+      ok, circuitVersion: service.version.circuitVersion, vkHash: service.version.vkSha256, ...service.stats,
+      solana, jobs: outbox.counts(),
+    });
   });
 
   const auth = (req: Request, res: Response, next: NextFunction) => {

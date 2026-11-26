@@ -10,8 +10,9 @@ a different payment namespace. The SDK defaults to Pvium’s production factory.
 
 Learn more about P2ID in the [P2ID protocol specification](https://github.com/pvium/zkid/blob/main/P2ID.md).
 
-The package includes identity hashing, address derivation and Solidity sources. For off-chain
-proof verification, use
+The package includes identity hashing, address derivation for EVM chains and Solana, the Solidity
+sources and the Anchor IDLs. The root export is the EVM API; Solana is under
+`@pvium/p2id-core/solana` (see [Solana](#solana)). For off-chain proof verification, use
 [`@pvium/p2id-verifier`](https://www.npmjs.com/package/@pvium/p2id-verifier).
 
 ## Install
@@ -274,6 +275,81 @@ A compatible vault implementation upgrade behind the same proxy leaves addresses
 Pvium records a new address scheme when releasing a different factory/proxy deployment. To derive an address under a previous
 scheme, pass its name, for example `scheme: 'pvium.vault.v1'`.
 See [P2ID.md](https://github.com/pvium/zkid/blob/main/P2ID.md) for the protocol specification.
+
+## Solana
+
+The same identity has a vault on Solana, derived from the same identity commitment. Import from
+`@pvium/p2id-core/solana`; every address is a base58 string, and the module has no dependency on
+`@solana/web3.js`, so it works with any client.
+
+```ts
+import { p2idAddress, IdentityType } from '@pvium/p2id-core/solana';
+
+const vault = p2idAddress({
+  identityType: IdentityType.Email,
+  identityValue: 'you@example.com',
+  environment: 'sandbox', // devnet; `production` (the default) is mainnet
+});
+```
+
+SOL or tokens sent straight to that address are swept to the owner once they claim; they have no
+refund path. Refundable payments go through the vault implementation program's `fund_sol` and
+`fund_token` instructions, which record a deposit with a refund window under a verifier.
+`fundAccounts` resolves every account those instructions take, and the package ships the Anchor
+IDLs, so with [`@coral-xyz/anchor`](https://www.npmjs.com/package/@coral-xyz/anchor):
+
+```ts
+import { Program, AnchorProvider, BN } from '@coral-xyz/anchor';
+import { PublicKey } from '@solana/web3.js';
+import { identityHash, fundAccounts, p2idAddress, IdentityType } from '@pvium/p2id-core/solana';
+import vaultIdl from '@pvium/p2id-core/solana/idl/p2id_vault.json' with { type: 'json' };
+import routerIdl from '@pvium/p2id-core/solana/idl/p2id_router.json' with { type: 'json' };
+
+const provider = AnchorProvider.env();
+const id = identityHash(IdentityType.Email, 'you@example.com');
+const vault = p2idAddress({ identityType: IdentityType.Email, identityValue: 'you@example.com', environment: 'sandbox' });
+
+// The deposit id is the vault's next sequence number: 0 while the vault does not exist yet.
+const router = new Program(routerIdl as any, provider);
+const state = await router.account.vault.fetchNullable(new PublicKey(vault));
+const depositId = state ? state.depositSeq.toNumber() : 0;
+
+const { program, accounts } = fundAccounts({
+  identityHash: id, depositId, funder: provider.publicKey.toBase58(), environment: 'sandbox',
+});
+const WEEK = 7 * 24 * 3600;
+const NO_CONSTRAINT = new Array(32).fill(0);
+const reference = new Array(32).fill(0); // application-defined, emitted in `Funded`
+await new Program({ ...(vaultIdl as any), address: program }, provider).methods
+  .fundSol(new BN(100_000_000), NO_CONSTRAINT, new BN(WEEK), null, reference) // 0.1 SOL
+  .accounts(accounts)
+  .rpc();
+```
+
+Pass `mint` (and `tokenProgram` for a Token-2022 mint) to `fundAccounts` for `fund_token`; the
+funder's and the vault's associated token accounts are included. The arguments mirror the EVM
+`fund`: `constraint`, `refund_window`, an optional `refunder` that may refund after the window and
+is paid, and an event-only `reference`. The deposit is funded under the verifier `fundAccounts`
+selects, the newest recorded for the environment (`p2idFundingVerifier`), or `verifierProgram`.
+Refunds are router instructions (`refund_sol` / `refund_token(id)`).
+
+```text
+identityHash = sha256("p2id.identity.v1" ‖ byte(typeId) ‖ normalize(value))   (same as EVM)
+factory      = PDA(["p2id.factory.v1", scheme, authority, paramsHash], router)
+vault        = PDA(["p2id.vault.v1", factory, identityHash],           router)
+deposit      = PDA(["p2id.deposit.v1", vault, depositId_le_u64],       router)
+```
+
+The factory address commits to its authority and to every parameter it was initialized with, as a
+CREATE2 address commits to constructor arguments, so a deployment is reproducible: `factoryAddress`
+derives it from `authority` and the parameters, and `solanaFactory` returns what the scheme records
+for an environment. A different factory, like a different EVM factory, is a separate set of vault
+addresses for the same identities; pass `factory` (and `policy` to `fundAccounts`) to derive
+against your own. The programs have one id on every cluster (`solanaPrograms`); each environment
+has its own factory because its verifier keys differ. `depositAddress`, `vaultMintAddress`,
+`verifierConfigAddress` and `associatedTokenAddress` give the remaining accounts a client reads,
+`constraintMessage` is what a constraint signer signs, and `findProgramAddress` is the general
+derivation for anything else.
 
 ## Solidity
 
