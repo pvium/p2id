@@ -1,10 +1,9 @@
 import { PublicKey, TransactionInstruction } from '@solana/web3.js';
-import type { Environment } from '../../deploy.config';
 
 const LOADER = new PublicKey('BPFLoaderUpgradeab1e11111111111111111111111');
 
-export function mustBurnPolicy(environment: Environment, finalizePolicy: boolean): boolean {
-  return environment === 'production' || finalizePolicy;
+export function mustBurnUpgradeAuthority(cluster: string, program: string): boolean {
+  return cluster === 'mainnet' || ['zkVerifier', 'verifier', 'implementation'].includes(program);
 }
 
 export type ProgramUpgradeStatus = {

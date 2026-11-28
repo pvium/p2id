@@ -19,7 +19,7 @@
 //   3. the policy, router and implementation programs (burn policy upgrade authority in production,
 //      otherwise transfer it to the configured authority; burn the implementation's authority)
 //   4. the policy PDA, then the factory PDA (initialize_factory refuses an upgradeable verifier or
-//      implementation), then the router's upgrade authority is burned
+//      implementation), then the router's upgrade authority is burned on mainnet
 //   5. authority transactions worked out from what the cluster still lacks: bind the policy to the
 //      factory, the environment's alpha attester and constraint signers. Sent when the deployer is the
 //      authority; otherwise written to deployments/squads/ as unsigned instructions to import.
@@ -30,7 +30,7 @@
 //   --plan         read the cluster and write the authority files, send nothing
 //   --skip-build   do not rebuild the verifier (its .so must already front the Sunspot program)
 //   --stack-only   stop after the factory
-//   --finalize-policy  also burn the sandbox policy program's upgrade authority (mandatory in production)
+//   --finalize-policy  legacy flag; policy burns remain restricted to mainnet
 import { execFileSync } from 'child_process';
 import { createHash } from 'crypto';
 import {
@@ -62,7 +62,7 @@ import {
 
 import { loadProgramKey, type ProgramKeyReleases, type ProgramRole } from './lib/programKeys';
 import { loadDeployer, withDeployerFile } from './lib/deployer';
-import { assertUpgradeAuthority, mustBurnPolicy, transferUpgradeAuthority } from './lib/upgradeAuthority';
+import { assertUpgradeAuthority, mustBurnUpgradeAuthority, transferUpgradeAuthority } from './lib/upgradeAuthority';
 
 const ROOT = resolve(__dirname, '..');
 const DEPLOYMENTS = join(ROOT, 'deployments');
@@ -275,7 +275,9 @@ async function main() {
   const f = flags();
   const cluster = clusterOf(f.cluster);
   const environment = cluster.environment;
-  const burnPolicy = mustBurnPolicy(environment, f.finalizePolicy);
+  const burnAuthorities = mustBurnUpgradeAuthority(cluster.name, 'policyProgram');
+  if (f.finalizePolicy && !burnAuthorities)
+    log('--finalize-policy ignored: policy upgrade authority is only burned on mainnet');
   const local = cluster.local === true;
   loadEnv(ROOT);
   const release: Release = JSON.parse(
@@ -592,7 +594,11 @@ async function main() {
       '30',
     ])));
   };
-  const finalize = async (label: string, id: PublicKey) => {
+  const finalize = async (label: string, id: PublicKey, program: string) => {
+    if (!mustBurnUpgradeAuthority(cluster.name, program)) {
+      log(`${label}: retaining upgrade authority outside mainnet`);
+      return;
+    }
     const { status, authority: current } = await programStatus(id);
     if (status === 'immutable') {
       log(`${label}: immutable`);
@@ -626,7 +632,7 @@ async function main() {
 
   // 3. Sunspot verifier, then the P2ID verifier in front of it.
   await deployProgram('ZK verifier (Sunspot)', zkVerifier, zkSo, zkKeypair);
-  await finalize('ZK verifier (Sunspot)', zkVerifier);
+  await finalize('ZK verifier (Sunspot)', zkVerifier, 'zkVerifier');
   if (
     (await programStatus(verifier.id)).status === 'missing' &&
     !plan &&
@@ -677,17 +683,17 @@ async function main() {
     }
     log(`P2ID verifier fronts ${zkVerifier.toBase58()}`);
   }
-  await finalize('P2ID verifier', verifier.id);
+  await finalize('P2ID verifier', verifier.id, 'verifier');
 
-  // 4. Policy, router, implementation programs; the implementation's authority is burned at once.
+  // 4. Policy, router, implementation programs; the implementation's authority is burned on every cluster.
   await deployProgram(
     'policy program',
     policyProgram.id,
     policyProgram.so,
     policyProgram.keypair,
   );
-  if (burnPolicy) {
-    await finalize('policy program', policyProgram.id);
+  if (burnAuthorities) {
+    await finalize('policy program', policyProgram.id, 'policyProgram');
   } else {
     const policyStatus = await programStatus(policyProgram.id);
     if (policyStatus.status === 'immutable') {
@@ -718,7 +724,7 @@ async function main() {
     implementation.so,
     implementation.keypair,
   );
-  await finalize('implementation program', implementation.id);
+  await finalize('implementation program', implementation.id, 'implementation');
 
   // 5. Policy PDA, factory PDA, then the router is frozen.
   const policyState =
@@ -781,7 +787,7 @@ async function main() {
     );
   }
   if (await routerProgram.account.factory.fetchNullable(factory))
-    await finalize('router program', router.id);
+    await finalize('router program', router.id, 'router');
 
   // 6. Authority transactions: what the environment should have now and the cluster lacks.
   const pending: {
@@ -903,7 +909,7 @@ async function main() {
     status[name] = live.status;
     status[`${name}UpgradeAuthority`] = live.authority?.toBase58() ?? null;
     if (!plan)
-      assertUpgradeAuthority(name, live, authority, name !== 'policyProgram' || burnPolicy);
+      assertUpgradeAuthority(name, live, name === 'policyProgram' ? authority : deployer.publicKey, mustBurnUpgradeAuthority(cluster.name, name));
   }
   const liveFactory =
     await routerProgram.account.factory.fetchNullable(factory);

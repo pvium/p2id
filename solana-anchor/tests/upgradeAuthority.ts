@@ -1,13 +1,21 @@
 import { strict as assert } from 'assert';
 import { Keypair, PublicKey } from '@solana/web3.js';
-import { assertUpgradeAuthority, mustBurnPolicy, transferUpgradeAuthority } from '../scripts/lib/upgradeAuthority';
+import { assertUpgradeAuthority, mustBurnUpgradeAuthority, transferUpgradeAuthority } from '../scripts/lib/upgradeAuthority';
 
 describe('policy program upgrade authority', () => {
-  it('always burns the production policy and only optionally burns the sandbox policy', () => {
-    assert.equal(mustBurnPolicy('production', false), true);
-    assert.equal(mustBurnPolicy('production', true), true);
-    assert.equal(mustBurnPolicy('sandbox', false), false);
-    assert.equal(mustBurnPolicy('sandbox', true), true);
+  it('requires immutable verifiers and implementation on every cluster, and router/policy only on mainnet', () => {
+    const deployer = Keypair.generate().publicKey;
+    const live = { status: 'upgradeable' as const, authority: deployer };
+    for (const cluster of ['mainnet', 'devnet', 'localnet']) {
+      for (const role of ['zkVerifier', 'verifier', 'implementation', 'router', 'policyProgram']) {
+        const required = cluster === 'mainnet' || ['zkVerifier', 'verifier', 'implementation'].includes(role);
+        assert.equal(mustBurnUpgradeAuthority(cluster, role), required);
+        if (required)
+          assert.throws(() => assertUpgradeAuthority(role, live, deployer, required), /expected immutable/);
+        else
+          assert.doesNotThrow(() => assertUpgradeAuthority(role, live, deployer, required));
+      }
+    }
   });
   const program = Keypair.generate().publicKey;
   const deployer = Keypair.generate().publicKey;

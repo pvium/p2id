@@ -34,4 +34,10 @@ pub enum VaultError {
     PayloadTooLarge,
     #[msg("Proof is empty")]
     EmptyProof,
+    #[msg("Give the proof inline or as a registered buffer with its registerer, not both")]
+    AmbiguousProof,
+    #[msg("The registered proof belongs to another registerer")]
+    WrongRegisterer,
+    #[msg("The registered proof does not match its address or hash")]
+    ProofBufferMismatch,
 }

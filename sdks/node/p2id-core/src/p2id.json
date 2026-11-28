@@ -26,25 +26,25 @@
       },
       "solana": {
         "programs": {
-          "router": "2zhNs3tEhpreRbmb98icGSwDuom6i2JWDbid9Ur6P4QH",
-          "policy": "7Pk7qV1WMJn5iN4mfS1eKJxJgzWska4Uk8X1nej8A2VX",
-          "implementation": "HeCmyjbG5nVMY2msxiUkfhf8WqPMEVqh7gR1nFEmAfdt"
+          "router": "6H6C79DN1nFPkpt3ZobzrzHqvyLTk8qNFs7GMM11mAMu",
+          "policy": "6kABDmgwKTZ9m6DgCNte91cXnZmaTPQF3PSiYu1K9Nur",
+          "implementation": "7TExBifS2846TvPGSeAzR6XseXxs1D3YXkHaourqcxTr"
         },
         "factories": {
           "production": null,
           "sandbox": {
-            "address": "48SXtqHqyRWF9zqipRWvZ3AAi9csUNDBiXeRbj2Sk1UY",
+            "address": "G1g7bieZvwjJEeDy15uDDpJtDDhFfmuB7TL26K77CaHm",
             "authority": "8zZcR2CeWNH1pmmVAFfjL4hdSM6X6ugSQaEBstjtH4yU",
-            "paramsHash": "0x5e481c8952f28a2c756a788b380ccf97d4943b8d8b5c41fa5021d178daacb973",
+            "paramsHash": "0x5ee702bdab6c650f2bdec60c1bbddb9024ebeda8a59304902bc8c7ca8efcbe46",
             "policyFeeBps": 0,
             "params": {
               "signerKeys": [
                 "0x487140ed4fa91d71559b5e015286c9b76c270883f59a5ae9febac9b291584cd1d4cf5625205d28cbe6c8108a695929208c08f3bdc7790ab7023abe17dcdefc04",
                 "0x84e87db1d90fb3ef5079e6fbe8a50e8f2aee7f8ad66c13b837cc93e016e2b9aa27a0949bf003bb64d5a622a05737d2547efa8980267daf35cc75276cb30c9de5"
               ],
-              "defaultVerifier": "7DoBQ1FcAXB8rf3PVXo5gikJCw4mamQswKXDeVE8rBYu",
-              "policy": "ER8fN1RnK9RaS7z7boZNLHEsdKNLpzvT9WZpTVVRp3Lg",
-              "defaultImplementation": "HeCmyjbG5nVMY2msxiUkfhf8WqPMEVqh7gR1nFEmAfdt",
+              "defaultVerifier": "C4uP1e8GtueUQgppaPeiUSwtN6m5pscQcrJsFPNq6A8v",
+              "policy": "9aq8HoqMmH72eSfGSgquGda8moTqinbRuxgQZH5RQX34",
+              "defaultImplementation": "7TExBifS2846TvPGSeAzR6XseXxs1D3YXkHaourqcxTr",
               "alphaAttester": "8zZcR2CeWNH1pmmVAFfjL4hdSM6X6ugSQaEBstjtH4yU",
               "circuitVersion": 2,
               "vkHash": "0x3032c70ed03cf803fd426789d694cc8575ebd8d39fc91e9b6263a6e4a919c59e",
@@ -57,8 +57,8 @@
           "production": {},
           "sandbox": {
             "2": {
-              "program": "7DoBQ1FcAXB8rf3PVXo5gikJCw4mamQswKXDeVE8rBYu",
-              "zkVerifier": "5gCc81VSNwXYqgW9NBUirPk3DamNU5ZYWFn2i6xX1Ujd",
+              "program": "C4uP1e8GtueUQgppaPeiUSwtN6m5pscQcrJsFPNq6A8v",
+              "zkVerifier": "2v3hY61vHSBgS8Z6oj5VFJSbfYEYx3cqrfuGJ4TyEJaw",
               "vkHash": "0x3032c70ed03cf803fd426789d694cc8575ebd8d39fc91e9b6263a6e4a919c59e"
             }
           }

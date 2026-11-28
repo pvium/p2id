@@ -107,8 +107,8 @@ cannot be caught), which is why the policy only books receipts, and a zero fee s
 | ----------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `fund`, `fundWith(verifier, …)`, `fundWithRefunder(…, refundAddress, …)` (V2) | one instruction per asset: `fund_sol` / `fund_token(amount, constraint, refund_window, refunder?, reference)` (implementation); the verifier is the `verifier_config` account passed (the default's for plain funding), `refunder` null means the funder |
 | `refreshProof(verifier, proof)`                                               | `refresh_proof(proof)` with any allowed `verifier_program` (implementation); the verifier's accounts follow as remaining accounts                                                                                                                        |
-| `refreshProofAndSweep` / `sweepDeposits`                                      | `claim_sol` / `claim_token(id, proof)` (implementation)                                                                                                                                                                                                  |
-| `sweep` (proofless, cached owner)                                             | the same instructions with an empty `proof`                                                                                                                                                                                                              |
+| `refreshProofAndSweep` / `sweepDeposits`                                      | `claim_sol` / `claim_token(id)` with a registered proof: `register_proof` first, then the buffer and its registerer as the claim's optional accounts (implementation)                                                                                                                                                                                                  |
+| `sweep` (proofless, cached owner)                                             | the same instructions without a proof buffer                                                                                                                                                                                                              |
 | `sweepBucket(…, Constraint{commitment, signature}, …)`                        | the same instructions, preceded in the transaction by an Ed25519 instruction (see below)                                                                                                                                                                 |
 | `*WithAttestation(…, AlphaAttestation)` / `executeWithAttestation`            | the same instructions, preceded by the alpha attester's Ed25519 instruction while the verifier is in alpha (see below)                                                                                                                                   |
 | `setAlpha(vkHash, enabled)`, `setDefaultAttester`                             | `set_alpha(enabled)` per verifier config, `set_alpha_attester` on the factory                                                                                                                                                                            |
@@ -158,7 +158,8 @@ releases a verifier; `set_alpha(true)` puts it back, which also increments `key_
 owners cached from unvetted proofs must prove again under supervision. Both, and
 `set_alpha_attester`, bump `alpha_epoch`, which every approval signs, so outstanding approvals die
 with the change (EVM `alphaEpoch`). A proof-carrying `refresh_proof` plus the attester's instruction
-exceeds a legacy transaction; use a v0 transaction with a lookup table, as for a proof-carrying claim.
+exceeds a legacy transaction; register the proof first and present it by reference (see Transaction
+size).
 
 **Tokens.** Both token programs are accepted: classic SPL Token and Token-2022, with any mint
 extensions. Every transfer is `transfer_checked`. A transfer-hook mint's extra accounts are appended
@@ -175,11 +176,13 @@ authority allows it.
 cached owner by `sweep_untracked_*`, at the current policy rate; recorded deposits and the vault's
 rent are never touched (`tracked_sol`, `VaultMint.tracked`).
 
-**Transaction size and compute.** A Sunspot proof plus witness is ~750 bytes; a proof-carrying
-`claim_sol` has 15 accounts and does not fit a legacy transaction, `claim_token` with ~24 accounts
-even less so. Present the proof once with `refresh_proof` (11 accounts, fits) and claim without a
-proof afterwards, or send a v0 transaction whose address lookup table holds the claim's accounts
-(the test suite does both). A proofless token claim uses ~160k compute units across the three
+**Transaction size and compute.** A Sunspot proof plus witness is ~750 bytes, more than a claim's
+accounts leave in a legacy transaction, so `claim_*` never takes a proof inline. `register_proof`
+stores it in a buffer account, `PDA(["p2id.proof.v1", registerer, sha256(payload)])`, in its own
+transaction; the claim then names the buffer and its registerer as optional accounts, verifies the
+stored proof, pays, and closes the buffer so the registerer gets the rent back. Such a claim is one
+legacy transaction (the test suite measures it). `refresh_proof` takes the proof inline when that
+fits (11 accounts, no alpha approval) or the same buffer. A proofless token claim uses ~160k compute units across the three
 programs, up to ~200k for a Token-2022 mint with a transfer hook (set a 400k compute budget); a
 proof-carrying one adds the verifier (a few thousand units of its own) and whatever the Groth16
 verification costs, so size the compute budget from a simulation. Batching is several claim
@@ -345,25 +348,18 @@ cluster of the environment should have now (alpha attester, constraint signers t
 
 A run deploys the Sunspot program and burns its upgrade authority, builds the P2ID verifier with
 `P2ID_ZK_VERIFIER` set to it and checks on-chain that the deployed verifier fronts exactly that
-program, deploys the policy, router and implementation programs, burns the implementation's and
-verifier's authorities, initializes the policy and the factory, burns the router's authority, and
-then works out the authority transactions the cluster still lacks (bind the policy, attester, signers).
-Production deployments burn all five programs' upgrade authorities, including the policy, without
-requiring an extra flag. `SOL_AUTHORITY_PROD` retains the administrative permissions in the frozen code.
-In sandbox, the policy program's upgrade authority is transferred from the deployer to
-`SOL_AUTHORITY_SANDBOX`, including when that authority is a Squads vault.
-Reruns skip completed transfers and immutable policies; an unexpected current upgrade authority
-causes an error. `--plan` reports the burn or transfer without sending it. The deployment record includes
-the policy program's current upgrade authority.
-Before reporting a successful deployment (including `--stack-only`), the script reads back all
-five programs: all must be immutable in production. In sandbox, both verifiers, the implementation
-and router must be immutable; the policy must be immutable or have `SOL_AUTHORITY_SANDBOX` as its
-upgrade authority. Missing programs,
-unknown loaders and unexpected authorities fail this check. Every program's upgrade authority is
-included in the deployment record. `--plan` records the current state without enforcing completion.
-Use `--finalize-policy` to also burn the sandbox policy upgrade authority. If an existing policy's
-upgrade authority was already transferred, its current authority must burn it (through Squads when
-it is a Squads vault); a production deployment fails until that burn is complete.
+program, deploys the policy, router and implementation programs, and initializes the policy and
+factory. Both verifiers and the implementation have their upgrade authorities burned on every
+cluster, as required by the on-chain immutability checks. The router and policy authorities are
+burned only on `--cluster mainnet`.
+On devnet and localnet the router remains controlled by the deployer; the policy authority is
+transferred to `SOL_AUTHORITY_SANDBOX`. The legacy `--finalize-policy` flag cannot enable policy
+burns outside mainnet.
+Before reporting success, the script checks the required programs are immutable and retained
+authorities match their expected controllers. All authorities are recorded in the deployment
+record. `--plan` records current state without enforcing completion and sends no transactions.
+Burned programs cannot be upgraded in place; a later verifier or implementation requires a new
+program ID and registration through the router.
 Policy and factory administrative instructions are sent when the deployer is the authority; otherwise they are written to
 `deployments/squads/` as unsigned instructions to import into Squads. Every step is skipped when the
 cluster already has it, so the command is re-runnable and is how a cluster picks up a new release.

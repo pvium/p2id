@@ -6,20 +6,30 @@
 //! the money, signing with its authority PDA. The router enforces the funder protections and applies every state change. A later
 //! implementation is a new program the factory registers behind notice; vault owners move to it
 //! through the router. Refunds and untracked sweeps are router instructions and never pass through here.
+//!
+//! A Sunspot proof and witness are ~750 bytes: a claim carrying them inline does not fit a legacy
+//! transaction, and with the alpha attester's approval beside it neither does `refresh_proof`.
+//! Proofs therefore travel by reference: `register_proof` stores the proof in a buffer account first
+//! (its own transaction); `claim_*` and `refresh_proof` read it from there and close it, returning the
+//! rent to whoever registered it. `claim_*` never takes a proof inline; `refresh_proof` still may,
+//! for the proof-only refresh that fits (11 accounts, no approval).
 use anchor_lang::prelude::*;
 use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token_interface::TokenInterface;
 use p2id_router::cpi::{self as router_cpi, accounts as router_accounts};
-use p2id_router::hash::identity_hash;
+use p2id_router::hash::{identity_hash, sha256};
 use p2id_router::program::P2idRouter;
 use p2id_router::state::*;
-use p2id_verifier_interface::{verify, Attestation, VerifyError};
+use p2id_verifier_interface::{verify, Attestation, VerifyError, MAX_PROOF_LEN};
 
 pub mod errors;
 
 use errors::VaultError;
 
-declare_id!("HeCmyjbG5nVMY2msxiUkfhf8WqPMEVqh7gR1nFEmAfdt");
+declare_id!("7TExBifS2846TvPGSeAzR6XseXxs1D3YXkHaourqcxTr");
+
+/// Seed of a registered proof: PDA(["p2id.proof.v1", registerer, sha256(payload)]).
+pub const PROOF_BUFFER_SEED: &[u8] = b"p2id.proof.v1";
 
 #[program]
 pub mod p2id_vault {
@@ -104,9 +114,19 @@ pub mod p2id_vault {
     }
 
     /// Verify an identity proof under any allowed verifier and update the owner cache without
-    /// paying anything out (EVM refreshProof). `owner` is the wallet the proof names. Accounts the
-    /// verifier needs follow as remaining accounts.
+    /// paying anything out (EVM refreshProof). `owner` is the wallet the proof names. The proof is
+    /// `proof`, or, when that is empty, the payload of a `register_proof` buffer (`proof_buffer`,
+    /// with its `registerer`); the buffer is closed afterwards and its rent returned to the
+    /// registerer. Accounts the verifier needs follow as remaining accounts.
     pub fn refresh_proof<'info>(ctx: Context<'info, RefreshProof<'info>>, proof: Vec<u8>) -> Result<()> {
+        let registered = registered_proof(&ctx.accounts.proof_buffer, &ctx.accounts.registerer)?;
+        let proof = match (registered, proof.is_empty()) {
+            (Some(payload), true) => payload,
+            (None, false) => proof,
+            (Some(_), false) => return err!(VaultError::AmbiguousProof),
+            (None, true) => return err!(VaultError::EmptyProof),
+        };
+
         let a = &ctx.accounts;
         require!(a.verifier_config.allowed, VaultError::VerifierNotAllowed);
         require!(a.verifier_config.verifier == a.verifier_program.key(), VaultError::WrongVerifierConfig);
@@ -129,17 +149,45 @@ pub mod p2id_vault {
             },
             &signers,
         );
-        router_cpi::set_owner_cache(cpi, update)
+        router_cpi::set_owner_cache(cpi, update)?;
+        close_presented_proof(&ctx.accounts.proof_buffer, &ctx.accounts.registerer)
     }
 
-    /// Pay SOL deposit `id` to `owner`: the wallet the proof names, or the cached owner when `proof`
-    /// is empty. Anyone may submit it (EVM refreshProofAndSweep / sweep). A constrained deposit needs
-    /// an ed25519 instruction by a constraint signer earlier in the transaction; the router checks
-    /// it. With a proof, the accounts the verifier needs follow as remaining accounts.
-    pub fn claim_sol<'info>(ctx: Context<'info, ClaimSol<'info>>, id: u64, proof: Vec<u8>) -> Result<()> {
+    /// Store an identity proof for a later `refresh_proof`, in its own transaction. The buffer is
+    /// PDA(["p2id.proof.v1", registerer, sha256(payload)]): its address commits to who paid its rent
+    /// and exactly what it holds, and `refresh_proof` re-derives it from the stored payload before
+    /// using it. Anyone may register; the registerer gets the rent back when the proof is presented
+    /// or through `close_proof`.
+    pub fn register_proof(ctx: Context<RegisterProof>, payload_hash: [u8; 32], payload: Vec<u8>) -> Result<()> {
+        require!(!payload.is_empty(), VaultError::EmptyProof);
+        require!(payload.len() <= MAX_PROOF_LEN, VaultError::PayloadTooLarge);
+        require!(sha256(&[&payload]) == payload_hash, VaultError::ProofBufferMismatch);
+        let buffer = &mut ctx.accounts.proof_buffer;
+        buffer.version = ACCOUNT_VERSION;
+        buffer.registerer = ctx.accounts.registerer.key();
+        buffer.payload_hash = payload_hash;
+        buffer.bump = ctx.bumps.proof_buffer;
+        buffer.payload = payload;
+        Ok(())
+    }
+
+    /// Return a registered proof's rent to its registerer without presenting it (e.g. it went stale).
+    pub fn close_proof(_ctx: Context<CloseProof>) -> Result<()> {
+        Ok(())
+    }
+
+    /// Pay SOL deposit `id` to `owner`: the wallet a registered proof names (`proof_buffer` with its
+    /// `registerer`, see `register_proof`), or the cached owner when no buffer is given. Anyone may
+    /// submit it (EVM refreshProofAndSweep / sweep). A constrained deposit needs an ed25519
+    /// instruction by a constraint signer earlier in the transaction; the router checks it. With a
+    /// proof, the accounts the verifier needs follow as remaining accounts, and the buffer is closed
+    /// afterwards, its rent returned to the registerer.
+    pub fn claim_sol<'info>(ctx: Context<'info, ClaimSol<'info>>, id: u64) -> Result<()> {
         let a = &ctx.accounts;
+        let proof = registered_proof(&a.proof_buffer, &a.registerer)?;
         let update = authorize_claim(
-            &a.factory, &a.verifier_config, &a.vault, &a.deposit, &a.verifier_program, ctx.remaining_accounts, &a.owner.key(), id, &proof,
+            &a.factory, &a.verifier_config, &a.vault, &a.deposit, &a.verifier_program, ctx.remaining_accounts, &a.owner.key(), id,
+            proof.as_deref().unwrap_or(&[]),
         )?;
 
         let bump = [ctx.bumps.impl_authority];
@@ -160,17 +208,20 @@ pub mod p2id_vault {
             },
             &signers,
         );
-        router_cpi::settle_sol(cpi, id, update)
+        router_cpi::settle_sol(cpi, id, update)?;
+        close_presented_proof(&a.proof_buffer, &a.registerer)
     }
 
     /// Pay SPL-token deposit `id` to `owner`'s associated token account (created if needed, rent
-    /// paid by `payer`). Same authorization as claim_sol. Remaining accounts: the verifier's accounts
-    /// first (with a proof), then any the mint's transfer hook needs; both calls receive the whole
-    /// list and take what they declare.
-    pub fn claim_token<'info>(ctx: Context<'info, ClaimToken<'info>>, id: u64, proof: Vec<u8>) -> Result<()> {
+    /// paid by `payer`). Same authorization and proof handling as claim_sol. Remaining accounts: the
+    /// verifier's accounts first (with a registered proof), then any the mint's transfer hook needs;
+    /// both calls receive the whole list and take what they declare.
+    pub fn claim_token<'info>(ctx: Context<'info, ClaimToken<'info>>, id: u64) -> Result<()> {
         let a = &ctx.accounts;
+        let proof = registered_proof(&a.proof_buffer, &a.registerer)?;
         let update = authorize_claim(
-            &a.factory, &a.verifier_config, &a.vault, &a.deposit, &a.verifier_program, ctx.remaining_accounts, &a.owner.key(), id, &proof,
+            &a.factory, &a.verifier_config, &a.vault, &a.deposit, &a.verifier_program, ctx.remaining_accounts, &a.owner.key(), id,
+            proof.as_deref().unwrap_or(&[]),
         )?;
 
         let bump = [ctx.bumps.impl_authority];
@@ -201,7 +252,8 @@ pub mod p2id_vault {
             },
             &signers,
         );
-        router_cpi::settle_token(cpi.with_remaining_accounts(ctx.remaining_accounts.to_vec()), id, update)
+        router_cpi::settle_token(cpi.with_remaining_accounts(ctx.remaining_accounts.to_vec()), id, update)?;
+        close_presented_proof(&a.proof_buffer, &a.registerer)
     }
 }
 
@@ -248,6 +300,40 @@ fn verify_owner_proof<'info>(
     Ok(attestation)
 }
 
+/// The payload of a registered proof, after checking the buffer is what it claims to be: owned by
+/// this program (Account), at the address its registerer and payload hash derive, holding a payload
+/// with that hash, and paired with its registerer (who receives the rent when it is closed). None
+/// when no buffer is given.
+fn registered_proof(
+    buffer: &Option<Account<'_, ProofBuffer>>,
+    registerer: &Option<UncheckedAccount<'_>>,
+) -> Result<Option<Vec<u8>>> {
+    let Some(buffer) = buffer else {
+        require!(registerer.is_none(), VaultError::AmbiguousProof);
+        return Ok(None);
+    };
+    let registerer = registerer.as_ref().ok_or(VaultError::WrongRegisterer)?;
+    require_keys_eq!(buffer.registerer, registerer.key(), VaultError::WrongRegisterer);
+    let payload_hash = sha256(&[&buffer.payload]);
+    require!(payload_hash == buffer.payload_hash, VaultError::ProofBufferMismatch);
+    let derived = Pubkey::create_program_address(
+        &[PROOF_BUFFER_SEED, buffer.registerer.as_ref(), &payload_hash, &[buffer.bump]],
+        &crate::ID,
+    )
+    .map_err(|_| error!(VaultError::ProofBufferMismatch))?;
+    require_keys_eq!(derived, buffer.key(), VaultError::ProofBufferMismatch);
+    Ok(Some(buffer.payload.clone()))
+}
+
+/// A registered proof has been presented: free its buffer, the rent back to whoever paid it. Nothing
+/// to do without a buffer (`registered_proof` already paired the two accounts).
+fn close_presented_proof<'info>(buffer: &Option<Account<'info, ProofBuffer>>, registerer: &Option<UncheckedAccount<'info>>) -> Result<()> {
+    if let (Some(buffer), Some(registerer)) = (buffer, registerer) {
+        buffer.close(registerer.to_account_info())?;
+    }
+    Ok(())
+}
+
 /// Owner-cache rules, as P2IDVault._apply: a newer proof (or the first) makes its wallet the owner; a
 /// same-age proof must name the cached owner (it re-validates the cache after a key-set change);
 /// older proofs were rejected in verify_owner_proof. The router records the result.
@@ -258,8 +344,8 @@ fn owner_update(vault: &Account<'_, Vault>, attestation: &Attestation, destinati
     Ok(OwnerUpdate { owner: *destination, iat: attestation.iat })
 }
 
-/// Deposit binding plus either a fresh proof (`Some(update)`) or nothing, in which case the router pays
-/// the cached owner if the cache is current.
+/// Deposit binding plus either a fresh proof (`Some(update)`; the payload of a registered buffer) or
+/// nothing, in which case the router pays the cached owner if the cache is current.
 #[allow(clippy::too_many_arguments)]
 fn authorize_claim<'info>(
     factory: &Account<'info, Factory>,
@@ -372,6 +458,55 @@ pub struct RefreshProof<'info> {
     #[account(seeds = [IMPL_AUTHORITY_SEED], bump)]
     pub impl_authority: UncheckedAccount<'info>,
     pub router_program: Program<'info, P2idRouter>,
+    /// The registered proof, when `proof` is empty; checked in `registered_proof` and closed.
+    #[account(mut)]
+    pub proof_buffer: Option<Account<'info, ProofBuffer>>,
+    /// CHECK: must be the buffer's registerer (checked in `registered_proof`); receives its rent.
+    #[account(mut)]
+    pub registerer: Option<UncheckedAccount<'info>>,
+}
+
+#[derive(Accounts)]
+#[instruction(payload_hash: [u8; 32], payload: Vec<u8>)]
+pub struct RegisterProof<'info> {
+    #[account(mut)]
+    pub registerer: Signer<'info>,
+    #[account(
+        init,
+        payer = registerer,
+        space = ProofBuffer::space(payload.len()),
+        seeds = [PROOF_BUFFER_SEED, registerer.key().as_ref(), payload_hash.as_ref()],
+        bump
+    )]
+    pub proof_buffer: Account<'info, ProofBuffer>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct CloseProof<'info> {
+    #[account(mut)]
+    pub registerer: Signer<'info>,
+    #[account(mut, close = registerer, has_one = registerer @ VaultError::WrongRegisterer)]
+    pub proof_buffer: Account<'info, ProofBuffer>,
+}
+
+/// An identity proof registered for a later `refresh_proof` (see `register_proof`).
+#[account]
+pub struct ProofBuffer {
+    pub version: u8,
+    /// Paid the rent; receives it back when the buffer is closed.
+    pub registerer: Pubkey,
+    /// sha256(payload); a seed of this account.
+    pub payload_hash: [u8; 32],
+    pub bump: u8,
+    /// The proof as `refresh_proof` takes it (for Sunspot: proof || public witness).
+    pub payload: Vec<u8>,
+}
+
+impl ProofBuffer {
+    pub fn space(payload_len: usize) -> usize {
+        8 + 1 + 32 + 32 + 1 + 4 + payload_len
+    }
 }
 
 #[derive(Accounts)]
@@ -400,6 +535,12 @@ pub struct ClaimSol<'info> {
     #[account(seeds = [IMPL_AUTHORITY_SEED], bump)]
     pub impl_authority: UncheckedAccount<'info>,
     pub router_program: Program<'info, P2idRouter>,
+    /// The registered proof to present (see `register_proof`); none pays the cached owner.
+    #[account(mut)]
+    pub proof_buffer: Option<Account<'info, ProofBuffer>>,
+    /// CHECK: must be the buffer's registerer (checked in `registered_proof`); receives its rent.
+    #[account(mut)]
+    pub registerer: Option<UncheckedAccount<'info>>,
 }
 
 #[derive(Accounts)]
@@ -450,4 +591,10 @@ pub struct ClaimToken<'info> {
     pub token_program: Interface<'info, TokenInterface>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
+    /// The registered proof to present (see `register_proof`); none pays the cached owner.
+    #[account(mut)]
+    pub proof_buffer: Option<Account<'info, ProofBuffer>>,
+    /// CHECK: must be the buffer's registerer (checked in `registered_proof`); receives its rent.
+    #[account(mut)]
+    pub registerer: Option<UncheckedAccount<'info>>,
 }

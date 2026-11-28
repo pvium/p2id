@@ -10,7 +10,7 @@ use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface};
 pub mod token;
 use token::transfer_tokens;
 
-declare_id!("7Pk7qV1WMJn5iN4mfS1eKJxJgzWska4Uk8X1nej8A2VX");
+declare_id!("6kABDmgwKTZ9m6DgCNte91cXnZmaTPQF3PSiYu1K9Nur");
 
 pub const POLICY_SEED: &[u8] = b"p2id.policy.v1";
 pub const POLICY_MINT_SEED: &[u8] = b"p2id.policy-mint.v1";

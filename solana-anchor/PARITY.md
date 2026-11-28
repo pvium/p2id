@@ -80,8 +80,8 @@ make_default)` / `register_implementation` / `cancel_implementation_proposal` /
       `create_deposit_sol`, `settle_sol`, `set_owner_cache`; implementation notice; owner-only /
       registered-only vault move; stale cache blocks the move; claim after settle refused.
 - [x] Transaction size measured: proof-carrying `claim_sol` (13 accounts) no longer fits a legacy
-      transaction; `refresh_proof` (8 accounts) does. Documented refresh-then-proofless-claim as the
-      flow; ALT is the alternative. Proofless `claim_token` ≈ 160k CU.
+      transaction; `refresh_proof` (8 accounts) does. Claims therefore take proofs only by reference
+      (`register_proof` buffer, see §2). Proofless `claim_token` ≈ 160k CU.
 - [x] README rewritten for the router split.
 - [ ] Not testable locally: `register_implementation` after the 14-day notice and a real second
       implementation taking over a vault (needs a second program or a clock warp). Cover on devnet.
@@ -91,10 +91,12 @@ make_default)` / `register_implementation` / `cancel_implementation_proposal` /
 - [x] **Close consumed deposits.** Router `close_deposit(id)`: permissionless once `consumed`,
       closes the Deposit account and returns its rent to `deposit.funder` (who paid it). Deposit ids
       are never reused. Tested: unconsumed refused, wrong recipient refused, rent returned, account gone.
-- [x] **Transaction size.** `refresh_proof` then proofless claim is the documented primary flow.
-      The one-shot proof-carrying claim is covered by a test that builds a v0 transaction with an
-      address lookup table holding the claim's accounts (388-byte proof + 364-byte witness) and asserts
-      the same claim does not serialize as a legacy transaction. The SDK needs both paths.
+- [x] **Transaction size.** `claim_*` has no inline proof parameter: `register_proof` (own
+      transaction) stores the payload, and the claim names the buffer and its registerer as optional
+      accounts, pays, closes the buffer and returns the rent. Covered by a test that registers a
+      388-byte proof + 364-byte witness, refuses a wrong or missing registerer, claims in a legacy
+      transaction (≤ 1232 bytes) and checks the rent came back. `refresh_proof` keeps the inline form
+      for the proof-only refresh that fits, plus the buffer. The one-shot flow is register then claim.
 - [x] **Real verifier end to end.** Toolchain and artifacts: `circuit/scripts/sunspot-install.sh`
       (Sunspot and Reilabs' trusted-setup, pinned commits, built into `.tools/`), `sunspot-build.sh
 <environment>` (Noir beta.22 compile in a staging dir, `sunspot compile`, keys, `sunspot deploy`),
@@ -131,8 +133,8 @@ action || subject || epoch)`). EVM `alphaRevision` is `key_set_revision` here (b
       cannot move the owner). Tested: stale cache after re-entry; refresh refused without / wrong key /
       wrong iat / wrong action / expired; settle bound to its deposit; sweep and move gated; attester
       rotation voids the old epoch; release resumes proofless payouts and keeps the revision.
-      Transaction size: proof-carrying `refresh_proof` + the attester's instruction needs a v0
-      transaction with a lookup table (documented in the README).
+      Transaction size: proof-carrying `refresh_proof` + the attester's instruction needs the
+      registered-proof path (documented in the README).
 - [x] **P-256 on-curve check** in `initialize_factory`, `propose_verifier` and
       `propose_signer_key` (`curve::is_on_p256`, p256 crate, admin paths only). Tested with an
       all-9s blob, swapped x/y of a real key, and the generator in a unit test.
@@ -170,10 +172,10 @@ action || subject || epoch)`). EVM `alphaRevision` is `key_set_revision` here (b
       `vault.implementation` to know which program to send `fund_*` / `claim_*` to.
 - [ ] `factoryParamsHash` in the SDK, matching `programs/p2id_router/src/hash.rs` (includes the default implementation).
 - [ ] Fund / refresh / claim / refund builders, including the two-transaction
-      refresh-then-claim flow and Ed25519 constraint instruction assembly.
+      register-then-claim flow and Ed25519 constraint instruction assembly.
 - [ ] Alpha approvals: backend endpoint signing the alpha message (ed25519 attester key, the
       Solana counterpart of the EVM `alphaAttestation` flow), SDK assembling the Ed25519 instruction in
-      front of the gated instruction, v0 + lookup table for proof-carrying refreshes while in alpha.
+      front of the gated instruction, registered proofs for proof-carrying refreshes while in alpha.
 - [ ] Event parsing for the indexer (Funded, Claimed, Refunded, OwnerRefreshed).
 - [x] Deploy records for Solana: `solana-anchor/deployments/<scheme>.<environment>.<cluster>.json`
       written by `scripts/deploy.ts` (program ids, factory/verifier/policy PDAs, params hash, status).

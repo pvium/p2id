@@ -4,4 +4,4 @@
 #   P2ID_ZK_VERIFIER=<sunspot program id> anchor build -p p2id_solana_verifier
 # For local mock-backend tests, override it with the test_verifier program ID from Anchor.toml.
 [env]
-P2ID_ZK_VERIFIER = "5gCc81VSNwXYqgW9NBUirPk3DamNU5ZYWFn2i6xX1Ujd"
+P2ID_ZK_VERIFIER = "2v3hY61vHSBgS8Z6oj5VFJSbfYEYx3cqrfuGJ4TyEJaw"

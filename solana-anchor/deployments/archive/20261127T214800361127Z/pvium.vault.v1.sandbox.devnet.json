@@ -1,0 +1,66 @@
+{
+  "scheme": "pvium.vault.v1",
+  "environment": "sandbox",
+  "cluster": "devnet",
+  "privyJwks": ".env PRIVY_SIGNER_KEYS_SANDBOX",
+  "privyKeys": [
+    {
+      "kid": "Lp_q4NY6tg5jSdiD790AIm01JR7GIJ_xmDVZZ6MVAfM",
+      "x": "0x487140ed4fa91d71559b5e015286c9b76c270883f59a5ae9febac9b291584cd1",
+      "y": "0xd4cf5625205d28cbe6c8108a695929208c08f3bdc7790ab7023abe17dcdefc04"
+    },
+    {
+      "kid": "1NtmKuIrWxOltnhgo5yNIyuFFmi-cQDW1Ucqv2185Og",
+      "x": "0x84e87db1d90fb3ef5079e6fbe8a50e8f2aee7f8ad66c13b837cc93e016e2b9aa",
+      "y": "0x27a0949bf003bb64d5a622a05737d2547efa8980267daf35cc75276cb30c9de5"
+    }
+  ],
+  "config": {
+    "authority": "8zZcR2CeWNH1pmmVAFfjL4hdSM6X6ugSQaEBstjtH4yU",
+    "alphaAttester": "8zZcR2CeWNH1pmmVAFfjL4hdSM6X6ugSQaEBstjtH4yU",
+    "circuitVersion": 2,
+    "vkHash": "0x3032c70ed03cf803fd426789d694cc8575ebd8d39fc91e9b6263a6e4a919c59e",
+    "policyFeeBps": 0,
+    "minRefundWindow": 86400,
+    "maxRefundWindow": 7776000
+  },
+  "programs": {
+    "router": "4iCM3BKphbBKkPSANuPPbXwFf9KgCnjdz8faAXx2xcAs",
+    "policy": "89gqux7e8FgJc6icFCAggj8kdXe1asR2SB98p5vQWgM",
+    "implementation": "FrtNcPRQHdyGRfp94u9hcmiwsJGxQ8WCDrsAbgoYSqaV",
+    "verifier": "GxXSVrvSHM6mQr8keEnyAbAsiLtF58yozBVNz6pNRJcm",
+    "zkVerifier": "DF2WvyffKskfEogpXdZUfCRT5K42x7Hhs16BsR8pcMDz"
+  },
+  "paramsHash": "0xa6d9a38e397e90a5d70f97305a5b2216188c276edd3884c0526f0e36a0d638cf",
+  "factory": "DQ8621zq4wnkiC81crrEkqZcpoZkUjjdvBmmiQbx1o7p",
+  "verifierConfig": "4ojzRZ9z4WW8NU5U2pKJcKh9z6bwc7CQLmUmSPyV7Gi5",
+  "policyPda": "2EhzGNb6KjpuS2JxDEJZacngud6bDithrWEHUPFGyCKC",
+  "implAuthority": "DWLVQdRng3kcyRnXEEZ9CVNgDApYAjd6b6vMNzFziEi9",
+  "status": {
+    "checkedAt": "2026-11-27T20:14:57.848Z",
+    "genesisHash": "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG",
+    "zkVerifier": "immutable",
+    "zkVerifierUpgradeAuthority": null,
+    "verifier": "immutable",
+    "verifierUpgradeAuthority": null,
+    "policyProgram": "upgradeable",
+    "policyProgramUpgradeAuthority": "8zZcR2CeWNH1pmmVAFfjL4hdSM6X6ugSQaEBstjtH4yU",
+    "router": "immutable",
+    "routerUpgradeAuthority": null,
+    "implementation": "immutable",
+    "implementationUpgradeAuthority": null,
+    "factoryAuthority": "8zZcR2CeWNH1pmmVAFfjL4hdSM6X6ugSQaEBstjtH4yU",
+    "alphaAttester": "8zZcR2CeWNH1pmmVAFfjL4hdSM6X6ugSQaEBstjtH4yU",
+    "alphaEpoch": 0,
+    "defaultVerifier": "GxXSVrvSHM6mQr8keEnyAbAsiLtF58yozBVNz6pNRJcm",
+    "implementations": [
+      "FrtNcPRQHdyGRfp94u9hcmiwsJGxQ8WCDrsAbgoYSqaV"
+    ],
+    "verifierAllowed": true,
+    "verifierAlpha": true,
+    "keySetRevision": 0,
+    "constraintSigners": [],
+    "policyBound": true,
+    "pendingAuthorityInstructions": 0
+  }
+}
